@@ -1,2 +1,86 @@
-# MagicSplit_Optimization
-Magic Split Optimization is a strategy to maximize returns using the Magic Split investment method. It involves identifying and implementing the best possible adjustments to enhance profitability. The process focuses solely on finding the most effective ways to increase returns.
+# MagicSplit Optimization Project
+
+## 개요
+
+이 프로젝트는 매직스플릿(MagicSplit) 매매법을 백테스팅하고, 최적의 투자 전략을 도출하여 실제 투자에 적용하는 것을 목표로 합니다. 매직스플릿 매매법은 특정 주식이나 ETF의 가격이 일정 비율로 하락했을 때 분할 매수하고, 일정 비율로 상승했을 때 분할 매도하는 전략입니다. 이를 통해 리스크를 관리하고 최고 성과를 보이는 파라미터 조합을 찾는 것을 목표로 합니다.
+
+## 주요 기능
+### 1. 종목 및 ETF 데이터 수집
+- `stock_etf_data_collector.ipynb` 노트북을 통해 주식 및 ETF의 가격 데이터를 수집합니다.
+- 데이터는 MySQL 데이터베이스에 저장됩니다.
+    - PER, PBR, 배당수익률 등의 조건을 만족하는 종목만 저장
+    - 이미 처리된 종목을 기록하고 중복 처리를 방지
+    - 상장폐지된 종목 및 조건을 만족하지 않는 종목 필터링
+- 주식 및 ETF의 종목 리스트는 효율적으로 갱신될수 있도록 별도의 table(ticker_status) 사용
+
+### 2. 매직스플릿 매매법 백테스팅
+- `Masicsplit_opt.ipynb` 노트북을 통해 매직스플릿 매매법을 백테스팅합니다.
+- 다양한 매매 전략과 종목 선정 기준을 테스트하여 최적의 조합을 도출합니다.
+- 백테스팅 시 주요 변수는 `num_split`, 종목 선정 시 `PER`, `PBR`, `normalized value`, 차수별 투입 금액, 투자 기간 등입니다.
+
+## 매직스플릿 매매법 설명
+매직스플릿 매매법은 특정 주식이나 ETF의 가격이 일정 비율로 하락했을 때 분할 매수하고, 일정 비율로 상승했을 때 분할 매도하는 전략입니다. 이 방법을 통해 리스크를 관리하고, 일정한 수익을 목표로 합니다. 이 프로젝트는 각 종목당 n단계(num_splits)로 분할매도 매수를 진행합니다. 단계별 매매 기준 수익률은 다음과 같이 계산됩니다.
+
+#### 단계별 매매 수익률 계산 방식
+1. **분할 매수 비율 계산**:
+    - **목표**: 각 단계별로 일정 비율만큼 주가가 하락했을 때 추가 매수를 진행합니다.
+    - **계산 방법**: 마지막 매수 가격에서 목표 매수 가격까지의 비율을 `num_splits`로 나누어 계산합니다.
+    - **공식**: 추가 매수 하락 비율 = 1 - (5년 최저가 / 마지막 매수 가격) ^ (1 / (분할 수 - 1))
+    - **Python 코드**:
+    ```python
+    def calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits):
+        return 1 - ((five_year_low / last_buy_price) ** (1 / (num_splits - 1)))
+    ```
+
+2. **분할 매도 비율 계산**:
+    - **목표**: 각 단계별로 일정 비율만큼 주가가 상승했을 때 매도를 진행합니다.
+    - **계산 방법**: 매수 시의 수익률을 기준으로 매도 비율을 계산합니다. 이를 통해, 이전 차수의 매수가격에 도달했을 때  매도할 수 있도록 설정됩니다.
+     - **공식**:
+      매도 수익률 = (1 / (1 - 매수 수익률)) - 1
+    - **Python 코드**:
+    ```python
+    def calculate_sell_profit_rate(buy_profit_rate):
+        """
+        매수 수익률을 기반으로 매도 수익률을 계산
+        :buy_profit_rate: 매수 기준 수익률
+        :return: 계산된 매도 수익률
+        """
+        sell_profit_rate = (1 / (1 - buy_profit_rate)) - 1
+        return sell_profit_rate 
+    ```
+
+## 백테스팅 목표
+
+백테스팅에서는 다음과 같은 변수를 조정하면서 여러 투자기간에 대한 성과의 평균이 가장 좋은 조합을 도출하는 것이 목표입니다:
+- `num_split` (분할 매수/매도 단계 수)
+- 종목 선정 기준 (`PER`, `PBR`,`DIV', `normalized value`)
+- 차수별 투입 금액
+
+
+## 사용한 주요 라이브러리 및 툴
+
+- `pandas`: 데이터 조작 및 분석을 위해 사용됩니다.
+- `matplotlib`: 데이터 시각화를 위해 사용됩니다.
+- `concurrent.futures`: 병렬 처리를 위해 사용됩니다.
+- `tqdm`: 프로세스 진행률을 표시하기 위해 사용됩니다.
+- `pymysql`: MySQL 데이터베이스와의 연동을 위해 사용됩니다.
+- `configparser`: 설정 파일을 읽고 쓰기 위해 사용됩니다.
+- `pykrx`: 한국 거래소 데이터를 가져오기 위해 사용됩니다.
+- `numpy`: 수치 연산을 위해 사용됩니다.
+
+## 프로젝트 파일 설명
+
+- `stock_etf_data_collector.ipynb`: 주식 및 ETF 데이터를 수집하고 MySQL 데이터베이스에 저장하는 코드가 포함되어 있습니다.
+- `Masicsplit_opt.ipynb`: 매직스플릿 매매법을 백테스팅하고 최적의 전략을 도출하는 코드가 포함되어 있습니다.
+- `correlation_of_stocks.ipynb`: 주식 간의 상관관계를 분석하는 코드가 포함되어 있습니다.
+
+## 경과
+
+2024년 6월 16일 기준으로, 기존에 엑셀 파일로 저장하던 로직에서 MySQL로 저장하는 로직으로 변경했습니다.
+
+## 추후 과제
+0. `stock_etf_data_collector.ipynb`에 담긴 백테스팅 코드들도 MySQL에서 데이터를 로드하는 방향으로 수정할 예정입니다.
+1. 종목 선정 시 조건에 해당하는 종목을 찾기 위해 여러 종목을 하드 코딩하는 대신, SQL에서 해당 기간 데이터를 추출하여 선별할 수 있는 로직이 필요합니다.
+2. 종목 선정 시 조건에 해당하는 종목들 중 하나를 선택해야 하는 경우, 선정 시마다 랜덤하게 선택할 수 있도록 설정이 필요합니다.
+
+이러한 과제를 통해 보다 효율적이고 자동화된 데이터 분석 및 백테스팅 환경을 구축하고자 합니다.
