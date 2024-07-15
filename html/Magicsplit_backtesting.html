@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>백테스팅 대시보드</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>백테스팅 대시보드</h1>
+      <hr class="title-divider" />
+      <div class="parameters">
+        <h2>파라미터 설정</h2>
+        <form id="backtest-form">
+          <div class="form-group">
+            <label for="initial-capital">초기 자본:</label>
+            <input
+              type="number"
+              id="initial-capital"
+              name="initial-capital"
+              value="100000000"
+              step="1000000"
+              required
+            />
+            <small>투자를 시작할 때의 초기 자본금입니다. (기본값 1억)</small>
+          </div>
+          <div class="form-group">
+            <label for="num-splits">분할 차수:</label>
+            <input
+              type="number"
+              id="num-splits"
+              name="num-splits"
+              value="10"
+              step="1"
+              required
+            />
+            <small>분할 매매할 차수의 수를 의미합니다. (기본값 10차)</small>
+          </div>
+          <div class="form-group">
+            <label for="investment-ratio">투자 비율:</label>
+            <input
+              type="number"
+              id="investment-ratio"
+              name="investment-ratio"
+              value="0.2"
+              step="0.05"
+              required
+            />
+            <small>
+              전체 자본 중 투자에 사용할 비율입니다. (기본값 0.2)<br />
+              예시: 초기 자본금이 1억, 투자 비율 0.2, 분할차수가 10차인 경우,
+              <span class="indent"
+                >특정 종목이 매수조건에 도달하면 2백만원(1억*0.2/10차)을
+                매수합니다.</span
+              >
+            </small>
+          </div>
+          <div class="form-group">
+            <label for="pbr-threshold">PBR 임계값:</label>
+            <input
+              type="number"
+              id="pbr-threshold"
+              name="pbr-threshold"
+              value="1"
+              step="0.1"
+              required
+            />
+            <small>종목선정 기준 PBR의 최대 값을 설정합니다. (기본값 1)</small>
+          </div>
+          <div class="form-group">
+            <label for="per-threshold">PER 임계값:</label>
+            <input
+              type="number"
+              id="per-threshold"
+              name="per-threshold"
+              value="10"
+              step="1"
+              required
+            />
+            <small>종목선정 기준 PER의 최대 값을 설정합니다. (기본값 10)</small>
+          </div>
+          <div class="form-group">
+            <label for="dividend-threshold">배당률 임계값:</label>
+            <input
+              type="number"
+              id="dividend-threshold"
+              name="dividend-threshold"
+              value="3.5"
+              step="0.1"
+              required
+            />
+            <small
+              >종목선정 기준 배당률의 최소 값을 설정합니다. (기본값 3.5)</small
+            >
+          </div>
+          <div class="form-group">
+            <label for="buy-threshold">매수 임계값:</label>
+            <input
+              type="number"
+              id="buy-threshold"
+              name="buy-threshold"
+              value="30"
+              step="1"
+              required
+            />
+            <small>
+              매수할 때의 가격 임계값을 설정합니다.<br />
+              예시: 5년 최고가가 100이고 5년 최저가가 0일 때, 임계값을 30으로
+              설정하면 주가가 30 이하로 떨어졌을 때 매수를 진행합니다.
+            </small>
+          </div>
+          <div class="form-group">
+            <label for="start-date">투자 시작 날짜:</label>
+            <input type="date" id="start-date" name="start-date" required />
+            <small>투자 시작 날짜를 설정합니다.</small>
+          </div>
+          <div class="form-group">
+            <label for="end-date">투자 종료 날짜:</label>
+            <input type="date" id="end-date" name="end-date" required />
+            <small>투자 종료 날짜를 설정합니다.</small>
+          </div>
+          <div class="form-group">
+            <label for="consider-delisting">상장폐지 고려:</label>
+            <input
+              type="checkbox"
+              id="consider-delisting"
+              name="consider-delisting"
+            />
+            <small>
+              상장폐지를 고려하여 백테스팅을 수행합니다. 체크해제 시 현존하는
+              기업만으로 백테스팅을 수행하여 투자종목이 상장폐지되지 않는
+              이상적인 상황을 가정합니다.
+            </small>
+          </div>
+          <div class="form-group">
+            <label for="portfolio-size">포트폴리오 크기:</label>
+            <input
+              type="number"
+              id="portfolio-size"
+              name="portfolio-size"
+              value="20"
+              step="1"
+              required
+            />
+            <small>포트폴리오에 포함될 종목 수 (기본값: 20종목).</small>
+          </div>
+          <button type="submit" class="btn">백테스팅 실행</button>
+        </form>
+      </div>
+      <div class="results">
+        <h2>결과</h2>
+        <canvas id="portfolio-chart"></canvas>
+        <div id="signals"></div>
+      </div>
+    </div>
+    <script src="scripts.js"></script>
+  </body>
+</html>
