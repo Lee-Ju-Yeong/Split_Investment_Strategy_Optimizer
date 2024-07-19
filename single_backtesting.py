@@ -7,6 +7,10 @@ import mysql.connector
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import configparser
+import seaborn as sns
+import matplotlib.ticker as ticker
+import matplotlib.font_manager as fm
+
 
 # 백테스팅과 관련된 함수들 가져오기
 from MagicSplit_Backtesting_Optimizer import (
@@ -45,6 +49,7 @@ if __name__ == "__main__":
     investment_ratio = 0.3
     start_date = '2004-01-01'
     end_date = '2005-01-01'
+    
     per_threshold = 20
     pbr_threshold = 2
     div_threshold = 1.0

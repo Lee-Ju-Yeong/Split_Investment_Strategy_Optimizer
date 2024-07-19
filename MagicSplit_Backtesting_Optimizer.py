@@ -12,6 +12,9 @@ import mysql.connector
 from datetime import timedelta, datetime
 import numpy as np
 import pandas as pd
+import seaborn as sns
+import matplotlib.ticker as ticker
+import matplotlib.font_manager as fm
 
 class Position:
     def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
@@ -367,6 +370,11 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
         ])
 
         total_portfolio_value = np.sum([capital, current_stock_value])
+        # Check for NaN values and handle them
+        if np.isnan(total_portfolio_value):
+            print(f"Warning: NaN detected in total_portfolio_value on {date_str}. Setting to previous value.")
+            total_portfolio_value = portfolio_values_over_time[-1] if len(portfolio_values_over_time) > 0 else initial_capital
+        
         portfolio_values_over_time = np.append(portfolio_values_over_time, total_portfolio_value)
         capital_over_time = np.append(capital_over_time, capital)
 
@@ -393,30 +401,47 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
     print(f'Trading history saved to {file_name}')
 
     return positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr
+
+
+
+# 포트폴리오 가치 주석을 위한 함수
+def format_currency(value):
+    return f'{value:,.0f}₩'
+
 # 백테스팅 결과 시각화 함수
 def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd):
-    plt.figure(figsize=(14, 7))
-    plt.plot(all_trading_dates, portfolio_values_over_time, label='Portfolio Value', color='blue')
-    plt.plot(all_trading_dates, capital_over_time, label='Capital', color='green')
+    # 한글 폰트 설정
+    plt.rcParams['font.family'] = 'Malgun Gothic'
     
+    sns.set(style="whitegrid")  # Set the seaborn style
+
+    plt.figure(figsize=(14, 7))
+
+    # 포트폴리오 가치 및 자본 그래프 그리기
+    sns.lineplot(x=all_trading_dates, y=portfolio_values_over_time, label='Portfolio Value', color='blue')
+    sns.lineplot(x=all_trading_dates, y=capital_over_time, label='Capital', color='green')
+
+    # 매수 신호 표시
     if buy_signals:
         buy_dates, buy_prices = zip(*buy_signals)
-        plt.scatter(buy_dates, buy_prices, marker='^', color='red', label='Buy Signal')
+        sns.scatterplot(x=buy_dates, y=buy_prices, marker='^', color='red', label='Buy Signal')
+
+    # 매도 신호 표시
     if sell_signals:
         sell_dates, sell_prices = zip(*sell_signals)
-        plt.scatter(sell_dates, sell_prices, marker='v', color='black', label='Sell Signal')
-    
-    # Add CAGR and MDD text to the plot
-    plt.text(0.05, 0.95, f'CAGR: {cagr:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='top')
-    plt.text(0.05, 0.90, f'MDD: {mdd:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='top')
-    
-    # Annotate the last portfolio value
+        sns.scatterplot(x=sell_dates, y=sell_prices, marker='v', color='black', label='Sell Signal')
+
+    # CAGR 및 MDD 텍스트 추가 (오른쪽 아래, 축 밖)
+    plt.gca().text(1.01, -0.1, f'CAGR: {cagr:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='right')
+    plt.gca().text(1.01, -0.15, f'MDD: {mdd:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='right')
+
+    # 마지막 포트폴리오 가치 주석 달기
     last_date = all_trading_dates[-1]
     last_value = portfolio_values_over_time[-1]
-    plt.annotate(f'{last_value:.2f}', 
+    plt.annotate(format_currency(last_value), 
                  xy=(last_date, last_value), 
-                 xytext=(last_date, last_value + (last_value * 0.05)),
-                 arrowprops=dict(facecolor='black', shrink=0.05),
+                 xytext=(last_date, last_value * 0.95),
+                 arrowprops=dict(facecolor='blue', shrink=0.05),
                  fontsize=12,
                  color='blue')
 
@@ -437,7 +462,6 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     plt.savefig(file_path)
     print(f'Plot saved to {file_path}')
     plt.show()
-
             
 def backtesting_wrapper(params):
     num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks = params
