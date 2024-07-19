@@ -371,34 +371,71 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
         capital_over_time = np.append(capital_over_time, capital)
 
     total_days = (all_trading_dates[-1] - all_trading_dates[0]).days
+    print("total_days",total_days)
     total_years = total_days / 365.25
     final_portfolio_value = portfolio_values_over_time[-1]
     cagr = np.power(final_portfolio_value / initial_capital, 1 / total_years) - 1
     print('backtesting complete')
 
+
+
+    results_folder = 'results_of_single_test'
+    # Create folder if it does not exist
+    if not os.path.exists(results_folder):
+        os.makedirs(results_folder)
+
+
     current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
+    file_path = os.path.join(results_folder, file_name)
     trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
-    trading_history_df.to_excel(file_name, index=False)
+    trading_history_df.to_excel(file_path, index=False)
     print(f'Trading history saved to {file_name}')
 
     return positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr
 # 백테스팅 결과 시각화 함수
-def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals):
+def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd):
     plt.figure(figsize=(14, 7))
     plt.plot(all_trading_dates, portfolio_values_over_time, label='Portfolio Value', color='blue')
     plt.plot(all_trading_dates, capital_over_time, label='Capital', color='green')
+    
     if buy_signals:
         buy_dates, buy_prices = zip(*buy_signals)
         plt.scatter(buy_dates, buy_prices, marker='^', color='red', label='Buy Signal')
     if sell_signals:
         sell_dates, sell_prices = zip(*sell_signals)
         plt.scatter(sell_dates, sell_prices, marker='v', color='black', label='Sell Signal')
+    
+    # Add CAGR and MDD text to the plot
+    plt.text(0.05, 0.95, f'CAGR: {cagr:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='top')
+    plt.text(0.05, 0.90, f'MDD: {mdd:.2%}', transform=plt.gca().transAxes, fontsize=12, verticalalignment='top')
+    
+    # Annotate the last portfolio value
+    last_date = all_trading_dates[-1]
+    last_value = portfolio_values_over_time[-1]
+    plt.annotate(f'{last_value:.2f}', 
+                 xy=(last_date, last_value), 
+                 xytext=(last_date, last_value + (last_value * 0.05)),
+                 arrowprops=dict(facecolor='black', shrink=0.05),
+                 fontsize=12,
+                 color='blue')
+
     plt.xlabel('Date')
     plt.ylabel('Value')
     plt.title('Portfolio Value and Capital Over Time')
     plt.legend()
     plt.grid(True)
+
+    # Save plot as a PNG file
+    results_folder = 'results_of_single_test'
+    if not os.path.exists(results_folder):
+        os.makedirs(results_folder)
+
+    current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
+    file_path = os.path.join(results_folder, file_name)
+    plt.savefig(file_path)
+    print(f'Plot saved to {file_path}')
     plt.show()
 
             

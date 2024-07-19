@@ -35,7 +35,7 @@ def single_backtesting(num_splits, buy_threshold, investment_ratio, start_date, 
         initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks
     )
     mdd = calculate_mdd(portfolio_values_over_time)
-    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals)
+    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd)
     return positions_dict, total_portfolio_value, cagr, mdd
 
 if __name__ == "__main__":
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     buy_threshold = 30
     investment_ratio = 0.3
     start_date = '2004-01-01'
-    end_date = '2024-01-01'
+    end_date = '2005-01-01'
     per_threshold = 20
     pbr_threshold = 2
     div_threshold = 1.0
@@ -53,5 +53,8 @@ if __name__ == "__main__":
     max_stocks = 40
     random.seed(100)  
 
-    single_backtesting(num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
+    positions_dict, total_portfolio_value, cagr, mdd= single_backtesting(num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
+    print(f"최종 포트폴리오 가치: {total_portfolio_value}")
+    print(f"CAGR: {cagr}")
+    print(f"MDD: {mdd:.2%}")
     print("Backtesting completed")
