@@ -36,7 +36,7 @@ class Trade:
         self.capital = capital
         self.total_portfolio_value = total_portfolio_value
 
-# 데이터베이스에서 조건을 만족하는 종목을 동적으로 가져오는 함수
+# Function to dynamically import conditions-fulfilling stock codes from the database
 def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting):
     conn = mysql.connector.connect(**db_params)
     cursor = conn.cursor()
@@ -82,8 +82,6 @@ def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_thres
 
 
 
-
-# MySQL에서 데이터를 불러오는 함수
 def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
     conn = mysql.connector.connect(**db_params)
     cursor = conn.cursor()
@@ -403,16 +401,6 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     plt.grid(True)
     plt.show()
 
-# 백테스팅 결과 분석 함수
-def analyze_backtesting_results(positions_dict, total_portfolio_value, cagr, mdd):
-    print(f"최종 포트폴리오 가치: {total_portfolio_value}")
-    print(f"CAGR: {cagr}")
-    print(f"MDD: {mdd:.2%}")
-    for ticker, positions in positions_dict.items():
-        print(f"종목: {ticker}")
-        for position in positions:
-            print(f"  매수가: {position.buy_price}, 수량: {position.quantity}, 차수: {position.order}")
-            
             
 def backtesting_wrapper(params):
     num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks = params
