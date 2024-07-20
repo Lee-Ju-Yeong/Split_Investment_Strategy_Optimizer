@@ -48,7 +48,7 @@ if __name__ == "__main__":
     buy_threshold = 30
     investment_ratio = 0.3
     start_date = '2004-01-01'
-    end_date = '2005-01-01'
+    end_date = '2024-01-01'
     
     per_threshold = 20
     pbr_threshold = 2
@@ -56,7 +56,8 @@ if __name__ == "__main__":
     min_additional_buy_drop_rate = 0.005
     consider_delisting = False
     max_stocks = 40
-    random.seed(100)  
+    random.seed(101)  
+
 
     positions_dict, total_portfolio_value, cagr, mdd= single_backtesting(num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
     print(f"최종 포트폴리오 가치: {total_portfolio_value}")
