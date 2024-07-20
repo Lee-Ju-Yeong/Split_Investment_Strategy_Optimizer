@@ -199,8 +199,6 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
             
             #  # 로그 추가
             # print(f"Updated positions for code {code}: new position buy price = {new_position.buy_price}, additional buy drop rate = {new_position.additional_buy_drop_rate}, total positions = {len(positions)}")
-        else:
-            # print(f"No additional buy for code {code}: current close = {row['close']}, last buy price = {last_position.buy_price}, required price = {last_position.buy_price * (1 - last_position.additional_buy_drop_rate)}")
 
     return positions, capital
 
