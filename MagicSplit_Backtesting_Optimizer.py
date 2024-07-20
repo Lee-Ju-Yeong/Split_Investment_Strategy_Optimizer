@@ -146,7 +146,7 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
         sell_profit_rate = calculate_sell_profit_rate(additional_buy_drop_rate)
         quantity = int(investment_per_split / row['close'])
         total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
-        new_position = Position(row['close'], quantity, 1, sell_profit_rate, additional_buy_drop_rate)
+        new_position = Position(row['close'], quantity, 1, additional_buy_drop_rate,sell_profit_rate)
         positions.append(new_position)
         capital -= total_cost
         buy_signals.append((row.name, row['close']))
@@ -155,12 +155,16 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
         trading_history.append(trade)
 
     liquidated = False
+    
+    # 높은 차수부터 매도
+    positions = sorted(positions, key=lambda x: x.order, reverse=True)
+    positions_to_remove = []
 
     for position in positions:
         if row['close'] > position.buy_price * (1 + position.sell_profit_rate) and position.order == 1:
             total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
             capital += total_revenue
-            positions.remove(position)
+            positions_to_remove.append(position)
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
             profit_rate = profit / (position.buy_price * position.quantity)
@@ -168,6 +172,8 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
             trading_history.append(trade)
             liquidated = True
 
+    for position in positions_to_remove:
+        positions.remove(position)
     if liquidated and not positions:
         return positions, capital, code
     else:
@@ -176,17 +182,25 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
 def additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code):
     buy_commission_rate = 0.00015
     if positions and len(positions) < num_splits and capital >= investment_per_split:
-        last_position = positions[-1]
+        last_position = positions[0]
+        # print(f"Evaluating additional buy for code {code}: current close = {row['close']}, last buy price = {last_position.buy_price}, order = {last_position.order}, required drop = {last_position.additional_buy_drop_rate}")
+        # print(f"Current positions for code {code}: {[p.buy_price for p in positions]}")     
         if row['close'] <= last_position.buy_price * (1 - last_position.additional_buy_drop_rate):
+            # print(f"Additional buy condition met for code {code}")
             quantity = int(investment_per_split / row['close'])
             total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
-            new_position = Position(row['close'], quantity, len(positions) + 1, last_position.sell_profit_rate, last_position.additional_buy_drop_rate)
+            new_position = Position(row['close'], quantity, len(positions) + 1, last_position.additional_buy_drop_rate, last_position.sell_profit_rate)
             positions.append(new_position)
             capital -= total_cost
             buy_signals.append((row.name, row['close']))
 
             trade = Trade(row.name, code, len(positions), quantity, row['close'], None, 'buy', None, None, row['normalized_value'], capital, total_portfolio_value)
             trading_history.append(trade)
+            
+            #  # 로그 추가
+            # print(f"Updated positions for code {code}: new position buy price = {new_position.buy_price}, additional buy drop rate = {new_position.additional_buy_drop_rate}, total positions = {len(positions)}")
+        else:
+            print(f"No additional buy for code {code}: current close = {row['close']}, last buy price = {last_position.buy_price}, required price = {last_position.buy_price * (1 - last_position.additional_buy_drop_rate)}")
 
     return positions, capital
 
@@ -194,17 +208,23 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
     buy_commission_rate = 0.00015
+    
+    # Sort positions by order in descending order to sell the most recent buys first
+    positions = sorted(positions, key=lambda x: x.order, reverse=True)
+    positions_to_remove = []
 
     for position in positions:
         if row['close'] >= position.buy_price * (1 + position.sell_profit_rate) and position.order > 1:
             total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
             capital += total_revenue
-            positions.remove(position)
+            positions_to_remove.append(position)
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
             profit_rate = profit / (position.buy_price * position.quantity)
             trade = Trade(row.name, code, position.order, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, row['normalized_value'], capital, total_portfolio_value)
             trading_history.append(trade)
+    for position in positions_to_remove:
+        positions.remove(position)
 
     return positions, capital
 
@@ -302,9 +322,11 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                 if positions:
                     current_order = max(position.order for position in positions)
                     current_orders_dict[code] = current_order
+                    print(f"date {date} Updated positions_dict and entered_stocks for code {code}. Current positions: {[p.buy_price for p in positions]}")
                 else:
                     if code in current_orders_dict:
                         del current_orders_dict[code]
+                        print(f"Removed code {code} from entered_stocks")        
 
         for code in list(entered_stocks):
             if date in loaded_stock_data[code].index:
@@ -320,6 +342,8 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                     if positions:
                         current_order = max(position.order for position in positions)
                         current_orders_dict[code] = current_order
+                     
+
                     else:
                         if code in current_orders_dict:
                             del current_orders_dict[code]
@@ -361,6 +385,7 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                 else:
                     if capital < investment_per_split:
                         entered_stocks.discard(code)
+                        print(f"Removed code {code} from entered_stocks due to insufficient capital.")
 
         current_stock_value = np.sum([
             position.quantity * loaded_stock_data[code].loc[date]['close']
