@@ -250,7 +250,7 @@ def calculate_mdd(portfolio_values):
 
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
-                          min_additional_buy_drop_rate, consider_delisting, max_stocks=20):
+                          min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None):
     random.seed(seed)
     np.random.seed(seed)
     total_portfolio_value = initial_capital
@@ -418,19 +418,16 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
     print('backtesting complete')
 
 
-
-    results_folder = 'results_of_single_test'
-    # Create folder if it does not exist
-    if not os.path.exists(results_folder):
-        os.makedirs(results_folder)
-
-
-    current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-    file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
-    file_path = os.path.join(results_folder, file_name)
-    trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
-    trading_history_df.to_excel(file_path, index=False)
-    print(f'Trading history saved to {file_name}')
+    if results_folder:
+        # Create folder if it does not exist
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
+        file_path = os.path.join(results_folder, file_name)
+        trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
+        trading_history_df.to_excel(file_path, index=False)
+        print(f'Trading history saved to {file_name}')
 
     return positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr
 
@@ -441,7 +438,7 @@ def format_currency(value):
     return f'{value:,.0f}₩'
 
 # 백테스팅 결과 시각화 함수
-def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd):
+def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder):
     # 한글 폰트 설정
     plt.rcParams['font.family'] = 'Malgun Gothic'
     
@@ -484,7 +481,6 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     plt.grid(True)
 
     # Save plot as a PNG file
-    results_folder = 'results_of_single_test'
     if not os.path.exists(results_folder):
         os.makedirs(results_folder)
 

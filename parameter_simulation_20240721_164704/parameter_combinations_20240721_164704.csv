@@ -1,0 +1,2 @@
+num_splits,buy_threshold,investment_ratio,consider_delisting,max_stocks,Average_CAGR,Average_MDD
+20,30,0.3,False,40,,
