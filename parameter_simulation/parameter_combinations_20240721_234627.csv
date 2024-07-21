@@ -1,3 +1,0 @@
-num_splits,buy_threshold,investment_ratio,consider_delisting,max_stocks,Average_Total_Value,Average_CAGR,Average_MDD
-20,30,0.3,False,40,172876653.0,0.31028482587339146,0.15944616057782646
-20,30,0.25,False,40,165041358.5,0.2812925361825239,0.156424478827907
