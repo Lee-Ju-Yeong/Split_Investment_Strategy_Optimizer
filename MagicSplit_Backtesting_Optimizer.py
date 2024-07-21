@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Agg')
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
@@ -411,11 +414,10 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         capital_over_time = np.append(capital_over_time, capital)
 
     total_days = (all_trading_dates[-1] - all_trading_dates[0]).days
-    print("total_days",total_days)
     total_years = total_days / 365.25
     final_portfolio_value = portfolio_values_over_time[-1]
     cagr = np.power(final_portfolio_value / initial_capital, 1 / total_years) - 1
-    print('backtesting complete')
+    # print('backtesting complete')
 
 
     if results_folder:
@@ -427,7 +429,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         file_path = os.path.join(results_folder, file_name)
         trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
         trading_history_df.to_excel(file_path, index=False)
-        print(f'Trading history saved to {file_name}')
+        # print(f'Trading history saved to {file_name}')
 
     return positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr
 
@@ -443,8 +445,6 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     plt.rcParams['font.family'] = 'Malgun Gothic'
     
     sns.set(style="whitegrid")  # Set the seaborn style
-
-    plt.figure(figsize=(14, 7))
 
     # 포트폴리오 가치 및 자본 그래프 그리기
     sns.lineplot(x=all_trading_dates, y=portfolio_values_over_time, label='Portfolio Value', color='blue')
@@ -488,5 +488,6 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
     file_path = os.path.join(results_folder, file_name)
     plt.savefig(file_path)
-    print(f'Plot saved to {file_path}')
+    # print(f'Plot saved to {file_path}')
+    plt.close() 
             
