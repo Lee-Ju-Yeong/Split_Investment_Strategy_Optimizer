@@ -16,6 +16,7 @@ import seaborn as sns
 import matplotlib.ticker as ticker
 import matplotlib.font_manager as fm
 
+# Position class to store buy details
 class Position:
     def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
         self.buy_price = buy_price
@@ -24,6 +25,7 @@ class Position:
         self.additional_buy_drop_rate = additional_buy_drop_rate
         self.sell_profit_rate = sell_profit_rate
 
+# Trade class to store trade details
 class Trade:
     def __init__(self, date, code, order, quantity, buy_price, sell_price, trade_type, profit, profit_rate, normalized_value, capital, total_portfolio_value):
         self.date = date
@@ -104,33 +106,29 @@ def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
     columns = [desc[0] for desc in cursor.description]
     df = pd.DataFrame(rows, columns=columns)
     
-    # 날짜 형식 변환 및 인덱스 설정
+    # Convert date format and set index
     df['date'] = pd.to_datetime(df['date'])
     df.set_index('date', inplace=True)
     
     cursor.close()
     conn.close()
 
-    # 5년 동안의 최저값 계산
+    # Calculate the lowest value in 5 years
     df['five_year_low'] = df['close'].rolling(window=252*5, min_periods=1).min()
     
-    # start_date 이후의 데이터만 반환
+    # Return data after the start date
     return df[df.index >= pd.to_datetime(start_date)]
+
 
 def calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits):
     return 1 - np.power((five_year_low / last_buy_price), (1 / (num_splits - 1)))
 
 def calculate_sell_profit_rate(buy_profit_rate):
-    """
-    매수 수익률을 기반으로 매도 수익률을 계산
-    :buy_profit_rate: 매수 기준 수익률
-    :return: 계산된 매도 수익률
-    """
     sell_profit_rate = (1 / (1 - buy_profit_rate)) - 1
     return sell_profit_rate 
     
 
-# 추가된 트레이드 객체를 포함한 함수들
+# Function to handle initial buy and sell
 def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits):
     normalized = row['normalized_value']
     five_year_low = row['five_year_low']
@@ -156,7 +154,7 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
 
     liquidated = False
     
-    # 높은 차수부터 매도
+     # Sell from highest order
     positions = sorted(positions, key=lambda x: x.order, reverse=True)
     positions_to_remove = []
 
@@ -178,7 +176,8 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
         return positions, capital, code
     else:
         return positions, capital, None
-
+    
+# Function to handle additional buy
 def additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code):
     buy_commission_rate = 0.00015
     if positions and len(positions) < num_splits and capital >= investment_per_split:
@@ -202,6 +201,7 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
 
     return positions, capital
 
+# Function to handle additional sell
 def additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code):
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
@@ -210,7 +210,8 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
     # Sort positions by order in descending order to sell the most recent buys first
     positions = sorted(positions, key=lambda x: x.order, reverse=True)
     positions_to_remove = []
-
+    
+    # Loop through positions to check if they meet the selling conditions
     for position in positions:
         if row['close'] >= position.buy_price * (1 + position.sell_profit_rate) and position.order > 1:
             total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
@@ -227,6 +228,7 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
     return positions, capital
 
 
+# Function to get trading dates from the database
 def get_trading_dates_from_db(db_params, start_date, end_date):
     conn = mysql.connector.connect(**db_params)
     cursor = conn.cursor()
@@ -246,9 +248,11 @@ def calculate_mdd(portfolio_values):
     mdd = np.max(drawdown)
     return mdd
 
-def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
+def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
                           min_additional_buy_drop_rate, consider_delisting, max_stocks=20):
+    random.seed(seed)
+    np.random.seed(seed)
     total_portfolio_value = initial_capital
     capital = initial_capital
     positions_dict = {}
@@ -258,9 +262,11 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
     capital_over_time = []
     portfolio_values_over_time = np.array(portfolio_values_over_time)
     capital_over_time = np.array(capital_over_time)
-    entered_stocks = set()
+    
+    entered_stocks = []
     current_orders_dict = {}
     loaded_stock_data = {}
+    
     trading_history = []
     previous_month = None
 
@@ -300,7 +306,7 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                     for position in positions_dict[ticker]:
                         capital += position.quantity * last_close_price
                     del positions_dict[ticker]
-                    entered_stocks.discard(ticker)
+                    entered_stocks.remove(ticker)
                     print('상폐로 entered_stocks 삭제 완료')
                     if ticker in current_orders_dict:
                         del current_orders_dict[ticker]
@@ -311,7 +317,7 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
             investment_per_split = total_portfolio_value * investment_ratio // num_splits
             previous_month = current_month
 
-        for code in list(entered_stocks):
+        for code in entered_stocks:
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
@@ -325,15 +331,16 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                     if code in current_orders_dict:
                         del current_orders_dict[code]
                         # print(f"Removed code {code} from entered_stocks")        
-
-        for code in list(entered_stocks):
+                        
+# Process initial buy or sell actions for each stock code in entered_stocks
+        for code in entered_stocks:
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
                 positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits)
                 positions_dict[code] = positions
                 if liquidated_code:
-                    entered_stocks.discard(liquidated_code)
+                    entered_stocks.remove(liquidated_code)
                     if liquidated_code in current_orders_dict:
                         del current_orders_dict[liquidated_code]
                 else:
@@ -345,7 +352,7 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                     else:
                         if code in current_orders_dict:
                             del current_orders_dict[code]
-
+# Enter new stocks if there is room in the portfolio and sufficient capital
         if len(entered_stocks) < max_stocks and capital > investment_per_split:
             stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
             random.shuffle(stock_codes)
@@ -363,26 +370,28 @@ def portfolio_backtesting(initial_capital, num_splits, investment_ratio, buy_thr
                             positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits)
                             positions_dict[code] = positions
                             if positions:
-                                entered_stocks.add(code)
+                                if code not in entered_stocks: 
+                                    entered_stocks.insert(0, code)
                                 current_order = max(position.order for position in positions)
                                 current_orders_dict[code] = current_order
                             else:
                                 if code in loaded_stock_data:
                                     del loaded_stock_data[code]
 
-        for code in list(entered_stocks):
+        for code in entered_stocks:
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
                 positions, capital = additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code)
                 positions_dict[code] = positions
                 if positions:
-                    entered_stocks.add(code)
+                    if code not in entered_stocks: 
+                        entered_stocks.insert(0, code)
                     current_order = max(position.order for position in positions)
                     current_orders_dict[code] = current_order
                 else:
                     if capital < investment_per_split:
-                        entered_stocks.discard(code)
+                        entered_stocks.remove(code)
                         print(f"Removed code {code} from entered_stocks due to insufficient capital.")
 
         current_stock_value = np.sum([
