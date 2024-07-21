@@ -404,7 +404,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         total_portfolio_value = np.sum([capital, current_stock_value])
         # Check for NaN values and handle them
         if np.isnan(total_portfolio_value):
-            print(f"Warning: NaN detected in total_portfolio_value on {date_str}. Setting to previous value.")
+            # print(f"Warning: NaN detected in total_portfolio_value on {date_str}. Setting to previous value.")
             total_portfolio_value = portfolio_values_over_time[-1] if len(portfolio_values_over_time) > 0 else initial_capital
         
         portfolio_values_over_time = np.append(portfolio_values_over_time, total_portfolio_value)
@@ -491,20 +491,29 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     print(f'Plot saved to {file_path}')
     plt.show()
             
-def backtesting_wrapper(params):
+def backtesting_wrapper(params, db_params, initial_capital, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, start_date, end_date, results_folder, time_periods):
     num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks = params
     try:
         _, _, portfolio_values_over_time, _, _, _, _, cagr = portfolio_backtesting(
-            initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks
+            random.randint(0, 10000), initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, 
+            per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder
         )
         mdd = calculate_mdd(portfolio_values_over_time)
         return num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, cagr, mdd
     except Exception as e:
-        print(f'Error in backtesting: {e}')
+        print(f'Error in backtesting: {e} backtesting_wrapper')
         return num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, None, None
 
-def check_if_already_calculated(num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks):
-    most_recent_file = get_most_recent_results_file()
+
+def get_most_recent_results_file(directory):
+    files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.csv')]
+    if not files:
+        return None
+    most_recent_file = max(files, key=os.path.getctime)
+    return most_recent_file
+
+def check_if_already_calculated(num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks,directory):
+    most_recent_file = get_most_recent_results_file(directory)
     if most_recent_file:
         existing_results = pd.read_csv(most_recent_file)
         return not existing_results[
@@ -516,11 +525,11 @@ def check_if_already_calculated(num_splits, buy_threshold, investment_ratio, con
         ].empty
     return False
 
-def run_backtesting_for_period(num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks):
+def run_backtesting_for_period(num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder):
     start_date = f'{start_year}-01-01'
     end_date = f'{end_year}-12-31'
     _, total_portfolio_value, portfolio_values_over_time, _, _, _, _, cagr = portfolio_backtesting(
-        100000000, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks
+        100000000, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder
     )
     mdd = calculate_mdd(portfolio_values_over_time)
     return total_portfolio_value, cagr, mdd
@@ -536,13 +545,13 @@ def calculate_average_results(backtesting_results):
 
     return average_total_value, average_cagr, average_mdd
 
-def average_cagr_wrapper(params):
+def average_cagr_wrapper(params, time_periods, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder):
     num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks = params
     period_results = []
     for start_year, end_year in time_periods:
         try:
             total_value, cagr, mdd = run_backtesting_for_period(
-                num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks
+                num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder
             )
             period_results.append((total_value, cagr, mdd))
         except Exception as e:
@@ -551,61 +560,3 @@ def average_cagr_wrapper(params):
 
     average_results = calculate_average_results(period_results)
     return num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, average_results[0], average_results[1], average_results[2]
-
-# config = configparser.ConfigParser()
-# config.read('config.ini')
-
-# db_params = {
-#     'host': config['mysql']['host'],
-#     'user': config['mysql']['user'],
-#     'password': config['mysql']['password'],
-#     'database': config['mysql']['database'],
-#     'connection_timeout': 60
-# }
-
-# random.seed(100)
-
-# initial_capital = 100000000
-# num_splits = 10
-# investment_ratio = 0.1
-# buy_threshold = 30
-
-# start_date = '2004-01-01'
-# end_date = '2024-01-01'
-
-# per_threshold = 20
-# pbr_threshold = 2
-# div_threshold = 0.5
-# min_additional_buy_drop_rate = 0.005
-# consider_delisting = False
-# max_stocks = 40
-
-# # columns = ["num_splits", "buy_threshold", "investment_ratio", "consider_delisting", "max_stocks", "Average_Total_Value", "Average_CAGR", "Average_MDD"]
-
-# # num_splits_options = [20]
-# # buy_threshold_options = [30]
-# # investment_ratio_options = [0.3, 0.25]
-# # consider_delisting_options = [False]
-# # max_stocks_options = [40, 50, 55]
-
-# # combinations = [(n, b, i, c, m) for n in num_splits_options for b in buy_threshold_options for i in investment_ratio_options for c in consider_delisting_options for m in max_stocks_options]
-
-# # time_periods = [(2006, 2023), (2008, 2023), (2010, 2023), (2012, 2023), (2014, 2023)]
-
-# # current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-# # results_file = f'average_backtesting_results_{current_time_str}.csv'
-
-# # with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
-# #     futures = []
-# #     for param in combinations:
-# #         if not check_if_already_calculated(param[0], param[1], param[2], param[3], param[4]):
-# #             futures.append(executor.submit(average_cagr_wrapper, param))
-# #     results = []
-# #     for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
-# #         result = future.result()
-# #         results.append(result)
-
-# # results_df = pd.DataFrame(results, columns=columns)
-# # results_df.to_csv(results_file, index=False)
-
-# # print(results_df.sort_values(by="Average_CAGR", ascending=False))
