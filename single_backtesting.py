@@ -29,7 +29,7 @@ db_params = {
     'user': config['mysql']['user'],
     'password': config['mysql']['password'],
     'database': config['mysql']['database'],
-    'connection_timeout': 60
+
 }
 
 initial_capital = 100000000  # 초기 자본 1억
