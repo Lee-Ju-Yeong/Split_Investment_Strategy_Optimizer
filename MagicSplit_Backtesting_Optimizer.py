@@ -132,7 +132,7 @@ def calculate_sell_profit_rate(buy_profit_rate):
     
 
 # Function to handle initial buy and sell
-def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits):
+def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files):
     normalized = row['normalized_value']
     five_year_low = row['five_year_low']
     current_order = len(positions) + 1
@@ -151,9 +151,9 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
         positions.append(new_position)
         capital -= total_cost
         buy_signals.append((row.name, row['close']))
-
-        trade = Trade(row.name, code, 1, quantity, row['close'], None, 'buy', None, None, normalized, capital, total_portfolio_value)
-        trading_history.append(trade)
+        if save_files:
+            trade = Trade(row.name, code, 1, quantity, row['close'], None, 'buy', None, None, normalized, capital, total_portfolio_value)
+            trading_history.append(trade)
 
     liquidated = False
     
@@ -169,8 +169,9 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
             profit_rate = profit / (position.buy_price * position.quantity)
-            trade = Trade(row.name, code, 1, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, normalized, capital, total_portfolio_value)
-            trading_history.append(trade)
+            if save_files:
+                trade = Trade(row.name, code, 1, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, normalized, capital, total_portfolio_value)
+                trading_history.append(trade)
             liquidated = True
 
     for position in positions_to_remove:
@@ -181,7 +182,7 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
         return positions, capital, None
     
 # Function to handle additional buy
-def additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code):
+def additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code,save_files):
     buy_commission_rate = 0.00015
     if positions and len(positions) < num_splits and capital >= investment_per_split:
         last_position = positions[0]
@@ -195,9 +196,9 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
             positions.append(new_position)
             capital -= total_cost
             buy_signals.append((row.name, row['close']))
-
-            trade = Trade(row.name, code, len(positions), quantity, row['close'], None, 'buy', None, None, row['normalized_value'], capital, total_portfolio_value)
-            trading_history.append(trade)
+            if save_files:
+                trade = Trade(row.name, code, len(positions), quantity, row['close'], None, 'buy', None, None, row['normalized_value'], capital, total_portfolio_value)
+                trading_history.append(trade)
             
             #  # 로그 추가
             # print(f"Updated positions for code {code}: new position buy price = {new_position.buy_price}, additional buy drop rate = {new_position.additional_buy_drop_rate}, total positions = {len(positions)}")
@@ -205,7 +206,7 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
     return positions, capital
 
 # Function to handle additional sell
-def additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code):
+def additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code,save_files):
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
     buy_commission_rate = 0.00015
@@ -223,8 +224,9 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
             profit_rate = profit / (position.buy_price * position.quantity)
-            trade = Trade(row.name, code, position.order, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, row['normalized_value'], capital, total_portfolio_value)
-            trading_history.append(trade)
+            if save_files:
+                trade = Trade(row.name, code, position.order, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, row['normalized_value'], capital, total_portfolio_value)
+                trading_history.append(trade)
     for position in positions_to_remove:
         positions.remove(position)
 
@@ -253,7 +255,7 @@ def calculate_mdd(portfolio_values):
 
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
-                          min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None):
+                          min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None,save_files=True):
     random.seed(seed)
     np.random.seed(seed)
     total_portfolio_value = initial_capital
@@ -324,7 +326,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
-                positions, capital = additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code)
+                positions, capital = additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code,save_files)
                 positions_dict[code] = positions
                 if positions:
                     current_order = max(position.order for position in positions)
@@ -340,7 +342,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
-                positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits)
+                positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
                 positions_dict[code] = positions
                 if liquidated_code:
                     entered_stocks.remove(liquidated_code)
@@ -370,7 +372,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                         if additional_buy_drop_rate >= min_additional_buy_drop_rate:
                             row = loaded_stock_data[code].loc[date]
                             positions = []
-                            positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits)
+                            positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
                             positions_dict[code] = positions
                             if positions:
                                 if code not in entered_stocks: 
@@ -385,7 +387,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
-                positions, capital = additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code)
+                positions, capital = additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code,save_files)
                 positions_dict[code] = positions
                 if positions:
                     if code not in entered_stocks: 
@@ -420,7 +422,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
     # print('backtesting complete')
 
 
-    if results_folder:
+    if results_folder and save_files:
         # Create folder if it does not exist
         if not os.path.exists(results_folder):
             os.makedirs(results_folder)
@@ -440,7 +442,7 @@ def format_currency(value):
     return f'{value:,.0f}₩'
 
 # 백테스팅 결과 시각화 함수
-def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder):
+def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder, save_files=True):
     # 한글 폰트 설정
     plt.rcParams['font.family'] = 'Malgun Gothic'
     
@@ -477,12 +479,13 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
     plt.xlabel('Date')
     plt.ylabel('Value')
     plt.title('Portfolio Value and Capital Over Time')
-    plt.legend()
+    plt.legend(loc='upper left')
     plt.grid(True)
 
     # Save plot as a PNG file
-    if not os.path.exists(results_folder):
-        os.makedirs(results_folder)
+    if save_files:
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
 
     current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'

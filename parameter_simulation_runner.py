@@ -1,5 +1,6 @@
 import os
 import concurrent.futures
+from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 import pandas as pd
 from datetime import datetime
@@ -32,20 +33,20 @@ initial_capital = 100000000  # 초기 자본 1억
 
 # 백테스팅 파라미터 옵션 설정
 num_splits_options = [10,20,30]
-buy_threshold_options = [25,30,35,40,50]
-investment_ratio_options = [0.25,0.3,0.35,0.4]
+buy_threshold_options = [30,40,50]
+investment_ratio_options = [0.25,0.3,0.35]
 consider_delisting_options = [False]
-max_stocks_options = [30,40,50,60]
+max_stocks_options = [30,45,60]
 
 # 새로운 백테스팅 파라미터 옵션 설정
-per_threshold_options = [5,10,15,20]
-pbr_threshold_options = [0.8, 1, 1.5, 2]
-div_threshold_options = [0, 1.0,2,3,4]
-min_additional_buy_drop_rate_options = [0.005, 0.01,0.015,0.2]
-seed_options = [101]
+per_threshold_options = [5,10,15]
+pbr_threshold_options = [0.5, 1, 1.5]
+div_threshold_options = [1,3]
+min_additional_buy_drop_rate_options = [0.005,0.015]
+seed_options = [102]
 
 # 여러 기간 설정
-time_periods = [(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023), (2014, 2023)]
+time_periods = [(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
 
 # 파라미터 조합 생성
 combinations = [(n, b, i, c, m, p, pb, d, min_d, s) 
@@ -101,19 +102,20 @@ def check_if_already_calculated(num_splits, buy_threshold, investment_ratio, con
     return False
 
 
-def run_backtesting_for_period(seed,initial_capital,num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder):
+def run_backtesting_for_period(seed,initial_capital,num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder,save_files=False):
     random.seed(seed)
     np.random.seed(seed)
     start_date = f'{start_year}-01-01'
     end_date = f'{end_year}-12-31'
     try:
         _, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
-            initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder
+            initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder ,save_files=save_files
         )
     except Exception as e:
         print(f'Error in backtesting for period {start_year}-{end_year}: {e}')
     mdd = calculate_mdd(portfolio_values_over_time)
-    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd, results_folder)
+    if save_files:
+        plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd, results_folder, save_files=save_files)
     return total_portfolio_value, cagr, mdd
 
 
@@ -128,13 +130,13 @@ def calculate_average_results(backtesting_results):
 
     return average_total_value, average_cagr, average_mdd
 
-def average_cagr_wrapper(params, time_periods, db_params, results_folder):
+def average_cagr_wrapper(params, time_periods, db_params, results_folder,save_files=False):
     num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, seed = params
     period_results = []
     for start_year, end_year in time_periods:
         try:
             total_value, cagr, mdd = run_backtesting_for_period(seed, initial_capital,
-                num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder
+                num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder,save_files=save_files
             )
             period_results.append((total_value, cagr, mdd))
         except Exception as e:
@@ -144,11 +146,30 @@ def average_cagr_wrapper(params, time_periods, db_params, results_folder):
     average_results = calculate_average_results(period_results)
     return num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, seed, average_results[0], average_results[1], average_results[2]
 
-def run_backtesting_and_save_results():
+# def run_backtesting_and_save_results(save_files=False):
+#     results = []
+#     with concurrent.futures.ThreadPoolExecutor() as executor:
+#         futures = [
+#             executor.submit(average_cagr_wrapper, param, time_periods, db_params, results_folder,save_files)
+#             for param in combinations
+#         ]
+#         for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+#             results.append(future.result())
+
+#     results_df = pd.DataFrame(results, columns=[
+#         "num_splits", "buy_threshold", "investment_ratio", "consider_delisting", "max_stocks",
+#         "per_threshold", "pbr_threshold", "dividend_threshold", "min_additional_buy_drop_rate", "seed",
+#         "Average_Total_Value", "Average_CAGR", "Average_MDD"
+#     ])
+#     results_df.to_csv(results_file, index=False)
+#     print(results_df.sort_values(by="Average_CAGR", ascending=False))
+    
+
+def run_backtesting_and_save_results(save_files=False):
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+    with ProcessPoolExecutor(max_workers=8) as executor:
         futures = [
-            executor.submit(average_cagr_wrapper, param, time_periods, db_params, results_folder)
+            executor.submit(average_cagr_wrapper, param, time_periods, db_params, results_folder, save_files)
             for param in combinations
         ]
         for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
