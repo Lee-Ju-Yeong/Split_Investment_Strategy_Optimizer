@@ -37,14 +37,14 @@ initial_capital = 100000000  # 초기 자본 1억
 seed=101
 results_folder="results_of_single_test"
 
-def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks):
+def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks,save_files=True):
     random.seed(seed)
     np.random.seed(seed)
     positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
-        initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks,results_folder
+        initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks,results_folder,save_files
     )
     mdd = calculate_mdd(portfolio_values_over_time)
-    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder)
+    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,save_files)
     return positions_dict, total_portfolio_value, cagr, mdd
 
 if __name__ == "__main__":
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     min_additional_buy_drop_rate = 0.005
     consider_delisting = False
     max_stocks = 40
-    seed=20
+    seed=102
 
     positions_dict, total_portfolio_value, cagr, mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
     print(f"최종 포트폴리오 가치: {total_portfolio_value}")
