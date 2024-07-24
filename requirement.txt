@@ -1,0 +1,11 @@
+flask
+flask-cors
+pandas
+numpy
+matplotlib
+tqdm
+seaborn
+configparser
+cryptography
+mysql-connector-python
+flask_cors
