@@ -68,7 +68,7 @@ if not os.path.exists(base_folder):
 
 
 # 파일 저장 경로 설정
-current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+current_time_str = datetime.now().strftime('%Y%m%d_%H%M')
 results_folder = os.path.join(base_folder, f'parameter_simulation_{current_time_str}')
 if not os.path.exists(results_folder):
     os.makedirs(results_folder)

@@ -426,7 +426,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         # Create folder if it does not exist
         if not os.path.exists(results_folder):
             os.makedirs(results_folder)
-        current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        current_time_str = datetime.now().strftime('%Y%m%d_%H%M')
         file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
         file_path = os.path.join(results_folder, file_name)
         trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
@@ -487,7 +487,7 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
         if not os.path.exists(results_folder):
             os.makedirs(results_folder)
 
-    current_time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    current_time_str = datetime.now().strftime('%Y%m%d_%H%M')
     file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
     file_path = os.path.join(results_folder, file_name)
     plt.savefig(file_path)

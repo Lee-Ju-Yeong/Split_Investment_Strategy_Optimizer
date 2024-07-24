@@ -1,24 +1,23 @@
-
-pip install -r requirements.txt
-
-
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
-import configparser
-import random
+import os
+import pandas as pd
 import numpy as np
-from MagicSplit_Backtesting_Optimizer import (
-    get_stock_codes, load_stock_data_from_mysql, calculate_additional_buy_drop_rate,
-    calculate_sell_profit_rate, initial_buy_sell, additional_buy, additional_sell,
-    get_trading_dates_from_db, portfolio_backtesting, calculate_mdd, plot_backtesting_results,
-)
+import datetime
+import random
+import configparser
+from concurrent.futures import ThreadPoolExecutor
+from single_backtesting import single_backtesting
+from MagicSplit_Backtesting_Optimizer import calculate_mdd
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
 
+# 설정 파일 읽기
 config = configparser.ConfigParser()
 config.read('config.ini')
 
+# 데이터베이스 연결 정보 설정
 db_params = {
     'host': config['mysql']['host'],
     'user': config['mysql']['user'],
@@ -36,34 +35,49 @@ def run_backtest():
     initial_capital = int(data['initial-capital'])
     num_splits = int(data['num-splits'])
     investment_ratio = float(data['investment-ratio'])
-    per_threshold = float(data['per-threshold'])
     pbr_threshold = float(data['pbr-threshold'])
+    per_threshold = float(data['per-threshold'])
     div_threshold = float(data['dividend-threshold'])
     buy_threshold = int(data['buy-threshold'])
     start_date = data['start-date']
     end_date = data['end-date']
-    consider_delisting = bool(data.get('consider-delisting', False))
+    consider_delisting = data['consider-delisting'] == 'on'
     max_stocks = int(data['portfolio-size'])
-
-    seed = 101
+    seed = random.randint(0, 10000)
     results_folder = "results_of_single_test"
 
-    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
-        initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, 0.005, consider_delisting, max_stocks, results_folder, save_files=False
+    # 백테스팅 실행
+    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(
+        seed, num_splits, buy_threshold, investment_ratio, start_date, end_date,
+        per_threshold, pbr_threshold, div_threshold, 0.005, consider_delisting,
+        max_stocks, save_files=True
     )
-    mdd = calculate_mdd(portfolio_values_over_time)
 
-    result = {
-        "total_portfolio_value": total_portfolio_value,
-        "cagr": cagr,
-        "mdd": mdd,
-        "portfolio_values_over_time": portfolio_values_over_time.tolist(),
-        "capital_over_time": capital_over_time.tolist(),
-        "buy_signals": buy_signals,
-        "sell_signals": sell_signals,
-        "all_trading_dates": [date.strftime('%Y-%m-%d') for date in all_trading_dates]
+    # 결과 파일 경로
+    current_time_str = datetime.datetime.now().strftime('%Y%m%d_%H%M')
+    excel_file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
+    plot_file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
+    excel_file_path = os.path.join(results_folder, excel_file_name)
+    plot_file_path = os.path.join(results_folder, plot_file_name)
+
+    # 결과 반환
+    response = {
+        'total_portfolio_value': total_portfolio_value,
+        'cagr': cagr,
+        'mdd': mdd,
+        'all_trading_dates': all_trading_dates,
+        'portfolio_values_over_time': portfolio_values_over_time.tolist(),
+        'capital_over_time': capital_over_time.tolist(),
+        'excel_file_path': excel_file_name,
+        'plot_file_path': plot_file_name
     }
-    return jsonify(result)
+    return jsonify(response)
 
-if __name__ == '__main__':
+
+@app.route('/results_of_single_test/<path:filename>', methods=['GET'])
+def download_file(filename):
+    return send_from_directory('results_of_single_test', filename, as_attachment=True)
+
+
+if __name__ == "__main__":
     app.run(debug=True)
