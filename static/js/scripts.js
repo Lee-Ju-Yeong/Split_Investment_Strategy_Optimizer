@@ -6,6 +6,11 @@ document
     const formData = new FormData(event.target);
     const data = Object.fromEntries(formData);
 
+    const considerDelistingCheckbox = document.getElementById("consider-delisting");
+    if (!considerDelistingCheckbox.checked) {
+      data['consider-delisting'] = 'off';
+    }
+
     const response = await fetch("/run_backtest", {
       method: "POST",
       headers: {
@@ -15,49 +20,16 @@ document
     });
 
     const result = await response.json();
-    plotResults(result);
+    displayResults(result);
   });
 
-function plotResults(result) {
-  const ctx = document.getElementById("portfolio-chart").getContext("2d");
-  const chart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: result.all_trading_dates,
-      datasets: [
-        {
-          label: "Portfolio Value",
-          data: result.portfolio_values_over_time,
-          borderColor: "blue",
-          fill: false,
-        },
-        {
-          label: "Capital",
-          data: result.capital_over_time,
-          borderColor: "green",
-          fill: false,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      scales: {
-        x: {
-          type: "time",
-          time: {
-            unit: "month",
-          },
-        },
-        y: {
-          beginAtZero: true,
-        },
-      },
-    },
-  });
-
+function displayResults(result) {
   document.getElementById("signals").innerHTML = `
       <p>Total Portfolio Value: ${result.total_portfolio_value}</p>
       <p>CAGR: ${result.cagr}</p>
       <p>MDD: ${result.mdd}</p>
+      <a href="/results_of_single_test/${result.excel_file_path}">Download Trade History Excel File</a>
+      <br />
+      <img src="/results_of_single_test/${result.plot_file_path}" alt="Backtesting Result Graph" />
   `;
 }

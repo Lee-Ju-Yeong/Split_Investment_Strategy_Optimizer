@@ -45,7 +45,7 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
     )
     mdd = calculate_mdd(portfolio_values_over_time)
     plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,save_files)
-    return positions_dict, total_portfolio_value, cagr, mdd
+    return  positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr ,mdd
 
 if __name__ == "__main__":
     print("Starting backtesting...")
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     max_stocks = 40
     seed=102
 
-    positions_dict, total_portfolio_value, cagr, mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
+    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
     print(f"최종 포트폴리오 가치: {total_portfolio_value}")
     print(f"CAGR: {cagr}")
     print(f"MDD: {mdd:.2%}")
