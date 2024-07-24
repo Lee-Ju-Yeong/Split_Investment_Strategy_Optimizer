@@ -1,16 +1,30 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Split Backtester</title>
-    <link rel="stylesheet" href="style.css" />
+    <title>백테스팅 대시보드</title>
+    <link rel="stylesheet" href="/static/css/styles.css" />
   </head>
   <body>
-    <p>
-      <a href="html/Magicsplit_backtesting.html" target="_blank">
-        분할 매매 전략 백테스터</a
-      >
-    </p>
+    <div class="container">
+      <h1>백테스팅 대시보드</h1>
+      <hr class="title-divider" />
+      <div class="parameters">
+        <h2>파라미터 설정</h2>
+        <form id="backtest-form">
+          <!-- 기존 파라미터 입력 필드들 -->
+          <!-- 생략 -->
+          <button type="submit" class="btn">백테스팅 실행</button>
+        </form>
+      </div>
+      <div class="results">
+        <h2>결과</h2>
+        <canvas id="portfolio-chart"></canvas>
+        <div id="signals"></div>
+      </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/static/js/scripts.js"></script>
   </body>
 </html>

@@ -68,4 +68,3 @@ if __name__ == "__main__":
     print(f"CAGR: {cagr}")
     print(f"MDD: {mdd:.2%}")
     print("Backtesting completed")
-    # 랜덤시드고정, 파라미터최적화 따로해야할지 정해야할듯
