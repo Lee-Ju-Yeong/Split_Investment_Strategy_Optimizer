@@ -1,53 +1,92 @@
 /* styles.css */
 body {
-  font-family: Arial, sans-serif;
+  font-family: 'Roboto', Arial, sans-serif;
   margin: 0;
   padding: 0;
-  background-color: #f4f4f4;
+  background-color: #eef2f5;
+  color: #333;
 }
 
 .container {
   width: 80%;
-  margin: auto;
+  max-width: 1200px;
+  margin: 40px auto;
+  background: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
   overflow: hidden;
+  padding: 20px;
 }
 
 h1,
 h2 {
-  color: #333;
+  color: #222;
+  margin-bottom: 0.5em;
+  font-weight: 300;
+  text-align: center; /* 가운데 정렬 추가 */
+}
+
+hr.title-divider {
+  border: none;
+  border-top: 2px solid #ddd;
+  margin: 10px 0 20px;
 }
 
 .form-group {
-  margin-bottom: 1em;
+  margin-bottom: 1.5em;
 }
 
 .form-group label {
   display: block;
   margin-bottom: 0.5em;
+  font-weight: 500;
+  color: #555;
 }
 
-.form-group input {
-  width: 100%;
-  padding: 0.5em;
+.form-group input[type="number"],
+.form-group input[type="date"] {
+  width: calc(20% - 20px);
+  padding: 0.5em 10px;
   font-size: 1em;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-sizing: border-box;
 }
 
 .form-group small {
   display: block;
   margin-top: 0.5em;
-  color: #666;
+  color: #888;
 }
 
 .btn {
   display: inline-block;
-  background: #333;
+  background: #007bff;
   color: #fff;
-  padding: 0.5em 1em;
+  padding: 0.75em 1.5em;
   text-decoration: none;
-  border-radius: 0.3em;
+  border-radius: 4px;
   transition: background 0.3s;
+  cursor: pointer;
+  font-weight: 500;
+  border: none;
+  font-size: 1em;
+  text-align: center; /* 가운데 정렬 추가 */
+  margin-top: 10px;
 }
 
 .btn:hover {
-  background: #555;
+  background: #0056b3;
+}
+
+#portfolio-chart {
+  margin-top: 2em;
+}
+
+#signals {
+  margin-top: 1em;
+  background: #fafafa;
+  padding: 1em;
+  border: 1px solid #ddd;
+  border-radius: 4px;
 }

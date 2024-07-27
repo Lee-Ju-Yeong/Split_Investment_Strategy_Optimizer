@@ -1,11 +1,30 @@
+# Flask and CORS
 flask
 flask-cors
+
+# Data Processing and Analysis
 pandas
 numpy
+
+# Visualization
 matplotlib
-tqdm
 seaborn
+
+# Configuration and Encryption
 configparser
 cryptography
+
+# MySQL Database Connection
 mysql-connector-python
-flask_cors
+sqlalchemy
+pymysql
+
+# Web Driver and Automation
+selenium
+webdriver-manager
+
+# Korean Stock Data
+pykrx
+
+# Progress Bar for loops
+tqdm
