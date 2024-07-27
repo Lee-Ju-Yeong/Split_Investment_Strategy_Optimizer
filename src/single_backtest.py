@@ -13,7 +13,7 @@ import matplotlib.font_manager as fm
 
 
 # 백테스팅과 관련된 함수들 가져오기
-from MagicSplit_Backtesting_Optimizer import (
+from backtest_strategy import (
     get_stock_codes, load_stock_data_from_mysql, calculate_additional_buy_drop_rate,
     calculate_sell_profit_rate, initial_buy_sell, additional_buy, additional_sell,
     get_trading_dates_from_db, portfolio_backtesting, calculate_mdd, plot_backtesting_results,

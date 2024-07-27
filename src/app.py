@@ -7,8 +7,8 @@ import datetime
 import random
 import configparser
 from concurrent.futures import ThreadPoolExecutor
-from single_backtesting import single_backtesting
-from MagicSplit_Backtesting_Optimizer import calculate_mdd
+from single_backtest import single_backtesting
+from backtest_strategy import calculate_mdd
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)

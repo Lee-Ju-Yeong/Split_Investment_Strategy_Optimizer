@@ -8,8 +8,8 @@ import configparser
 import numpy as np
 import random
 
-# MagicSplit_Backtesting_Optimizer 모듈의 함수와 클래스 가져오기
-from MagicSplit_Backtesting_Optimizer import (
+# backtest_strategy 모듈의 함수와 클래스 가져오기
+from backtest_strategy import (
     Position, Trade, get_stock_codes, load_stock_data_from_mysql, calculate_additional_buy_drop_rate,
     calculate_sell_profit_rate, initial_buy_sell, additional_buy, additional_sell, get_trading_dates_from_db,
     calculate_mdd, portfolio_backtesting, plot_backtesting_results
