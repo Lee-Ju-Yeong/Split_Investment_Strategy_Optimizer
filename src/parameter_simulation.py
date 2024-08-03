@@ -30,10 +30,10 @@ db_params = {
 
 # 초기 자본 설정
 initial_capital = 100000000  # 초기 자본 1억
-
+'''
 # 백테스팅 파라미터 옵션 설정
-num_splits_options = [10,20,30]
-buy_threshold_options = [30,40,50]
+num_splits_options = [10,20]
+buy_threshold_options = [30,35]
 investment_ratio_options = [0.25,0.3,0.35]
 consider_delisting_options = [False]
 max_stocks_options = [30,45,60]
@@ -44,9 +44,24 @@ pbr_threshold_options = [0.5, 1, 1.5]
 div_threshold_options = [1,3]
 min_additional_buy_drop_rate_options = [0.005,0.015]
 seed_options = [102]
+'''
+
+# 백테스팅 파라미터 옵션 설정
+num_splits_options = [20,25]
+buy_threshold_options = [16,18,20]
+investment_ratio_options = [.4,.45]
+consider_delisting_options = [False]
+max_stocks_options = [40,45]
+
+# 새로운 백테스팅 파라미터 옵션 설정
+per_threshold_options = [10,20]
+pbr_threshold_options = [0.5,0.3]
+div_threshold_options = [0.1,0.5]
+min_additional_buy_drop_rate_options = [0.02,0.03]
+seed_options = [102]
 
 # 여러 기간 설정
-time_periods = [(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
+time_periods = [(2006, 2023), (2010, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
 
 # 파라미터 조합 생성
 combinations = [(n, b, i, c, m, p, pb, d, min_d, s) 
@@ -173,7 +188,10 @@ def run_backtesting_and_save_results(save_files=False):
             for param in combinations
         ]
         for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
-            results.append(future.result())
+            try:
+                results.append(future.result())
+            except Exception as e:
+                print(f'Exception occurred: {e}')
 
     results_df = pd.DataFrame(results, columns=[
         "num_splits", "buy_threshold", "investment_ratio", "consider_delisting", "max_stocks",
@@ -182,6 +200,7 @@ def run_backtesting_and_save_results(save_files=False):
     ])
     results_df.to_csv(results_file, index=False)
     print(results_df.sort_values(by="Average_CAGR", ascending=False))
+
 
 
 if __name__ == "__main__":

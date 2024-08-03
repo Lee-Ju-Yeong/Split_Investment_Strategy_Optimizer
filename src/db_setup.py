@@ -6,12 +6,12 @@ def get_db_connection():
     config = configparser.ConfigParser()
     config.read('config.ini')
 
-    username = config['mysql']['username']
+    user= config['mysql']['user']
     password = config['mysql']['password']
     host = config['mysql']['host']
     database = config['mysql']['database']
 
-    conn = pymysql.connect(host=host, user=username, password=password, db=database, charset='utf8')
+    conn = pymysql.connect(host=host, user=user, password=password, db=database, charset='utf8')
     return conn
 
 def create_tables(conn):
