@@ -9,6 +9,6 @@ if __name__ == "__main__":
     create_tables(conn)
     conn.close()
     
-    collect_tickers()
+    #collect_tickers()
     collect_stock_data()
-    collect_etf_data()
+    #collect_etf_data()

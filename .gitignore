@@ -126,3 +126,5 @@ config.ini
 
 # Data
 data/
+.ipynb_checkpoints
+__pycache__
