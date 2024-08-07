@@ -48,15 +48,15 @@ seed_options = [102]
 
 # 백테스팅 파라미터 옵션 설정
 num_splits_options = [20,25]
-buy_threshold_options = [16,18,20]
+buy_threshold_options = [16,20]
 investment_ratio_options = [.4,.45]
 consider_delisting_options = [False]
 max_stocks_options = [40,45]
 
 # 새로운 백테스팅 파라미터 옵션 설정
 per_threshold_options = [10,20]
-pbr_threshold_options = [0.5,0.3]
-div_threshold_options = [0.1,0.5]
+pbr_threshold_options = [0.5]
+div_threshold_options = [0.1]
 min_additional_buy_drop_rate_options = [0.02,0.03]
 seed_options = [102]
 
