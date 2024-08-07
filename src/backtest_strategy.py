@@ -406,12 +406,14 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             if date in loaded_stock_data[code].index
         ])
 
+
         total_portfolio_value = np.sum([capital, current_stock_value])
         # Check for NaN values and handle them
         if np.isnan(total_portfolio_value):
             # print(f"Warning: NaN detected in total_portfolio_value on {date_str}. Setting to previous value.")
             total_portfolio_value = portfolio_values_over_time[-1] if len(portfolio_values_over_time) > 0 else initial_capital
-        
+            
+   
         portfolio_values_over_time = np.append(portfolio_values_over_time, total_portfolio_value)
         capital_over_time = np.append(capital_over_time, capital)
 

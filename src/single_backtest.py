@@ -50,15 +50,15 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
 if __name__ == "__main__":
     print("Starting backtesting...")
     num_splits = 20
-    buy_threshold = 30
-    investment_ratio = 0.3
-    start_date = '2004-01-01'
-    end_date = '2004-02-01'
+    buy_threshold = 20
+    investment_ratio = 0.4
+    start_date = '2006-01-01'
+    end_date = '2023-12-31'
     
     per_threshold = 10
-    pbr_threshold = 1
-    div_threshold = 1.0
-    min_additional_buy_drop_rate = 0.005
+    pbr_threshold = 0.5
+    div_threshold = 0.1
+    min_additional_buy_drop_rate = 0.02
     consider_delisting = False
     max_stocks = 40
     seed=102
