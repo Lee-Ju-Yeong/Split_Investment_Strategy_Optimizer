@@ -50,18 +50,18 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
 if __name__ == "__main__":
     print("Starting backtesting...")
     num_splits = 20
-    buy_threshold = 20
+    buy_threshold = 32
     investment_ratio = 0.4
     start_date = '2006-01-01'
     end_date = '2023-12-31'
     
     per_threshold = 10
-    pbr_threshold = 0.5
+    pbr_threshold = 1
     div_threshold = 0.1
-    min_additional_buy_drop_rate = 0.02
+    min_additional_buy_drop_rate = 0.005
     consider_delisting = False
-    max_stocks = 40
-    seed=102
+    max_stocks = 24
+    seed=103
 
     positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks)
     print(f"최종 포트폴리오 가치: {total_portfolio_value}")
