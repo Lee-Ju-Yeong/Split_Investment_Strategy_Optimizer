@@ -253,6 +253,128 @@ def calculate_mdd(portfolio_values):
     mdd = np.max(drawdown)
     return mdd
 
+def calculate_atr(data, period=14):
+    # True Range (TR) calcultate
+    data['high_low'] = data['high'] - data['low']
+    data['high_close'] = np.abs(data['high'] - data['close'].shift())
+    data['low_close'] = np.abs(data['low'] - data['close'].shift())
+    tr = data[['high_low', 'high_close', 'low_close']].max(axis=1)
+    
+    # ATR calcultate
+    atr = tr.rolling(period).mean()
+    return atr
+
+def calculate_normalized_atr(data, period=14):
+    # ATR calcultate
+    atr = calculate_atr(data, period)
+    
+    # Normalized ATR calcultate (%)
+    data['Normalized ATR (%)'] = (atr / data['close']) * 100
+    return data['Normalized ATR (%)']
+
+# 기존 포트폴리오와 종목들 간의 상관계수 계산 함수
+def calculate_correlation_score(stock_data, entered_stocks, loaded_stock_data):
+    correlations = []
+    for code in entered_stocks:
+        data1 = loaded_stock_data[code]['close']
+        data2 = stock_data['close']
+        
+        # 두 데이터 시리즈의 인덱스를 동일하게 맞추기
+        data1, data2 = data1.align(data2, join='inner')
+        
+        # 결측치 제거
+        combined_data = pd.concat([data1, data2], axis=1).dropna()
+        if len(combined_data) < 2:
+            # 데이터가 없거나 충분하지 않으면 NaN을 피하기 위해 0으로 간주
+            correlations.append(0)
+            continue
+        
+        correlation = combined_data.iloc[:, 0].corr(combined_data.iloc[:, 1])
+        # print(correlation)
+        if pd.isna(correlation):
+            # 상관계수가 NaN인 경우 처리 (이유: 모든 값이 동일하여 상관계수 계산 불가)
+            correlations.append(0)
+        else:
+            correlations.append(correlation)  # 실제 상관계수를 사용
+    
+    if correlations:
+        
+        avg_correlation = np.mean(correlations)
+        scores = []
+        for corr in correlations:
+            if corr > 0:
+                scores.append(1 - corr)  # Apply negative sign for positive correlations
+            else:
+                scores.append(abs(corr)*2)  # Invert for negative correlations
+        avg_score = np.mean(scores)
+        return avg_score
+    else:
+        return 1
+    
+def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data):
+    stock_scores = {}
+
+    if stock_selection_method == 'normalized_atr':
+        # Normalized ATR 기반 선정
+        for code in stock_codes:
+            one_year_ago = date - timedelta(days=365)
+            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
+            if date in data.index:
+                normalized_atr = calculate_normalized_atr(data)
+                stock_scores[code] = normalized_atr[-1]
+
+        # Normalized ATR에 따라 정렬 (내림차순)
+        sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
+
+    elif stock_selection_method == 'correlation':
+        # 상관관계 점수 기반 선정
+        for code in stock_codes:
+            one_year_ago = date - timedelta(days=365)
+            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
+            if date in data.index:
+                correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
+                stock_scores[code] = correlation_score
+
+        # 상관관계 점수에 따라 정렬 (내림차순)
+        sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
+
+    elif stock_selection_method == 'rank_based':
+        # 순위 기반 스코어링 선정
+        normalized_atr_scores = {}
+        correlation_scores = {}
+
+        for code in stock_codes:
+            one_year_ago = date - timedelta(days=365)
+            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
+            if date in data.index:
+                normalized_atr = calculate_normalized_atr(data)
+                correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
+
+                # 스코어 저장
+                normalized_atr_scores[code] = normalized_atr[-1]
+                correlation_scores[code] = correlation_score
+
+        # 순위 계산
+        sorted_atr = sorted(normalized_atr_scores.items(), key=lambda x: x[1], reverse=True)
+        sorted_correlation = sorted(correlation_scores.items(), key=lambda x: x[1], reverse=True)
+
+        # 종목에 대한 순위 점수 할당
+        atr_rank = {code: rank for rank, (code, _) in enumerate(sorted_atr, start=1)}
+        correlation_rank = {code: rank for rank, (code, _) in enumerate(sorted_correlation, start=1)}
+
+        # 최종 순위 기반 스코어 계산
+        stock_scores = {code: atr_rank[code] + correlation_rank[code] for code in stock_codes}
+
+        # 최종 스코어에 따라 종목 정렬
+        sorted_stock_codes = sorted(stock_scores, key=stock_scores.get)
+
+    else:
+        # 랜덤 선정
+        sorted_stock_codes = stock_codes
+        random.shuffle(sorted_stock_codes)
+
+    return sorted_stock_codes
+
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
                           min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None,save_files=True):
@@ -360,9 +482,15 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
 # Enter new stocks if there is room in the portfolio and sufficient capital
         if len(entered_stocks) < max_stocks and capital > investment_per_split:
             stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
-            random.shuffle(stock_codes)
-            for code in stock_codes:
-                if len(entered_stocks) < max_stocks and code not in entered_stocks:
+            # 기존에 포함된 종목 제외
+            stock_codes = [code for code in stock_codes if code not in entered_stocks]
+            # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
+            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random
+            sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
+            print(sorted_stock_codes)
+            
+            for code in sorted_stock_codes:
+                if len(entered_stocks) < max_stocks:
                     loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
                     if date in loaded_stock_data[code].index:
                         sample_row = loaded_stock_data[code].loc[date]
