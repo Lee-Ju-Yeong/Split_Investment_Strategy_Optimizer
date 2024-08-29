@@ -47,21 +47,21 @@ seed_options = [102]
 '''
 
 # 백테스팅 파라미터 옵션 설정
-num_splits_options = [20,25]
-buy_threshold_options = [16,20]
-investment_ratio_options = [.4,.45]
+num_splits_options = [20]
+buy_threshold_options = [24,32]
+investment_ratio_options = [0.5,0.4]
 consider_delisting_options = [False]
-max_stocks_options = [40,45]
+max_stocks_options = [24,30]
 
 # 새로운 백테스팅 파라미터 옵션 설정
-per_threshold_options = [10,20]
-pbr_threshold_options = [0.5]
-div_threshold_options = [0.1]
-min_additional_buy_drop_rate_options = [0.02,0.03]
-seed_options = [102]
+per_threshold_options = [20]
+pbr_threshold_options = [1,2]
+div_threshold_options = [1,0]
+min_additional_buy_drop_rate_options = [0.005]
+seed_options = [104,103]
 
 # 여러 기간 설정
-time_periods = [(2006, 2023), (2010, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
+time_periods = [(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
 
 # 파라미터 조합 생성
 combinations = [(n, b, i, c, m, p, pb, d, min_d, s) 
