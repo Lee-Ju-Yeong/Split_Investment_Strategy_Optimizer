@@ -254,12 +254,11 @@ def calculate_mdd(portfolio_values):
     return mdd
 
 def calculate_atr(data, period=14):
-    # True Range (TR) calcultate
-    data['high_low'] = data['high'] - data['low']
-    data['high_close'] = np.abs(data['high'] - data['close'].shift())
-    data['low_close'] = np.abs(data['low'] - data['close'].shift())
+    # True Range (TR) calculate using previous day's data
+    data['high_low'] = data['high'].shift(1) - data['low'].shift(1)
+    data['high_close'] = np.abs(data['high'].shift(1) - data['close'].shift(1))
+    data['low_close'] = np.abs(data['low'].shift(1) - data['close'].shift(1))
     tr = data[['high_low', 'high_close', 'low_close']].max(axis=1)
-    
     # ATR calcultate
     atr = tr.rolling(period).mean()
     return atr
@@ -269,7 +268,7 @@ def calculate_normalized_atr(data, period=14):
     atr = calculate_atr(data, period)
     
     # Normalized ATR calcultate (%)
-    data['Normalized ATR (%)'] = (atr / data['close']) * 100
+    data['Normalized ATR (%)'] = (atr / data['close'].shift(1)) * 100
     return data['Normalized ATR (%)']
 
 # 기존 포트폴리오와 종목들 간의 상관계수 계산 함수
@@ -311,7 +310,11 @@ def calculate_correlation_score(stock_data, entered_stocks, loaded_stock_data):
     else:
         return 1
     
-def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data):
+def calculate_roc(data, period=9):
+    """주어진 기간 동안의 ROC (Rate of Change)를 계산"""
+    return (data['close'] - data['close'].shift(period)) / data['close'].shift(period)
+    
+def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data, roc_period=9):
     stock_scores = {}
 
     if stock_selection_method == 'normalized_atr':
@@ -326,44 +329,66 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
         # Normalized ATR에 따라 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
 
-    elif stock_selection_method == 'correlation':
-        # 상관관계 점수 기반 선정
+    # elif stock_selection_method == 'correlation':
+    #     # 상관관계 점수 기반 선정
+    #     for code in stock_codes:
+    #         one_year_ago = date - timedelta(days=365)
+    #         data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
+    #         if date in data.index:
+    #             correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
+    #             stock_scores[code] = correlation_score
+
+    #     # 상관관계 점수에 따라 정렬 (내림차순)
+    #     sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
+    elif stock_selection_method == 'roc':
+        # ROC 절대값이 큰 순서로 선정
         for code in stock_codes:
             one_year_ago = date - timedelta(days=365)
             data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
             if date in data.index:
-                correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
-                stock_scores[code] = correlation_score
+                roc = calculate_roc(data, period=roc_period)
+                stock_scores[code] = abs(roc[-1])  # ROC의 절대값
 
-        # 상관관계 점수에 따라 정렬 (내림차순)
+        # ROC 절대값이 큰 순서대로 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
+    
+    
+    
+    
 
     elif stock_selection_method == 'rank_based':
         # 순위 기반 스코어링 선정
         normalized_atr_scores = {}
         correlation_scores = {}
+        roc_scores = {}
 
         for code in stock_codes:
             one_year_ago = date - timedelta(days=365)
             data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
             if date in data.index:
                 normalized_atr = calculate_normalized_atr(data)
-                correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
+                # correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
+                roc = calculate_roc(data, period=roc_period)
 
                 # 스코어 저장
                 normalized_atr_scores[code] = normalized_atr[-1]
-                correlation_scores[code] = correlation_score
+                # correlation_scores[code] = correlation_score
+                roc_scores[code] = abs(roc[-1])
 
         # 순위 계산
         sorted_atr = sorted(normalized_atr_scores.items(), key=lambda x: x[1], reverse=True)
-        sorted_correlation = sorted(correlation_scores.items(), key=lambda x: x[1], reverse=True)
+    
+        sorted_roc = sorted(roc_scores.items(), key=lambda x: x[1], reverse=True)
+            # sorted_correlation = sorted(correlation_scores.items(), key=lambda x: x[1], reverse=True)
 
         # 종목에 대한 순위 점수 할당
         atr_rank = {code: rank for rank, (code, _) in enumerate(sorted_atr, start=1)}
-        correlation_rank = {code: rank for rank, (code, _) in enumerate(sorted_correlation, start=1)}
+        roc_rank = {code: rank for rank, (code, _) in enumerate(sorted_roc, start=1)}
+        # correlation_rank = {code: rank for rank, (code, _) in enumerate(sorted_correlation, start=1)}
 
         # 최종 순위 기반 스코어 계산
-        stock_scores = {code: atr_rank[code] + correlation_rank[code] for code in stock_codes}
+        stock_scores = {code: atr_rank[code] + roc_rank[code] for code in stock_codes}
+        # stock_scores = {code: atr_rank[code] + correlation_rank[code] for code in stock_codes}
 
         # 최종 스코어에 따라 종목 정렬
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get)
@@ -485,9 +510,9 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             # 기존에 포함된 종목 제외
             stock_codes = [code for code in stock_codes if code not in entered_stocks]
             # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
-            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random
+            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
             sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
-            print(sorted_stock_codes)
+            print(len(sorted_stock_codes))
             
             for code in sorted_stock_codes:
                 if len(entered_stocks) < max_stocks:
