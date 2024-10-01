@@ -12,7 +12,6 @@ import seaborn as sns
 import matplotlib.ticker as ticker
 import matplotlib.font_manager as fm
 
-
 # 백테스팅과 관련된 함수들 가져오기
 from backtest_strategy import (
     get_stock_codes, load_stock_data_from_mysql, calculate_additional_buy_drop_rate,
@@ -32,6 +31,7 @@ db_params = {
     'database': config['mysql']['database'],
 
 }
+
 
 initial_capital = 100000000  # 초기 자본 1억
 # 랜덤 시드 고정
@@ -53,29 +53,31 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
 
 if __name__ == "__main__":
     print("Starting backtesting...")
-    num_splits = 20
+    num_splits = 10
     buy_threshold = 32
-    investment_ratio = 0.35
+    investment_ratio = 0.9
     start_date = '2010-01-01'
-    end_date = '2024-07-31'
+    end_date = '2011-07-31'
     
-    per_threshold = 20
-    pbr_threshold = 1
-    div_threshold = 1
+    per_threshold = 5
+    pbr_threshold = 0.5
+    div_threshold = 3
     min_additional_buy_drop_rate = 0.005
     consider_delisting = False
-    max_stocks = 24
+    max_stocks = 5
     seed=103
-    date = datetime.strptime('2024-09-20', '%Y-%m-%d')
-    entered_stocks = []  # 현재 포트폴리오에 포함된 종목 리스트
-    loaded_stock_data = {}  # 이미 로드된 종목의 데이터 저장용 딕셔너리
-    # 종목 코드 가져오기
-    stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
-    # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random,roc)
-    stock_selection_method = 'normalized_atr'  # 원하는 방식 선택 백테스팅은 안쪽에서 다시 따로  해줘야햄
-    sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data)
+    
+    
+    # date = datetime.strptime('2024-09-27', '%Y-%m-%d')
+    # entered_stocks = []  # 현재 포트폴리오에 포함된 종목 리스트
+    # loaded_stock_data = {}  # 이미 로드된 종목의 데이터 저장용 딕셔너리
+    # # 종목 코드 가져오기
+    # stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
+    # # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random,roc)
+    # stock_selection_method = 'normalized_atr'  # 원하는 방식 선택 백테스팅은 안쪽에서 다시 따로  해줘야햄
+    # sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data)
 
-    print(date,"기준 선정된 종목 리스트:", sorted_stock_codes)
+    # print(date,"기준 선정된 종목 리스트:", sorted_stock_codes)
     
     
     
