@@ -18,6 +18,25 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.ticker as ticker
 import matplotlib.font_manager as fm
+from mysql.connector import pooling
+from functools import lru_cache
+
+
+# Read Settings File
+config = configparser.ConfigParser()
+config.read('config.ini')
+
+db_params = {
+    'host': config['mysql']['host'],
+    'user': config['mysql']['user'],
+    'password': config['mysql']['password'],
+    'database': config['mysql']['database'],
+}
+connection_pool = pooling.MySQLConnectionPool(pool_name="mypool",
+                                              pool_size=10,
+                                              **db_params)
+
+
 
 # Position class to store buy details
 class Position:
@@ -46,7 +65,7 @@ class Trade:
 
 # Function to dynamically import conditions-fulfilling stock codes from the database
 def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting):
-    conn = mysql.connector.connect(**db_params)
+    conn = connection_pool.get_connection()
     cursor = conn.cursor()
     date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
 
@@ -120,7 +139,7 @@ def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
     df['five_year_low'] = df['close'].rolling(window=252*5, min_periods=1).min()
     
     # Return data after the start date
-    return df[df.index >= pd.to_datetime(start_date)]
+    return df.loc[df.index >= pd.to_datetime(start_date)]
 
 
 def calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits):
@@ -235,7 +254,7 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
 
 # Function to get trading dates from the database
 def get_trading_dates_from_db(db_params, start_date, end_date):
-    conn = mysql.connector.connect(**db_params)
+    conn = connection_pool.get_connection()
     cursor = conn.cursor()
     query = f"SELECT DISTINCT date FROM stock_data WHERE date BETWEEN '{start_date}' AND '{end_date}' ORDER BY date"
     cursor.execute(query)
@@ -254,22 +273,20 @@ def calculate_mdd(portfolio_values):
     return mdd
 
 def calculate_atr(data, period=14):
-    # True Range (TR) calculate using previous day's data
-    data['high_low'] = data['high'].shift(1) - data['low'].shift(1)
-    data['high_close'] = np.abs(data['high'].shift(1) - data['close'].shift(1))
-    data['low_close'] = np.abs(data['low'].shift(1) - data['close'].shift(1))
-    tr = data[['high_low', 'high_close', 'low_close']].max(axis=1)
-    # ATR calcultate
-    atr = tr.rolling(period).mean()
-    return atr
+    high = data['high']
+    low = data['low']
+    close = data['close']
+    
+    tr = np.maximum(
+        high.shift(1) - low.shift(1),
+        np.abs(high.shift(1) - close),
+        np.abs(low.shift(1) - close)
+    )
+    return tr.rolling(period).mean()
 
 def calculate_normalized_atr(data, period=14):
-    # ATR calcultate
     atr = calculate_atr(data, period)
-    
-    # Normalized ATR calcultate (%)
-    data['Normalized ATR (%)'] = (atr / data['close'].shift(1)) * 100
-    return data['Normalized ATR (%)']
+    return (atr / data['close'].shift(1)) * 100
 
 # 기존 포트폴리오와 종목들 간의 상관계수 계산 함수
 def calculate_correlation_score(stock_data, entered_stocks, loaded_stock_data):
@@ -313,7 +330,27 @@ def calculate_correlation_score(stock_data, entered_stocks, loaded_stock_data):
 def calculate_roc(data, period=9):
     """주어진 기간 동안의 ROC (Rate of Change)를 계산"""
     return (data['close'] - data['close'].shift(period)) / data['close'].shift(period)
-    
+
+
+# Normalized ATR 캐시
+normalized_atr_cache = {}
+# 캐시된 값을 사용할 수 있는 일수 (예: 3일)
+cache_valid_days = 3
+ 
+def get_cached_normalized_atr(code, data, date):
+    # 캐시 확인
+    if code in normalized_atr_cache:
+        cached_atr, last_calculated_date = normalized_atr_cache[code]
+        
+        # 캐시된 값이 유효한 경우 (3일 이내)
+        if date - last_calculated_date <= timedelta(days=cache_valid_days):
+            return cached_atr
+
+    # 캐시된 값이 없거나 유효 기간이 지난 경우 새로 계산
+    normalized_atr = calculate_normalized_atr(data).iloc[-1]
+    normalized_atr_cache[code] = (normalized_atr, date)
+    return normalized_atr
+
 def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data, roc_period=9):
     stock_scores = {}
 
@@ -323,8 +360,8 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
             one_year_ago = date - timedelta(days=365)
             data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
             if date in data.index:
-                normalized_atr = calculate_normalized_atr(data)
-                stock_scores[code] = normalized_atr[-1]
+                normalized_atr = get_cached_normalized_atr(code, data, date)
+                stock_scores[code] = normalized_atr
 
         # Normalized ATR에 따라 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
@@ -400,6 +437,14 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
 
     return sorted_stock_codes
 
+def update_current_orders(positions, code, current_orders_dict):
+    if positions:
+        current_order = max(position.order for position in positions)
+        current_orders_dict[code] = current_order
+    else:
+        if code in current_orders_dict:
+            del current_orders_dict[code]
+
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
                           min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None,save_files=True):
@@ -423,7 +468,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
     previous_month = None
 
     all_trading_dates = get_trading_dates_from_db(db_params, start_date, end_date)
-
+    # 상장폐지 주식 데이터를 한 번에 가져와서 메모리에 저장
     conn = mysql.connector.connect(**db_params)
     cursor = conn.cursor()
     query = """
@@ -431,7 +476,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         SELECT ticker, MAX(date) AS delisted_date
         FROM stock_data
         GROUP BY ticker
-        HAVING MAX(date) < '2024-06-01'
+        HAVING MAX(date) < '2024-09-01'
     """
     cursor.execute(query)
     cursor.close()
@@ -469,26 +514,16 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             investment_per_split = total_portfolio_value * investment_ratio // num_splits
             previous_month = current_month
 
-        for code in entered_stocks:
+        for code in entered_stocks[:]:
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
                 positions = positions_dict.get(code, [])
+                #매도 처리
                 positions, capital = additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code,save_files)
                 positions_dict[code] = positions
-                if positions:
-                    current_order = max(position.order for position in positions)
-                    current_orders_dict[code] = current_order
-                    # print(f"date {date} Updated positions_dict and entered_stocks for code {code}. Current positions: {[p.buy_price for p in positions]}")
-                else:
-                    if code in current_orders_dict:
-                        del current_orders_dict[code]
-                        # print(f"Removed code {code} from entered_stocks")        
-                        
-# Process initial buy or sell actions for each stock code in entered_stocks
-        for code in entered_stocks:
-            if date in loaded_stock_data[code].index:
-                row = loaded_stock_data[code].loc[date]
-                positions = positions_dict.get(code, [])
+    
+                update_current_orders(positions, code, current_orders_dict)
+                # 초기 매수/매도처리 
                 positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
                 positions_dict[code] = positions
                 if liquidated_code:
@@ -496,15 +531,12 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                     if liquidated_code in current_orders_dict:
                         del current_orders_dict[liquidated_code]
                 else:
-                    if positions:
-                        current_order = max(position.order for position in positions)
-                        current_orders_dict[code] = current_order
-                     
-
-                    else:
-                        if code in current_orders_dict:
-                            del current_orders_dict[code]
-# Enter new stocks if there is room in the portfolio and sufficient capital
+                    update_current_orders(positions, code, current_orders_dict)
+                    
+                    
+                    
+                        
+        # Enter new stocks if there is room in the portfolio and sufficient capital
         if len(entered_stocks) < max_stocks and capital > investment_per_split:
             stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
             # 기존에 포함된 종목 제외
@@ -515,49 +547,64 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             print(len(sorted_stock_codes))
             
             for code in sorted_stock_codes:
+                # 새종목들이 들어갈 공간이 있으면 
                 if len(entered_stocks) < max_stocks:
                     loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
+                    #해당 날짜에 값이 있으면 
                     if date in loaded_stock_data[code].index:
                         sample_row = loaded_stock_data[code].loc[date]
                         five_year_low = sample_row['five_year_low']
                         last_buy_price = sample_row['close']
                         additional_buy_drop_rate = calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits)
+                        #최소 수익률 갭이 보장이 되면 
                         if additional_buy_drop_rate >= min_additional_buy_drop_rate:
                             row = loaded_stock_data[code].loc[date]
+                            normalized_atr = get_cached_normalized_atr(code, loaded_stock_data[code], date)
                             positions = []
+                            # 첫구매 실행 
                             positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
                             positions_dict[code] = positions
                             if positions:
                                 if code not in entered_stocks: 
-                                    entered_stocks.insert(0, code)
+                                    entered_stocks.append(code)
                                 current_order = max(position.order for position in positions)
                                 current_orders_dict[code] = current_order
                             else:
                                 if code in loaded_stock_data:
                                     del loaded_stock_data[code]
+        # 모든 종목이 추가된 이후에 normalized_atr를 기준으로 정렬 (큰 값이 우선)
+        normalized_atr_scores = {code: get_cached_normalized_atr(code, loaded_stock_data[code], date)  for code in entered_stocks}
 
-        for code in entered_stocks:
+        # normalized_atr 값에 따라 entered_stocks 리스트를 다시 정렬 (큰 값이 우선)
+        entered_stocks = sorted(entered_stocks, key=lambda code: normalized_atr_scores[code], reverse=True)
+        # 진입한 종목들에 대해 
+        for code in entered_stocks[:]:
+            # 있는 날짜에 대해 
             if date in loaded_stock_data[code].index:
                 row = loaded_stock_data[code].loc[date]
-                positions = positions_dict.get(code, [])
-                positions, capital = additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code,save_files)
+                original_positions = positions_dict.get(code, [])
+                # 추가 구매를해.
+                positions, capital = additional_buy(row, original_positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code,save_files)
                 positions_dict[code] = positions
-                if positions:
-                    if code not in entered_stocks: 
-                        entered_stocks.insert(0, code)
-                    current_order = max(position.order for position in positions)
-                    current_orders_dict[code] = current_order
-                else:
+                # 포지션이 없으면(신규구매가 진행이 안된경우)
+                if not positions:
+                    if not original_positions:
+                        print(f"Failed to open new position for {code}")
+                    else:
+                        print(f"All positions closed for {code}")
+                    
                     if capital < investment_per_split:
                         entered_stocks.remove(code)
                         print(f"Removed code {code} from entered_stocks due to insufficient capital.")
+                    else:
+                        print(f"Keeping {code} in entered_stocks for future opportunities")
 
-        current_stock_value = np.sum([
-            position.quantity * loaded_stock_data[code].loc[date]['close']
-            for code, positions in positions_dict.items()
-            for position in positions
-            if date in loaded_stock_data[code].index
-        ])
+        current_stock_value = sum(
+                sum(position.quantity * loaded_stock_data[code].loc[date, 'close']
+                    for position in positions)
+                for code, positions in positions_dict.items()
+                if code in loaded_stock_data and date in loaded_stock_data[code].index
+        )
 
 
         total_portfolio_value = np.sum([capital, current_stock_value])
