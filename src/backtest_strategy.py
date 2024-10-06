@@ -127,7 +127,7 @@ def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
     rows = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     df = pd.DataFrame(rows, columns=columns)
-    
+   
     # Convert date format and set index
     df['date'] = pd.to_datetime(df['date'])
     df.set_index('date', inplace=True)
@@ -272,7 +272,7 @@ def calculate_mdd(portfolio_values):
     mdd = np.max(drawdown)
     return mdd
 
-def calculate_atr(data, period=14):
+def calculate_atr(data, period=3):
     high = data['high']
     low = data['low']
     close = data['close']
@@ -284,7 +284,7 @@ def calculate_atr(data, period=14):
     )
     return tr.rolling(period).mean()
 
-def calculate_normalized_atr(data, period=14):
+def calculate_normalized_atr(data, period=3):
     atr = calculate_atr(data, period)
     return (atr / data['close'].shift(1)) * 100
 
@@ -338,6 +338,15 @@ normalized_atr_cache = {}
 cache_valid_days = 3
  
 def get_cached_normalized_atr(code, data, date):
+    # 캐시에서 유효하지 않은 값을 제거하는 함수
+    def clean_cache():
+        codes_to_delete = []
+        for cached_code, (cached_atr, last_calculated_date) in normalized_atr_cache.items():
+            if date - last_calculated_date > timedelta(days=cache_valid_days):
+                codes_to_delete.append(cached_code)
+        for cached_code in codes_to_delete:
+            del normalized_atr_cache[cached_code]
+    clean_cache()            
     # 캐시 확인
     if code in normalized_atr_cache:
         cached_atr, last_calculated_date = normalized_atr_cache[code]
@@ -447,7 +456,7 @@ def update_current_orders(positions, code, current_orders_dict):
 
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
                           end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
-                          min_additional_buy_drop_rate, consider_delisting, max_stocks=20,results_folder=None,save_files=True):
+                         consider_delisting, max_stocks=20,results_folder=None,save_files=True):
     random.seed(seed)
     np.random.seed(seed)
     total_portfolio_value = initial_capital
@@ -552,26 +561,20 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                     loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
                     #해당 날짜에 값이 있으면 
                     if date in loaded_stock_data[code].index:
-                        sample_row = loaded_stock_data[code].loc[date]
-                        five_year_low = sample_row['five_year_low']
-                        last_buy_price = sample_row['close']
-                        additional_buy_drop_rate = calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits)
-                        #최소 수익률 갭이 보장이 되면 
-                        if additional_buy_drop_rate >= min_additional_buy_drop_rate:
-                            row = loaded_stock_data[code].loc[date]
-                            normalized_atr = get_cached_normalized_atr(code, loaded_stock_data[code], date)
-                            positions = []
-                            # 첫구매 실행 
-                            positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
-                            positions_dict[code] = positions
-                            if positions:
-                                if code not in entered_stocks: 
-                                    entered_stocks.append(code)
-                                current_order = max(position.order for position in positions)
-                                current_orders_dict[code] = current_order
-                            else:
-                                if code in loaded_stock_data:
-                                    del loaded_stock_data[code]
+                        row = loaded_stock_data[code].loc[date]
+                        normalized_atr = get_cached_normalized_atr(code, loaded_stock_data[code], date)
+                        positions = []
+                        # 첫구매 실행 
+                        positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
+                        positions_dict[code] = positions
+                        if positions:
+                            if code not in entered_stocks: 
+                                entered_stocks.append(code)
+                            current_order = max(position.order for position in positions)
+                            current_orders_dict[code] = current_order
+                        else:
+                            if code in loaded_stock_data:
+                                del loaded_stock_data[code]
         # 모든 종목이 추가된 이후에 normalized_atr를 기준으로 정렬 (큰 값이 우선)
         normalized_atr_scores = {code: get_cached_normalized_atr(code, loaded_stock_data[code], date)  for code in entered_stocks}
 
