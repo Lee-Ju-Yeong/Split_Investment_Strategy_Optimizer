@@ -130,7 +130,7 @@ def run_backtesting_for_period(seed,initial_capital,num_splits, buy_threshold, i
         print(f'Error in backtesting for period {start_year}-{end_year}: {e}')
     mdd = calculate_mdd(portfolio_values_over_time)
     if save_files:
-        plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd, results_folder, save_files=save_files)
+        plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, save_files=save_files)
     return total_portfolio_value, cagr, mdd
 
 
