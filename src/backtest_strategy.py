@@ -272,7 +272,7 @@ def calculate_mdd(portfolio_values):
     mdd = np.max(drawdown)
     return mdd
 
-def calculate_atr(data, period=3):
+def calculate_atr(data, period=14):
     high = data['high']
     low = data['low']
     close = data['close']
@@ -284,7 +284,7 @@ def calculate_atr(data, period=3):
     )
     return tr.rolling(period).mean()
 
-def calculate_normalized_atr(data, period=3):
+def calculate_normalized_atr(data, period=14):
     atr = calculate_atr(data, period)
     return (atr / data['close'].shift(1)) * 100
 
