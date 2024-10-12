@@ -149,22 +149,96 @@ def calculate_sell_profit_rate(buy_profit_rate):
     sell_profit_rate = (1 / (1 - buy_profit_rate)) - 1
     return sell_profit_rate 
     
+# Function to handle first entry buy
+def handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files):
+    normalized = row['normalized_value']
+    five_year_low = row['five_year_low']
+    buy_commission_rate = 0.00015
+    
+    # 첫 매수 조건 처리
+    if normalized < buy_threshold and len(positions) == 0:
+        quantity = int(investment_per_split / row['close'])
+        
+        # quantity가 0이거나 자본이 부족하면 매수를 실행하지 않음
+        if quantity == 0 or capital < row['close'] * quantity:
+            print(f"Insufficient capital or high stock price for {code} at price {row['close']}")
+            return positions, capital, None  # 매수 시도 실패 처리
+        
+        # 매수 조건 충족 시 추가 매수 비율 및 매도 목표 수익률 계산
+        additional_buy_drop_rate = calculate_additional_buy_drop_rate(row['close'], five_year_low, num_splits)
+        sell_profit_rate = calculate_sell_profit_rate(additional_buy_drop_rate)
+        
+        # 포지션 추가 및 자본 감소
+        total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
+        new_position = Position(row['close'], quantity, 1, additional_buy_drop_rate, sell_profit_rate)
+        positions.append(new_position)
+        capital -= total_cost
+        
+        # 매수 신호 기록
+        buy_signals.append((row.name, row['close']))
+        
+        # 거래 기록 저장
+        if save_files:
+            trade = Trade(row.name, code, 1, quantity, row['close'], None, 'buy', None, None, normalized, capital, total_portfolio_value)
+            trading_history.append(trade)
+
+    return positions, capital, None
+# Function to handle first entry sell
+def handle_first_entry_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value, code, save_files):
+    sell_commission_rate = 0.00015
+    sell_tax_rate = 0.0018
+    buy_commission_rate = 0.00015
+    liquidated = False
+    
+    # 매도 처리: 첫 번째 매수 포지션만 처리
+    positions_to_remove = []
+    
+    for position in positions:
+        if row['close'] > position.buy_price * (1 + position.sell_profit_rate) and position.order == 1:
+            total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
+            capital += total_revenue
+            positions_to_remove.append(position)
+            sell_signals.append((row.name, row['close']))
+            
+            # 매도 이익 및 수익률 계산
+            profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
+            profit_rate = profit / (position.buy_price * position.quantity)
+            
+            # 거래 기록 저장
+            if save_files:
+                trade = Trade(row.name, code, 1, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, row['normalized_value'], capital, total_portfolio_value)
+                trading_history.append(trade)
+            
+            liquidated = True
+
+    # 매도된 포지션 제거
+    for position in positions_to_remove:
+        positions.remove(position)
+    
+    # 포지션이 모두 청산되었다면 해당 종목 제거
+    if liquidated and not positions:
+        return positions, capital, code
+    else:
+        return positions, capital, None
 
 # Function to handle initial buy and sell
 def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files):
     normalized = row['normalized_value']
     five_year_low = row['five_year_low']
-    current_order = len(positions) + 1
     buy_commission_rate = 0.00015
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
-    additional_buy_drop_rate = 0
-    sell_profit_rate = 0
 
-    if normalized < buy_threshold and len(positions) == 0 and capital >= investment_per_split:
+    if normalized < buy_threshold and len(positions) == 0 :
+        quantity = int(investment_per_split / row['close'])
+         # quantity가 0이거나 자본이 부족하면 매수를 실행하지 않음
+        if quantity == 0 or capital < row['close'] * quantity:
+            print(f"Insufficient capital or high stock price for {code} at price {row['close']}")
+            return positions, capital, None  # 매수 시도 실패 처리
+        
         additional_buy_drop_rate = calculate_additional_buy_drop_rate(row['close'], five_year_low, num_splits)
         sell_profit_rate = calculate_sell_profit_rate(additional_buy_drop_rate)
-        quantity = int(investment_per_split / row['close'])
+        
         total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
         new_position = Position(row['close'], quantity, 1, additional_buy_drop_rate,sell_profit_rate)
         positions.append(new_position)
@@ -176,8 +250,6 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
 
     liquidated = False
     
-     # Sell from highest order
-    positions = sorted(positions, key=lambda x: x.order, reverse=True)
     positions_to_remove = []
 
     for position in positions:
@@ -187,6 +259,7 @@ def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshol
             positions_to_remove.append(position)
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
+            # print("position.buy_price:",position.buy_price,"position.quantity:",position.quantity)
             profit_rate = profit / (position.buy_price * position.quantity)
             if save_files:
                 trade = Trade(row.name, code, 1, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, normalized, capital, total_portfolio_value)
@@ -210,6 +283,10 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
         if row['close'] <= last_position.buy_price * (1 - last_position.additional_buy_drop_rate):
             # print(f"Additional buy condition met for code {code}")
             quantity = int(investment_per_split / row['close'])
+            # 매수 수량이 0이면 매수하지 않고 건너뜀
+            if quantity == 0:
+                print(f"Skipping additional buy for {code} due to insufficient capital or high stock price")
+                return positions, capital
             total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
             new_position = Position(row['close'], quantity, len(positions) + 1, last_position.additional_buy_drop_rate, last_position.sell_profit_rate)
             positions.append(new_position)
@@ -242,6 +319,7 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
             positions_to_remove.append(position)
             sell_signals.append((row.name, row['close']))
             profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
+            # print("position.buy_price:",position.buy_price,"position.quantity:",position.quantity)
             profit_rate = profit / (position.buy_price * position.quantity)
             if save_files:
                 trade = Trade(row.name, code, position.order, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, row['normalized_value'], capital, total_portfolio_value)
@@ -466,8 +544,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
     sell_signals = []
     portfolio_values_over_time = []
     capital_over_time = []
-    portfolio_values_over_time = np.array(portfolio_values_over_time)
-    capital_over_time = np.array(capital_over_time)
+    
     
     entered_stocks = []
     current_orders_dict = {}
@@ -520,7 +597,9 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
 
         current_month = date.month
         if current_month != previous_month:
-            investment_per_split = total_portfolio_value * investment_ratio // num_splits
+            # 투자 비율만큼의 자본을 할당하고, 이를 매수 차수와 종목 수로 나눔
+            available_investment = total_portfolio_value * investment_ratio
+            investment_per_split = available_investment // (num_splits * max_stocks)
             previous_month = current_month
 
         for code in entered_stocks[:]:
@@ -533,7 +612,11 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
     
                 update_current_orders(positions, code, current_orders_dict)
                 # 초기 매수/매도처리 
-                positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
+                # positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
+                # 첫 매도 처리
+                positions, capital, liquidated_code = handle_first_entry_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value, code, save_files)
+                positions_dict[code] = positions
+                
                 positions_dict[code] = positions
                 if liquidated_code:
                     entered_stocks.remove(liquidated_code)
@@ -551,13 +634,13 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             # 기존에 포함된 종목 제외
             stock_codes = [code for code in stock_codes if code not in entered_stocks]
             # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
-            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
+            stock_selection_method = 'random'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
             sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
             print(len(sorted_stock_codes))
             
             for code in sorted_stock_codes:
                 # 새종목들이 들어갈 공간이 있으면 
-                if len(entered_stocks) < max_stocks:
+                if len(entered_stocks) < max_stocks and capital > investment_per_split:
                     loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
                     #해당 날짜에 값이 있으면 
                     if date in loaded_stock_data[code].index:
@@ -565,7 +648,9 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                         normalized_atr = get_cached_normalized_atr(code, loaded_stock_data[code], date)
                         positions = []
                         # 첫구매 실행 
-                        positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
+                        # positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
+                        # positions_dict[code] = positions
+                        positions, capital, liquidated_code = handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files)
                         positions_dict[code] = positions
                         if positions:
                             if code not in entered_stocks: 
@@ -617,9 +702,12 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             total_portfolio_value = portfolio_values_over_time[-1] if len(portfolio_values_over_time) > 0 else initial_capital
             
    
-        portfolio_values_over_time = np.append(portfolio_values_over_time, total_portfolio_value)
-        capital_over_time = np.append(capital_over_time, capital)
-
+        # 반복적으로 값을 추가한 후
+        portfolio_values_over_time.append(total_portfolio_value)
+        capital_over_time.append(capital)
+        
+    portfolio_values_over_time = np.array(portfolio_values_over_time)
+    capital_over_time = np.array(capital_over_time)
     total_days = (all_trading_dates[-1] - all_trading_dates[0]).days
     total_years = total_days / 365.25
     final_portfolio_value = portfolio_values_over_time[-1]
@@ -647,7 +735,7 @@ def format_currency(value):
     return f'{value:,.0f}₩'
 
 # 백테스팅 결과 시각화 함수
-def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder, save_files=True):
+def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, save_files=True):
     # 한글 폰트 설정
     plt.rcParams['font.family'] = 'Malgun Gothic'
     
@@ -693,7 +781,7 @@ def plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capi
             os.makedirs(results_folder)
 
     current_time_str = datetime.now().strftime('%Y%m%d_%H%M')
-    file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
+    file_name = f'trading_history_{num_splits}_{investment_ratio}_{max_stocks}_{buy_threshold}_{per_threshold}_{pbr_threshold}_{div_threshold}_{current_time_str}.png'
     file_path = os.path.join(results_folder, file_name)
     plt.savefig(file_path)
     # print(f'Plot saved to {file_path}')
