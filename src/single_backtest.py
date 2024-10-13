@@ -15,7 +15,7 @@ import matplotlib.font_manager as fm
 # 백테스팅과 관련된 함수들 가져오기
 from backtest_strategy import (
     get_stock_codes, load_stock_data_from_mysql, calculate_additional_buy_drop_rate,
-    calculate_sell_profit_rate, initial_buy_sell, additional_buy, additional_sell,
+    calculate_sell_profit_rate, additional_buy, additional_sell,
     get_trading_dates_from_db, portfolio_backtesting, calculate_mdd, plot_backtesting_results, get_stock_codes, select_stocks
 )
 
@@ -38,14 +38,14 @@ initial_capital = 100000000  # 초기 자본 1억
 seed=101
 results_folder="results_of_single_test"
 
-def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, consider_delisting, max_stocks,save_files=True):
+def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, normalized_atr_threshold, consider_delisting, max_stocks,save_files=True):
     random.seed(seed)
     np.random.seed(seed)
     positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
         initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, consider_delisting, max_stocks,results_folder,save_files
     )
     mdd = calculate_mdd(portfolio_values_over_time)
-    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, save_files)
+    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, normalized_atr_threshold, save_files)
     return  positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr ,mdd
 
 
@@ -59,14 +59,14 @@ if __name__ == "__main__":
     start_date = '2010-01-01'
     end_date = '2024-08-31'
     
-    per_threshold = 10
-    pbr_threshold = 1
-    div_threshold = 0.1
+    per_threshold = 20
+    pbr_threshold = 1.5
+    div_threshold = 1
     # min_additional_buy_drop_rate = 0.005
     consider_delisting = False
-    max_stocks = 50
-    seed=103
-    
+    max_stocks = 24
+    normalized_atr_threshold = 0.5
+    seed=107 
     
     # date = datetime.strptime('2024-09-27', '%Y-%m-%d')
     # entered_stocks = []  # 현재 포트폴리오에 포함된 종목 리스트
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     
     
 
-    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, consider_delisting, max_stocks)
+    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_date, end_date, per_threshold, pbr_threshold, div_threshold, normalized_atr_threshold, consider_delisting, max_stocks)
     print(f"최종 포트폴리오 가치: {total_portfolio_value}")
     print(f"CAGR: {cagr}")
     print(f"MDD: {mdd:.2%}")
