@@ -1,5 +1,5 @@
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # 그래프를 파일로 저장하기 위해 'Agg' 백엔드를 사용
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,52 +22,55 @@ from mysql.connector import pooling
 from functools import lru_cache
 
 
-# Read Settings File
+# 설정 파일 읽기
 config = configparser.ConfigParser()
 config.read('config.ini')
 
+# 데이터베이스 연결 정보 설정
 db_params = {
     'host': config['mysql']['host'],
     'user': config['mysql']['user'],
     'password': config['mysql']['password'],
     'database': config['mysql']['database'],
 }
+
+# MySQL 연결 풀 설정
 connection_pool = pooling.MySQLConnectionPool(pool_name="mypool",
                                               pool_size=10,
                                               **db_params)
 
 
 
-# Position class to store buy details
+# 매수 정보를 저장하는 Position 클래스
 class Position:
     def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
-        self.buy_price = buy_price
-        self.quantity = quantity
-        self.order = order
-        self.additional_buy_drop_rate = additional_buy_drop_rate
-        self.sell_profit_rate = sell_profit_rate
+        self.buy_price = buy_price  # 매수 가격
+        self.quantity = quantity  # 매수 수량
+        self.order = order  # 매수 순서
+        self.additional_buy_drop_rate = additional_buy_drop_rate  # 추가 매수 하락률
+        self.sell_profit_rate = sell_profit_rate  # 매도 목표 수익률
 
-# Trade class to store trade details
+# 거래 정보를 저장하는 Trade 클래스
 class Trade:
     def __init__(self, date, code, order, quantity, buy_price, sell_price, trade_type, profit, profit_rate, normalized_value, capital, total_portfolio_value):
-        self.date = date
-        self.code = code
-        self.order = order
-        self.quantity = quantity
-        self.buy_price = buy_price
-        self.sell_price = sell_price
-        self.trade_type = trade_type
-        self.profit = profit
-        self.profit_rate = profit_rate
-        self.normalized_value = normalized_value
-        self.capital = capital
-        self.total_portfolio_value = total_portfolio_value
+        self.date = date  # 거래 날짜
+        self.code = code  # 종목 코드
+        self.order = order  # 거래 순서
+        self.quantity = quantity  # 거래 수량
+        self.buy_price = buy_price  # 매수 가격
+        self.sell_price = sell_price  # 매도 가격
+        self.trade_type = trade_type  # 거래 유형 (매수/매도)
+        self.profit = profit  # 이익
+        self.profit_rate = profit_rate  # 수익률
+        self.normalized_value = normalized_value  # 정규화된 값
+        self.capital = capital  # 자본
+        self.total_portfolio_value = total_portfolio_value  # 총 포트폴리오 가치
 
-# Function to dynamically import conditions-fulfilling stock codes from the database
-def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting):
-    conn = connection_pool.get_connection()
+# 조건을 충족하는 종목 코드를 데이터베이스에서 동적으로 가져오는 함수
+def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, normalized_atr_threshold, db_params, consider_delisting):
+    conn = connection_pool.get_connection()  # 연결 풀에서 연결 가져오기
     cursor = conn.cursor()
-    date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
+    date_str = pd.to_datetime(date).strftime('%Y-%m-%d')  # 날짜 형식 변환
 
     if consider_delisting:
         query = f"""
@@ -80,6 +83,7 @@ def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_thres
         AND PBR <= {pbr_threshold} 
         AND dividend >= {div_threshold}
         AND normalized_value <= {buy_threshold}
+        AND normalized_atr <= {normalized_atr_threshold}
         """
     else:
         query = f"""
@@ -97,20 +101,20 @@ def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_thres
         AND sd.PBR <= {pbr_threshold} 
         AND sd.dividend >= {div_threshold}
         AND sd.normalized_value <= {buy_threshold}
+        AND sd.normalized_atr <= {normalized_atr_threshold}
         AND ld.last_date >= '2024-06-01'
         """
     
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    df = pd.DataFrame(rows, columns=['ticker'])
+    cursor.execute(query)  # 쿼리 실행
+    rows = cursor.fetchall()  # 결과 가져오기
+    df = pd.DataFrame(rows, columns=['ticker'])  # 데이터프레임으로 변환
     cursor.close()
     conn.close()
-    return df['ticker'].tolist()
+    return df['ticker'].tolist()  # 종목 코드 리스트 반환
 
-
-
+# MySQL에서 주식 데이터를 로드하는 함수
 def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
-    conn = mysql.connector.connect(**db_params)
+    conn = mysql.connector.connect(**db_params)  # 데이터베이스 연결
     cursor = conn.cursor()
 
     # start_date 이전 5년의 데이터를 함께 가져오기 위해 5년 전 날짜 계산
@@ -122,34 +126,35 @@ def load_stock_data_from_mysql(ticker, start_date, end_date, db_params):
         SELECT * FROM stock_data 
         WHERE ticker = '{ticker}' AND date BETWEEN '{extended_start_date_str}' AND '{end_date_str}'
     """
-    cursor.execute(query)
+    cursor.execute(query)  # 쿼리 실행
     
-    rows = cursor.fetchall()
-    columns = [desc[0] for desc in cursor.description]
-    df = pd.DataFrame(rows, columns=columns)
+    rows = cursor.fetchall()  # 결과 가져오기
+    columns = [desc[0] for desc in cursor.description]  # 컬럼 이름 가져오기
+    df = pd.DataFrame(rows, columns=columns)  # 데이터프레임으로 변환
    
-    # Convert date format and set index
+    # 날짜 형식 변환 및 인덱스 설정
     df['date'] = pd.to_datetime(df['date'])
     df.set_index('date', inplace=True)
     
     cursor.close()
     conn.close()
 
-    # Calculate the lowest value in 5 years
+    # 5년 동안의 최저값 계산
     df['five_year_low'] = df['close'].rolling(window=252*5, min_periods=1).min()
     
-    # Return data after the start date
+    # 시작 날짜 이후의 데이터 반환
     return df.loc[df.index >= pd.to_datetime(start_date)]
 
-
+# 추가 매수 하락률 계산 함수
 def calculate_additional_buy_drop_rate(last_buy_price, five_year_low, num_splits):
     return 1 - np.power((five_year_low / last_buy_price), (1 / (num_splits - 1)))
 
+# 매도 목표 수익률 계산 함수
 def calculate_sell_profit_rate(buy_profit_rate):
     sell_profit_rate = (1 / (1 - buy_profit_rate)) - 1
     return sell_profit_rate 
     
-# Function to handle first entry buy
+# 첫 매수를 처리하는 함수
 def handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files):
     normalized = row['normalized_value']
     five_year_low = row['five_year_low']
@@ -183,7 +188,8 @@ def handle_first_entry_buy(row, positions, capital, investment_per_split, buy_th
             trading_history.append(trade)
 
     return positions, capital, None
-# Function to handle first entry sell
+
+# 첫 매도를 처리하는 함수
 def handle_first_entry_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value, code, save_files):
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
@@ -220,60 +226,8 @@ def handle_first_entry_sell(row, positions, capital, sell_signals, trading_histo
         return positions, capital, code
     else:
         return positions, capital, None
-
-# Function to handle initial buy and sell
-def initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files):
-    normalized = row['normalized_value']
-    five_year_low = row['five_year_low']
-    buy_commission_rate = 0.00015
-    sell_commission_rate = 0.00015
-    sell_tax_rate = 0.0018
-
-    if normalized < buy_threshold and len(positions) == 0 :
-        quantity = int(investment_per_split / row['close'])
-         # quantity가 0이거나 자본이 부족하면 매수를 실행하지 않음
-        if quantity == 0 or capital < row['close'] * quantity:
-            print(f"Insufficient capital or high stock price for {code} at price {row['close']}")
-            return positions, capital, None  # 매수 시도 실패 처리
-        
-        additional_buy_drop_rate = calculate_additional_buy_drop_rate(row['close'], five_year_low, num_splits)
-        sell_profit_rate = calculate_sell_profit_rate(additional_buy_drop_rate)
-        
-        total_cost = int(row['close'] * quantity * (1 + buy_commission_rate))
-        new_position = Position(row['close'], quantity, 1, additional_buy_drop_rate,sell_profit_rate)
-        positions.append(new_position)
-        capital -= total_cost
-        buy_signals.append((row.name, row['close']))
-        if save_files:
-            trade = Trade(row.name, code, 1, quantity, row['close'], None, 'buy', None, None, normalized, capital, total_portfolio_value)
-            trading_history.append(trade)
-
-    liquidated = False
     
-    positions_to_remove = []
-
-    for position in positions:
-        if row['close'] > position.buy_price * (1 + position.sell_profit_rate) and position.order == 1:
-            total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
-            capital += total_revenue
-            positions_to_remove.append(position)
-            sell_signals.append((row.name, row['close']))
-            profit = total_revenue - int(position.buy_price * position.quantity * (1 + buy_commission_rate))
-            # print("position.buy_price:",position.buy_price,"position.quantity:",position.quantity)
-            profit_rate = profit / (position.buy_price * position.quantity)
-            if save_files:
-                trade = Trade(row.name, code, 1, position.quantity, position.buy_price, row['close'], 'sell', profit, profit_rate, normalized, capital, total_portfolio_value)
-                trading_history.append(trade)
-            liquidated = True
-
-    for position in positions_to_remove:
-        positions.remove(position)
-    if liquidated and not positions:
-        return positions, capital, code
-    else:
-        return positions, capital, None
-    
-# Function to handle additional buy
+# 추가 매수를 처리하는 함수
 def additional_buy(row, positions, capital, investment_per_split, num_splits, buy_signals, trading_history, total_portfolio_value,code,save_files):
     buy_commission_rate = 0.00015
     if positions and len(positions) < num_splits and capital >= investment_per_split:
@@ -301,17 +255,17 @@ def additional_buy(row, positions, capital, investment_per_split, num_splits, bu
 
     return positions, capital
 
-# Function to handle additional sell
+# 추가 매도를 처리하는 함수
 def additional_sell(row, positions, capital, sell_signals, trading_history, total_portfolio_value,code,save_files):
     sell_commission_rate = 0.00015
     sell_tax_rate = 0.0018
     buy_commission_rate = 0.00015
     
-    # Sort positions by order in descending order to sell the most recent buys first
+    # 포지션을 내림차순으로 정렬하여 최근 매수부터 매도
     positions = sorted(positions, key=lambda x: x.order, reverse=True)
     positions_to_remove = []
     
-    # Loop through positions to check if they meet the selling conditions
+    # 포지션을 순회하며 매도 조건을 확인
     for position in positions:
         if row['close'] >= position.buy_price * (1 + position.sell_profit_rate) and position.order > 1:
             total_revenue = int(row['close'] * position.quantity * (1 - sell_commission_rate - sell_tax_rate))
@@ -330,26 +284,28 @@ def additional_sell(row, positions, capital, sell_signals, trading_history, tota
     return positions, capital
 
 
-# Function to get trading dates from the database
+# 데이터베이스에서 거래 날짜를 가져오는 함수
 def get_trading_dates_from_db(db_params, start_date, end_date):
-    conn = connection_pool.get_connection()
+    conn = connection_pool.get_connection()  # 연결 풀에서 연결 가져오기
     cursor = conn.cursor()
     query = f"SELECT DISTINCT date FROM stock_data WHERE date BETWEEN '{start_date}' AND '{end_date}' ORDER BY date"
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    df = pd.DataFrame(rows, columns=['date'])
+    cursor.execute(query)  # 쿼리 실행
+    rows = cursor.fetchall()  # 결과 가져오기
+    df = pd.DataFrame(rows, columns=['date'])  # 데이터프레임으로 변환
     
     cursor.close()
     conn.close()
-    trading_dates = df['date'].tolist()
+    trading_dates = df['date'].tolist()  # 거래 날짜 리스트 반환
     return trading_dates
 
+# 최대 낙폭(MDD)을 계산하는 함수
 def calculate_mdd(portfolio_values):
-    peak = np.maximum.accumulate(portfolio_values)
-    drawdown = (peak - portfolio_values) / peak
-    mdd = np.max(drawdown)
+    peak = np.maximum.accumulate(portfolio_values)  # 누적 최대값 계산
+    drawdown = (peak - portfolio_values) / peak  # 낙폭 계산
+    mdd = np.max(drawdown)  # 최대 낙폭 계산
     return mdd
 
+# ATR(Average True Range)을 계산하는 함수
 def calculate_atr(data, period=14):
     high = data['high']
     low = data['low']
@@ -362,6 +318,7 @@ def calculate_atr(data, period=14):
     )
     return tr.rolling(period).mean()
 
+# 정규화된 ATR을 계산하는 함수
 def calculate_normalized_atr(data, period=14):
     atr = calculate_atr(data, period)
     return (atr / data['close'].shift(1)) * 100
@@ -405,6 +362,7 @@ def calculate_correlation_score(stock_data, entered_stocks, loaded_stock_data):
     else:
         return 1
     
+# ROC(Rate of Change)를 계산하는 함수
 def calculate_roc(data, period=9):
     """주어진 기간 동안의 ROC (Rate of Change)를 계산"""
     return (data['close'] - data['close'].shift(period)) / data['close'].shift(period)
@@ -415,7 +373,8 @@ normalized_atr_cache = {}
 # 캐시된 값을 사용할 수 있는 일수 (예: 3일)
 cache_valid_days = 3
  
-def get_cached_normalized_atr(code, data, date):
+# 캐시된 Normalized ATR 값을 가져오는 함수
+def get_cached_normalized_atr(code, date, db_params):
     # 캐시에서 유효하지 않은 값을 제거하는 함수
     def clean_cache():
         codes_to_delete = []
@@ -433,22 +392,54 @@ def get_cached_normalized_atr(code, data, date):
         if date - last_calculated_date <= timedelta(days=cache_valid_days):
             return cached_atr
 
-    # 캐시된 값이 없거나 유효 기간이 지난 경우 새로 계산
-    normalized_atr = calculate_normalized_atr(data).iloc[-1]
-    normalized_atr_cache[code] = (normalized_atr, date)
-    return normalized_atr
+    # 캐시된 값이 없거나 유효 기간이 지난 경우 데이터베이스에서 가져오기
+    conn = connection_pool.get_connection()
+    cursor = conn.cursor()
+    date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
+    query = """
+        SELECT normalized_atr 
+        FROM stock_data 
+        WHERE ticker = %s AND date = %s
+    """
+    cursor.execute(query, (code, date_str))
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
 
+    if result:
+        normalized_atr = result[0]
+        normalized_atr_cache[code] = (normalized_atr, date)
+        return normalized_atr
+    else:
+        return None  # 데이터가 없는 경우 처리
+
+# 종목을 선택하는 함수
 def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data, roc_period=9):
     stock_scores = {}
 
     if stock_selection_method == 'normalized_atr':
         # Normalized ATR 기반 선정
-        for code in stock_codes:
-            one_year_ago = date - timedelta(days=365)
-            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
-            if date in data.index:
-                normalized_atr = get_cached_normalized_atr(code, data, date)
-                stock_scores[code] = normalized_atr
+        conn = connection_pool.get_connection()  # 연결 풀에서 연결 가져오기
+        cursor = conn.cursor()
+        date_str = pd.to_datetime(date).strftime('%Y-%m-%d')  # 날짜 형식 변환
+        
+        # 주어진 날짜와 종목 코드에 해당하는 normalized_atr 값을 데이터베이스에서 가져오는 쿼리
+        query = f"""
+        SELECT ticker, normalized_atr 
+        FROM stock_data 
+        WHERE date = '{date_str}' 
+        AND ticker IN ({','.join(['%s'] * len(stock_codes))})
+        """
+        
+        cursor.execute(query, stock_codes)  # 쿼리 실행
+        rows = cursor.fetchall()  # 결과 가져오기
+        cursor.close()
+        conn.close()
+        
+        # 결과를 딕셔너리에 저장
+        for row in rows:
+            code, normalized_atr = row
+            stock_scores[code] = normalized_atr
 
         # Normalized ATR에 따라 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
@@ -475,9 +466,6 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
 
         # ROC 절대값이 큰 순서대로 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
-    
-    
-    
     
 
     elif stock_selection_method == 'rank_based':
@@ -524,6 +512,7 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
 
     return sorted_stock_codes
 
+# 현재 차수을 업데이트하는 함수
 def update_current_orders(positions, code, current_orders_dict):
     if positions:
         current_order = max(position.order for position in positions)
@@ -532,8 +521,9 @@ def update_current_orders(positions, code, current_orders_dict):
         if code in current_orders_dict:
             del current_orders_dict[code]
 
+# 포트폴리오 백테스팅 함수
 def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, buy_threshold, start_date, 
-                          end_date, db_params, per_threshold, pbr_threshold, div_threshold, 
+                          end_date, db_params, per_threshold, pbr_threshold, div_threshold, normalized_atr_threshold, 
                          consider_delisting, max_stocks=20,results_folder=None,save_files=True):
     random.seed(seed)
     np.random.seed(seed)
@@ -624,17 +614,14 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                         del current_orders_dict[liquidated_code]
                 else:
                     update_current_orders(positions, code, current_orders_dict)
-                    
-                    
-                    
-                        
+         
         # Enter new stocks if there is room in the portfolio and sufficient capital
         if len(entered_stocks) < max_stocks and capital > investment_per_split:
-            stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, db_params, consider_delisting)
+            stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, normalized_atr_threshold, db_params, consider_delisting)
             # 기존에 포함된 종목 제외
             stock_codes = [code for code in stock_codes if code not in entered_stocks]
             # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
-            stock_selection_method = 'random'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
+            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
             sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
             print(len(sorted_stock_codes))
             
@@ -645,11 +632,8 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                     #해당 날짜에 값이 있으면 
                     if date in loaded_stock_data[code].index:
                         row = loaded_stock_data[code].loc[date]
-                        normalized_atr = get_cached_normalized_atr(code, loaded_stock_data[code], date)
                         positions = []
-                        # 첫구매 실행 
-                        # positions, capital, liquidated_code = initial_buy_sell(row, positions, capital, investment_per_split, buy_threshold, buy_signals, sell_signals, code, trading_history, total_portfolio_value,num_splits,save_files)
-                        # positions_dict[code] = positions
+
                         positions, capital, liquidated_code = handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files)
                         positions_dict[code] = positions
                         if positions:
@@ -660,11 +644,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
                         else:
                             if code in loaded_stock_data:
                                 del loaded_stock_data[code]
-        # 모든 종목이 추가된 이후에 normalized_atr를 기준으로 정렬 (큰 값이 우선)
-        normalized_atr_scores = {code: get_cached_normalized_atr(code, loaded_stock_data[code], date)  for code in entered_stocks}
 
-        # normalized_atr 값에 따라 entered_stocks 리스트를 다시 정렬 (큰 값이 우선)
-        entered_stocks = sorted(entered_stocks, key=lambda code: normalized_atr_scores[code], reverse=True)
         # 진입한 종목들에 대해 
         for code in entered_stocks[:]:
             # 있는 날짜에 대해 
@@ -720,7 +700,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         if not os.path.exists(results_folder):
             os.makedirs(results_folder)
         current_time_str = datetime.now().strftime('%Y%m%d_%H%M')
-        file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
+        file_name = f'trading_history_{num_splits}_{investment_ratio}_{max_stocks}_{buy_threshold}_{per_threshold}_{pbr_threshold}_{div_threshold}_{current_time_str}.xlsx'
         file_path = os.path.join(results_folder, file_name)
         trading_history_df = pd.DataFrame([trade.__dict__ for trade in trading_history])
         trading_history_df.to_excel(file_path, index=False)
