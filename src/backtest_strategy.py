@@ -83,7 +83,7 @@ def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_thres
         AND PBR <= {pbr_threshold} 
         AND dividend >= {div_threshold}
         AND normalized_value <= {buy_threshold}
-        AND normalized_atr <= {normalized_atr_threshold}
+        AND normalized_atr >= {normalized_atr_threshold}
         """
     else:
         query = f"""
@@ -101,7 +101,7 @@ def get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_thres
         AND sd.PBR <= {pbr_threshold} 
         AND sd.dividend >= {div_threshold}
         AND sd.normalized_value <= {buy_threshold}
-        AND sd.normalized_atr <= {normalized_atr_threshold}
+        AND sd.normalized_atr >= {normalized_atr_threshold}
         AND ld.last_date >= '2024-06-01'
         """
     
@@ -414,22 +414,29 @@ def get_cached_normalized_atr(code, date, db_params):
         return None  # 데이터가 없는 경우 처리
 
 # 종목을 선택하는 함수
-def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_stocks, loaded_stock_data, roc_period=9):
+def select_stocks(stock_selection_method, stock_codes, date):
     stock_scores = {}
 
     if stock_selection_method == 'normalized_atr':
         # Normalized ATR 기반 선정
         conn = connection_pool.get_connection()  # 연결 풀에서 연결 가져오기
-        cursor = conn.cursor()
+        cursor = conn.cursor(buffered=True)  # 버퍼링된 커서 사용
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')  # 날짜 형식 변환
         
+        
+        # stock_codes의 길이에 맞게 자리 표시자 설정
+        placeholders = ','.join(['%s'] * len(stock_codes))
         # 주어진 날짜와 종목 코드에 해당하는 normalized_atr 값을 데이터베이스에서 가져오는 쿼리
-        query = f"""
-        SELECT ticker, normalized_atr 
-        FROM stock_data 
-        WHERE date = '{date_str}' 
-        AND ticker IN ({','.join(['%s'] * len(stock_codes))})
-        """
+        if stock_codes:
+            query = f"""
+            SELECT ticker, normalized_atr 
+            FROM stock_data 
+            WHERE date = '{date_str}' 
+            AND ticker IN ({placeholders})
+            """
+    
+        else:
+            raise ValueError("Stock codes list is empty.")
         
         cursor.execute(query, stock_codes)  # 쿼리 실행
         rows = cursor.fetchall()  # 결과 가져오기
@@ -443,67 +450,6 @@ def select_stocks(stock_selection_method, stock_codes, date, db_params, entered_
 
         # Normalized ATR에 따라 정렬 (내림차순)
         sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
-
-    # elif stock_selection_method == 'correlation':
-    #     # 상관관계 점수 기반 선정
-    #     for code in stock_codes:
-    #         one_year_ago = date - timedelta(days=365)
-    #         data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
-    #         if date in data.index:
-    #             correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
-    #             stock_scores[code] = correlation_score
-
-    #     # 상관관계 점수에 따라 정렬 (내림차순)
-    #     sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
-    elif stock_selection_method == 'roc':
-        # ROC 절대값이 큰 순서로 선정
-        for code in stock_codes:
-            one_year_ago = date - timedelta(days=365)
-            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
-            if date in data.index:
-                roc = calculate_roc(data, period=roc_period)
-                stock_scores[code] = abs(roc[-1])  # ROC의 절대값
-
-        # ROC 절대값이 큰 순서대로 정렬 (내림차순)
-        sorted_stock_codes = sorted(stock_scores, key=stock_scores.get, reverse=True)
-    
-
-    elif stock_selection_method == 'rank_based':
-        # 순위 기반 스코어링 선정
-        normalized_atr_scores = {}
-        correlation_scores = {}
-        roc_scores = {}
-
-        for code in stock_codes:
-            one_year_ago = date - timedelta(days=365)
-            data = load_stock_data_from_mysql(code, one_year_ago, date, db_params)
-            if date in data.index:
-                normalized_atr = calculate_normalized_atr(data)
-                # correlation_score = calculate_correlation_score(data, entered_stocks, loaded_stock_data)
-                roc = calculate_roc(data, period=roc_period)
-
-                # 스코어 저장
-                normalized_atr_scores[code] = normalized_atr[-1]
-                # correlation_scores[code] = correlation_score
-                roc_scores[code] = abs(roc[-1])
-
-        # 순위 계산
-        sorted_atr = sorted(normalized_atr_scores.items(), key=lambda x: x[1], reverse=True)
-    
-        sorted_roc = sorted(roc_scores.items(), key=lambda x: x[1], reverse=True)
-            # sorted_correlation = sorted(correlation_scores.items(), key=lambda x: x[1], reverse=True)
-
-        # 종목에 대한 순위 점수 할당
-        atr_rank = {code: rank for rank, (code, _) in enumerate(sorted_atr, start=1)}
-        roc_rank = {code: rank for rank, (code, _) in enumerate(sorted_roc, start=1)}
-        # correlation_rank = {code: rank for rank, (code, _) in enumerate(sorted_correlation, start=1)}
-
-        # 최종 순위 기반 스코어 계산
-        stock_scores = {code: atr_rank[code] + roc_rank[code] for code in stock_codes}
-        # stock_scores = {code: atr_rank[code] + correlation_rank[code] for code in stock_codes}
-
-        # 최종 스코어에 따라 종목 정렬
-        sorted_stock_codes = sorted(stock_scores, key=stock_scores.get)
 
     else:
         # 랜덤 선정
@@ -588,7 +534,7 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
         current_month = date.month
         if current_month != previous_month:
             # 투자 비율만큼의 자본을 할당하고, 이를 매수 차수와 종목 수로 나눔
-            available_investment = total_portfolio_value * investment_ratio
+            available_investment = int(total_portfolio_value * investment_ratio)
             investment_per_split = available_investment // (num_splits * max_stocks)
             previous_month = current_month
 
@@ -620,30 +566,66 @@ def portfolio_backtesting(seed,initial_capital, num_splits, investment_ratio, bu
             stock_codes = get_stock_codes(date, per_threshold, pbr_threshold, div_threshold, buy_threshold, normalized_atr_threshold, db_params, consider_delisting)
             # 기존에 포함된 종목 제외
             stock_codes = [code for code in stock_codes if code not in entered_stocks]
-            # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
-            stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
-            sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
-            print(len(sorted_stock_codes))
             
-            for code in sorted_stock_codes:
-                # 새종목들이 들어갈 공간이 있으면 
-                if len(entered_stocks) < max_stocks and capital > investment_per_split:
-                    loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
-                    #해당 날짜에 값이 있으면 
-                    if date in loaded_stock_data[code].index:
-                        row = loaded_stock_data[code].loc[date]
-                        positions = []
+            
+            # stock_codes가 비어 있으면 실행하지 않도록 예외 처리
+            if not stock_codes:
+                print("No new stock codes available for selection.")
+            else:
+                # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
+                stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택
+                sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date)
+                
+                print(f"Number of sorted stock codes: {len(sorted_stock_codes)}")
+                print(f"sorted stock codes: {sorted_stock_codes}")
+                for code in sorted_stock_codes:
+                    # 새 종목들이 들어갈 공간이 있으면
+                    if len(entered_stocks) < max_stocks and capital > investment_per_split:
+                        loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
+                        
+                        # 해당 날짜에 값이 있는지 확인
+                        if date in loaded_stock_data[code].index:
+                            row = loaded_stock_data[code].loc[date]
+                            positions = []
 
-                        positions, capital, liquidated_code = handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files)
-                        positions_dict[code] = positions
-                        if positions:
-                            if code not in entered_stocks: 
-                                entered_stocks.append(code)
-                            current_order = max(position.order for position in positions)
-                            current_orders_dict[code] = current_order
+                            positions, capital, liquidated_code = handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files)
+                            
+                            positions_dict[code] = positions
+                            
+                            if positions:
+                                if code not in entered_stocks:
+                                    entered_stocks.append(code)
+                                current_order = max(position.order for position in positions)
+                                current_orders_dict[code] = current_order
+                            else:
+                                if code in loaded_stock_data:
+                                    del loaded_stock_data[code]
                         else:
-                            if code in loaded_stock_data:
-                                del loaded_stock_data[code]
+                            print(f"No data for stock {code} on date {date}.")
+            # # 종목 선정 방식 선택 (normalized_atr, correlation, rank_based, random)
+            # stock_selection_method = 'normalized_atr'  # 여기에서 원하는 방식 선택 normalized_atr,correlation,rank_based,random,roc
+            # sorted_stock_codes = select_stocks(stock_selection_method, stock_codes, date, db_params,entered_stocks, loaded_stock_data)
+            # print(len(sorted_stock_codes))
+            
+            # for code in sorted_stock_codes:
+            #     # 새종목들이 들어갈 공간이 있으면 
+            #     if len(entered_stocks) < max_stocks and capital > investment_per_split:
+            #         loaded_stock_data[code] = load_stock_data_from_mysql(code, start_date, end_date, db_params)
+            #         #해당 날짜에 값이 있으면 
+            #         if date in loaded_stock_data[code].index:
+            #             row = loaded_stock_data[code].loc[date]
+            #             positions = []
+
+            #             positions, capital, liquidated_code = handle_first_entry_buy(row, positions, capital, investment_per_split, buy_threshold, buy_signals, code, trading_history, total_portfolio_value, num_splits, save_files)
+            #             positions_dict[code] = positions
+            #             if positions:
+            #                 if code not in entered_stocks: 
+            #                     entered_stocks.append(code)
+            #                 current_order = max(position.order for position in positions)
+            #                 current_orders_dict[code] = current_order
+            #             else:
+            #                 if code in loaded_stock_data:
+            #                     del loaded_stock_data[code]
 
         # 진입한 종목들에 대해 
         for code in entered_stocks[:]:
