@@ -42,10 +42,10 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
     random.seed(seed)
     np.random.seed(seed)
     positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
-        initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, consider_delisting, max_stocks,results_folder,save_files
+        initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold,normalized_atr_threshold, consider_delisting, max_stocks,results_folder,save_files
     )
     mdd = calculate_mdd(portfolio_values_over_time)
-    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, normalized_atr_threshold, save_files)
+    plot_backtesting_results(all_trading_dates, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, num_splits, max_stocks, buy_threshold, cagr, mdd,results_folder,investment_ratio,per_threshold,pbr_threshold,div_threshold, save_files)
     return  positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr ,mdd
 
 
@@ -53,19 +53,19 @@ def single_backtesting(seed,num_splits, buy_threshold, investment_ratio, start_d
 
 if __name__ == "__main__":
     print("Starting backtesting...")
-    num_splits = 20
+    num_splits = 20 
     buy_threshold = 32
     investment_ratio = 9.6  # 9.6
     start_date = '2010-01-01'
     end_date = '2024-08-31'
     
-    per_threshold = 20
-    pbr_threshold = 1.5
+    per_threshold = 10
+    pbr_threshold = 1.0
     div_threshold = 1
     # min_additional_buy_drop_rate = 0.005
     consider_delisting = False
     max_stocks = 24
-    normalized_atr_threshold = 0.5
+    normalized_atr_threshold = 4
     seed=107 
     
     # date = datetime.strptime('2024-09-27', '%Y-%m-%d')
