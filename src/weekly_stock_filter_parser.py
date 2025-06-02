@@ -138,7 +138,7 @@ if __name__ == "__main__":
         #     print(parsed_df[parsed_df['filter_date'] == sample_date_to_check]['stock_name'].tolist())
 
         # 전체 데이터를 CSV로 저장 (선택적)
-        output_csv_path = os.path.join(os.path.dirname(CONDITION_SEARCH_FILES_FOLDER), "processed", "parsed_weekly_filtered_stocks.csv")
+        output_csv_path = os.path.join(os.path.dirname(CONDITION_SEARCH_FILES_FOLDER), "processed_data", "parsed_weekly_filtered_stocks.csv")
         os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
         try:
             parsed_df.to_csv(output_csv_path, index=False, encoding='utf-8-sig')
