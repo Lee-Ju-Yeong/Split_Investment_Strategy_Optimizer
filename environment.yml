@@ -1,0 +1,58 @@
+name: stock_optimizer_env  # 생성될 Anaconda 환경의 이름
+
+channels: # 패키지를 검색할 채널 목록
+  - defaults
+  - conda-forge # 좀 더 다양한 패키지를 제공하는 채널
+
+dependencies:
+  # Python 버전 명시
+  - python=3.9 # 예시로 3.9 버전, 실제 사용하는 버전으로 수정
+
+  # 주요 데이터 분석 및 처리 라이브러리
+  - numpy
+  - pandas
+  - scipy # 최적화 알고리즘 등에서 사용될 수 있음
+
+  # 웹 프레임워크
+  - flask
+  - flask-cors
+
+  # 데이터베이스 연결
+  - sqlalchemy # DB ORM 또는 SQL 직접 실행
+  # - psycopg2 # PostgreSQL 사용하는 경우
+  # - mysqlclient # MySQL 사용하는 경우
+  # (SQLite는 파이썬 기본 내장)
+
+  # 시각화 (선택적)
+  - matplotlib
+  - seaborn
+
+  # 암호화
+  - cryptography
+
+  # 웹 스크래핑
+  - selenium
+  - webdriver-manager
+
+  # 파라미터 최적화 관련 (선택적, 필요에 따라 추가)
+  # - scikit-learn # 그리드 서치, 랜덤 서치 등 제공
+  # - optuna # 베이지안 최적화 등에 사용되는 라이브러리
+  # - hyperopt # 베이지안 최적화 라이브러리
+
+  # Jupyter Notebook/Lab (선택적, 개발 및 분석용)
+  - jupyterlab
+  - notebook
+
+  # 기타 유용한 라이브러리
+  - tqdm # 진행 상황 표시
+  - python-dotenv # .env 파일에서 환경변수 로드 (민감 정보 관리)
+
+  # pip을 통해 설치할 패키지 목록
+  - pip:
+    - pykrx
+    - python-dateutil # 날짜/시간 처리
+    - mysql-connector-python
+    - pymysql
+    # - mplfinance # 주가 차트 시각화 (선택적)
+    # - ta # 기술적 분석 지표 라이브러리 (선택적)
+    # - finance-datareader # 다른 금융 데이터 소스 (선택적)
