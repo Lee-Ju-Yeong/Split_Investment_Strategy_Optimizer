@@ -44,7 +44,7 @@ def create_tables(conn):
         ticker VARCHAR(10) PRIMARY KEY,
         market VARCHAR(10),
         name VARCHAR(100),
-        last_updated DATE,
+        last_updated DATETIME,
         is_delisted BOOLEAN DEFAULT FALSE
     )
     ''')
@@ -52,6 +52,34 @@ def create_tables(conn):
     CREATE TABLE IF NOT EXISTS ticker_status (
         ticker VARCHAR(10) PRIMARY KEY,
         status VARCHAR(20)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS CompanyInfo (
+        stock_code VARCHAR(20) PRIMARY KEY,
+        company_name VARCHAR(255),
+        market_type VARCHAR(50),
+        last_updated DATETIME
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS WeeklyFilteredStocks (
+        filter_date DATE,
+        stock_code VARCHAR(20),
+        company_name VARCHAR(255),
+        PRIMARY KEY (filter_date, stock_code)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS DailyStockPrice (
+        stock_code VARCHAR(20),
+        date DATE,
+        open_price DECIMAL(20, 5),
+        high_price DECIMAL(20, 5),
+        low_price DECIMAL(20, 5),
+        close_price DECIMAL(20, 5),
+        volume BIGINT,
+        PRIMARY KEY (stock_code, date)
     )
     ''')
     conn.commit()
