@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import glob
 from datetime import datetime
-from sqlalchemy import text # engine은 main_script에서 주입
+# from sqlalchemy import text # SQLAlchemy 의존성 제거
 
 # company_info_manager.py 에서 필요한 함수/변수 임포트
 # 캐시는 company_info_manager 모듈 내의 전역 변수로 관리되며,
@@ -79,52 +79,49 @@ def parse_single_hts_csv_file(file_path):
         return filter_date_obj if 'filter_date_obj' in locals() else None, [], []
 
 
-def save_weekly_filtered_stocks_to_db(engine, weekly_data_list):
+def save_weekly_filtered_stocks_to_db(conn, weekly_data_list):
     """
     파싱 및 매핑된 주간 필터링 종목 정보 리스트를 DB에 저장합니다.
     weekly_data_list: [{'filter_date': datetime.date, 'stock_code': str, 'stock_name': str}, ...]
+    conn: pymysql connection 객체
     """
     if not weekly_data_list:
         return 0 # 저장된 행 수 반환
 
-    # DataFrame으로 변환하지 않고 직접 딕셔너리 리스트를 사용하여 SQL 실행
-    # 날짜 객체는 SQL 바인딩 시 자동으로 적절한 문자열로 변환될 수 있으나,
-    # 명시적으로 strftime을 사용하거나, DB 드라이버/SQLAlchemy의 동작에 의존.
-    # SQLite의 경우 datetime.date 객체는 TEXT (YYYY-MM-DD)로 저장됨.
-
     saved_rows = 0
     try:
-        with engine.connect() as connection:
+        with conn.cursor() as cur:
             for data_dict in weekly_data_list:
-                # PK: (filter_date, stock_code)
-                stmt = text("""
-                    INSERT OR IGNORE INTO WeeklyFilteredStocks (filter_date, stock_code, company_name)
-                    VALUES (:filter_date, :stock_code, :stock_name)
-                """)
-                # data_dict의 'stock_name' 키를 SQL의 :stock_name 파라미터에 맞춤
-                # (만약 DB 컬럼명이 company_name이고 data_dict 키가 stock_name이면 맞춰줘야 함)
-                # 현재 DB 스키마에서는 company_name, Python dict에서는 stock_name으로 되어있다면:
-                params_for_sql = {
-                    'filter_date': data_dict['filter_date'],
-                    'stock_code': data_dict['stock_code'],
-                    'company_name': data_dict['stock_name'] # 컬럼명 매핑
-                }
-                result = connection.execute(stmt, params_for_sql)
-                if result.rowcount > 0: # INSERT OR IGNORE 시, 실제 삽입된 경우 rowcount가 1
-                    saved_rows += 1
-            connection.commit()
-        print(f"  WeeklyFilteredStocks DB에 총 {len(weekly_data_list)}건 중 {saved_rows}건 신규 저장/갱신 시도 완료.")
+                sql = """
+                    INSERT IGNORE INTO WeeklyFilteredStocks (filter_date, stock_code, company_name)
+                    VALUES (%s, %s, %s)
+                """
+                
+                # 날짜 객체를 MySQL에 적합한 문자열로 변환 (YYYY-MM-DD)
+                filter_date_str = data_dict['filter_date'].strftime('%Y-%m-%d')
+
+                values = (
+                    filter_date_str,
+                    data_dict['stock_code'],
+                    data_dict['stock_name'] # DB의 company_name 컬럼에 해당
+                )
+                cur.execute(sql, values)
+                saved_rows += cur.rowcount # INSERT IGNORE시 실제 삽입된 행 수
+            conn.commit()
+        print(f"  WeeklyFilteredStocks DB에 총 {len(weekly_data_list)}건 중 {saved_rows}건 신규 저장 완료.")
         return saved_rows
     except Exception as e:
         print(f"  [오류] WeeklyFilteredStocks DB 저장 중: {e}")
+        conn.rollback()
         return 0
 
 
-def process_all_hts_csv_files(engine, csv_folder_path, processed_data_folder_path=None, company_manager_module=None):
+def process_all_hts_csv_files(conn, csv_folder_path, processed_data_folder_path=None, company_manager_module=None):
     """
     지정된 폴더 내의 모든 HTS 조건검색 CSV 파일을 일괄 처리하여,
     파싱 및 종목코드 매핑 후 WeeklyFilteredStocks DB에 저장합니다.
-    company_manager_module은 현재 코드에서는 직접 사용하지 않음 (get_ticker_from_name이 전역 캐시 참조).
+    conn: pymysql connection 객체
+    company_manager_module: 현재는 get_ticker_from_name을 직접 임포트하여 사용하므로 이 파라미터는 사용되지 않음.
     """
     # `company_manager_module` 파라미터는 현재 구현에서는 직접 사용되지 않지만,
     # 만약 `get_ticker_from_name`이 `company_manager_module.get_ticker_from_name` 형태로
@@ -183,7 +180,7 @@ def process_all_hts_csv_files(engine, csv_folder_path, processed_data_folder_pat
 
     if all_parsed_and_mapped_data:
         print(f"\n  총 {len(all_parsed_and_mapped_data)}개의 매핑된 주간 필터링 결과를 WeeklyFilteredStocks DB에 저장합니다...")
-        saved_count_in_db = save_weekly_filtered_stocks_to_db(engine, all_parsed_and_mapped_data)
+        saved_count_in_db = save_weekly_filtered_stocks_to_db(conn, all_parsed_and_mapped_data)
 
         if processed_data_folder_path: # CSV 저장 경로가 주어졌을 때만 저장
             final_df_for_csv = pd.DataFrame(all_parsed_and_mapped_data)
