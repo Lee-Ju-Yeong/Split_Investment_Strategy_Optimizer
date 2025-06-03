@@ -170,65 +170,34 @@ def parse_hts_csv_and_map_tickers(file_path, engine):
         
         print(f"  > {file_name}: 필터링 날짜: {filter_date_str}, 원본 종목 수: {len(stock_names_in_file)}")
         
-        newly_added_companies_for_db = []
+        newly_added_companies_for_db = [] # 이 변수는 이제 실시간 추가용이 아님
         for stock_name in stock_names_in_file:
             ticker_code = get_ticker_from_name(stock_name) # 캐시에서 조회
 
             if not ticker_code: # 캐시에 없는 경우
-                print(f"    [정보] {file_name}: '{stock_name}' 캐시에 없음. pykrx로 조회 시도...")
-                try:
-                    # 해당 필터링 날짜 기준으로 종목코드 검색 시도
-                    # 주의: 이 부분은 API 호출을 유발하므로, 너무 많은 종목이 캐시에 없다면 느려질 수 있음
-                    # pykrx의 get_market_ticker_list는 특정 날짜의 "상장 목록"을 주므로,
-                    # 정확한 매핑을 위해서는 해당 날짜의 KOSPI/KOSDAQ 전체 목록을 가져와 비교해야 함.
-                    # 여기서는 간단하게 가장 최근일 기준의 모든 티커를 가져와 이름을 비교하는 방식을 사용
-                    # (initialize_ticker_name_map 가 충분히 최신 정보를 가지고 있다면 이 부분이 덜 필요함)
-                    
-                    # 임시방편: 만약 캐시에 없다면, 최근일 기준으로 전체 마켓에서 찾아보기 (비효율적)
-                    # 더 좋은 방법은 initialize_ticker_name_map이 주기적으로 돌아서 캐시를 최신으로 유지하는 것
-                    temp_ticker = None
-                    date_for_pykrx_lookup = filter_date_str.replace('-', '') # pykrx용 날짜 형식
-                    
-                    # 이 루프는 매우 비효율적이므로, 실제 운영에서는 사용하지 않거나,
-                    # initialize_ticker_name_map()이 잘 동작하도록 하는 것이 중요.
-                    # for market_temp in ["KOSPI", "KOSDAQ"]:
-                    #     tickers_temp = stock.get_market_ticker_list(date=date_for_pykrx_lookup, market=market_temp)
-                    #     for t_code in tickers_temp:
-                    #         if stock.get_market_ticker_name(t_code) == stock_name:
-                    #             temp_ticker = t_code
-                    #             newly_added_companies_for_db.append({
-                    #                 'stock_code': temp_ticker,
-                    #                 'company_name': stock_name,
-                    #                 'market_type': market_temp, # 정확한 시장 정보
-                    #                 'last_updated': datetime.now()
-                    #             })
-                    #             # 캐시에도 즉시 추가
-                    #             STOCK_NAME_TO_CODE_CACHE[stock_name] = temp_ticker
-                    #             STOCK_CODE_TO_NAME_CACHE[temp_ticker] = stock_name
-                    #             STOCK_CODE_TO_MARKET_CACHE[temp_ticker] = market_temp
-                    #             print(f"      - pykrx로 '{stock_name}' -> '{temp_ticker}' 매핑 성공 및 캐시/DB추가 대상 등록.")
-                    #             break
-                    #         time.sleep(0.01)
-                    #     if temp_ticker: break
-                    # ticker_code = temp_ticker
-                    # 위 로직 대신, 캐시에 없으면 일단 건너뛰고 나중에 일괄 업데이트 하는 것이 나을 수 있음
-
-                    if not ticker_code: # 여전히 못 찾았다면
-                         print(f"    [경고] {file_name}: '{stock_name}'의 종목코드를 최종적으로 찾지 못했습니다.")
-
-                except Exception as e_pykrx:
-                    print(f"    [오류] {file_name}: pykrx로 '{stock_name}' 조회 중 오류 - {e_pykrx}")
+                # 이전: pykrx로 실시간 조회 시도 (비효율적이므로 삭제 또는 변경)
+                # print(f"    [경고] {file_name}: '{stock_name}'의 종목코드를 캐시에서 찾을 수 없습니다.")
+                # print(f"          CompanyInfo DB를 최신 상태로 업데이트하거나, 해당 종목이 유효한지 확인하세요.")
+                # 일단 매핑 실패로 간주하고 건너뛰거나, 별도 목록에 추가하여 후처리할 수 있습니다.
+                # 여기서는 매핑된 것만 parsed_data_for_file에 추가합니다.
+                # 만약 반드시 모든 종목을 처리해야 한다면, 이 지점에서 오류를 발생시키거나
+                # '미매핑' 상태로 데이터를 저장하고 추후 업데이트하는 로직이 필요합니다.
+                pass # 일단 다음 종목으로 넘어감 (또는 미매핑 목록에 추가)
             
-            if ticker_code:
+            if ticker_code: # ticker_code가 성공적으로 매핑된 경우에만 추가
                 parsed_data_for_file.append({
                     'filter_date': filter_date_obj,
                     'stock_code': ticker_code,
                     'stock_name': stock_name
                 })
         
-        # 실시간으로 추가된 종목 정보 DB에 저장
-        if newly_added_companies_for_db:
-            save_company_info_to_db(engine, newly_added_companies_for_db)
+        # 실시간으로 추가된 종목 정보 DB에 저장 로직은 여기서 제거
+        # if newly_added_companies_for_db:
+        #     save_company_info_to_db(engine, newly_added_companies_for_db)
+        # CompanyInfo 업데이트는 별도의 update_company_info_from_pykrx 함수를 통해 일괄적으로 수행
+
+        if len(parsed_data_for_file) < len(stock_names_in_file):
+            print(f"    [주의] {file_name}: 총 {len(stock_names_in_file)}개 종목명 중 {len(parsed_data_for_file)}개만 종목코드로 매핑되었습니다.")
 
         return filter_date_obj, parsed_data_for_file
 
