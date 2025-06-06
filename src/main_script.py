@@ -29,6 +29,7 @@ os.makedirs(PROCESSED_DATA_FOLDER, exist_ok=True) # 폴더 없으면 생성
 UPDATE_COMPANY_INFO_DB = False  # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
 PROCESS_HTS_CSV_FILES = True   # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
 COLLECT_OHLCV_DATA = True       # True로 설정 시 OHLCV 데이터 수집 및 DB 저장 실행
+FORCE_RECOLLECT_OHLCV = False    # True로 설정 시, 기존 OHLCV 데이터를 모두 지우고 처음부터 다시 수집
 
 if __name__ == "__main__":
     db_connection = None  # DB 커넥션 객체 초기화
@@ -87,7 +88,8 @@ if __name__ == "__main__":
             ohlcv_collector.collect_and_save_ohlcv_for_filtered_stocks(
                 conn=db_connection, # MySQL connection 전달
                 company_manager=company_info_manager,
-                overall_end_date_str=datetime.today().strftime("%Y%m%d")
+                overall_end_date_str=datetime.today().strftime("%Y%m%d"),
+                force_recollect=FORCE_RECOLLECT_OHLCV # 재수집 플래그 전달
             )
             print("OHLCV 데이터 수집 및 DailyStockPrice DB 저장 완료.")
         else:
