@@ -8,7 +8,7 @@ from datetime import datetime
 # company_info_manager.py 에서 필요한 함수/변수 임포트
 # 캐시는 company_info_manager 모듈 내의 전역 변수로 관리되며,
 # main_script.py에서 load_company_info_cache_from_db()를 호출하여 미리 채워짐.
-from company_info_manager import get_ticker_from_name
+from .company_info_manager import get_ticker_from_name
 
 def parse_single_hts_csv_file(file_path):
     """
@@ -125,7 +125,7 @@ def process_all_hts_csv_files(conn, csv_folder_path, processed_data_folder_path=
     """
     # `company_manager_module` 파라미터는 현재 구현에서는 직접 사용되지 않지만,
     # 만약 `get_ticker_from_name`이 `company_manager_module.get_ticker_from_name` 형태로
-    # 호출되어야 한다면 필요합니다. 현재는 `from company_info_manager import get_ticker_from_name`
+    # 호출되어야 한다면 필요합니다. 현재는 `from .company_info_manager import get_ticker_from_name`
     # 으로 직접 임포트하여 전역 캐시를 사용하고 있으므로, 이 파라미터는 로깅이나
     # 다른 목적으로 전달될 수 있습니다. (또는 제거 가능)
 
