@@ -1,37 +1,41 @@
 from datetime import datetime
 import os
 # 다른 모듈에서 함수 임포트
-from company_info_manager import (
+from .company_info_manager import (
     update_company_info_from_pykrx, # 필요시 CompanyInfo DB 업데이트용
     load_company_info_cache_from_db, # 필수: 캐시 로드
     STOCK_NAME_TO_CODE_CACHE # 캐시 상태 확인용 (선택적)
 )
-from weekly_stock_filter_parser import process_all_hts_csv_files
+from .weekly_stock_filter_parser import process_all_hts_csv_files
 from sqlalchemy import create_engine
 from datetime import datetime
 
 # db_setup에서 DB 연결 및 테이블 생성 함수 임포트
-from db_setup import get_db_connection, create_tables 
+from .db_setup import get_db_connection, create_tables 
 
 # 각 기능 모듈 임포트
-import company_info_manager
-import weekly_stock_filter_parser
-import ohlcv_collector
-import indicator_calculator
+from . import company_info_manager
+from . import weekly_stock_filter_parser
+from . import ohlcv_collector
+from . import indicator_calculator
+from . import filtered_stock_loader
 
 # --- 0. 설정 ---
 # HTS CSV 파일들이 저장된 폴더 (사용자 환경에 맞게 설정 필요)
 CONDITION_SEARCH_FILES_FOLDER = 'E:/AI/pythonProject/venv/masicsplit/data/raw_data'
 # 처리된 CSV 파일 (필터링 결과 + 종목코드) 저장 폴더
 PROCESSED_DATA_FOLDER = os.path.join(os.path.dirname(CONDITION_SEARCH_FILES_FOLDER), "processed_data")
+# 최종 필터링된 주간 종목 리스트 CSV 파일
+FILTERED_STOCKS_CSV_PATH = os.path.join(PROCESSED_DATA_FOLDER, 'mapped_weekly_filtered_stocks_FINAL.csv')
 os.makedirs(PROCESSED_DATA_FOLDER, exist_ok=True) # 폴더 없으면 생성
 
 # --- 실행 플래그 ---
-UPDATE_COMPANY_INFO_DB = False  # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
-PROCESS_HTS_CSV_FILES = True   # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
-COLLECT_OHLCV_DATA = True       # True로 설정 시 OHLCV 데이터 수집 및 DB 저장 실행
-FORCE_RECOLLECT_OHLCV = False    # True로 설정 시, 기존 OHLCV 데이터를 모두 지우고 처음부터 다시 수집
-CALCULATE_INDICATORS = True     # True로 설정 시 기술적/변동성 지표 계산 및 저장 실행
+UPDATE_COMPANY_INFO_DB = False       # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
+PROCESS_HTS_CSV_FILES = False      # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
+LOAD_FILTERED_STOCKS_CSV = True    # True로 설정 시 최종 필터링된 CSV를 DB에 적재/업데이트
+COLLECT_OHLCV_DATA = True          # True로 설정 시 OHLCV 데이터 수집 및 DB 저장 실행
+FORCE_RECOLLECT_OHLCV = False      # True로 설정 시, 기존 OHLCV 데이터를 모두 지우고 처음부터 다시 수집
+CALCULATE_INDICATORS = True        # True로 설정 시 기술적/변동성 지표 계산 및 저장 실행
 
 if __name__ == "__main__":
     db_connection = None  # DB 커넥션 객체 초기화
@@ -81,6 +85,17 @@ if __name__ == "__main__":
             print("주간 필터링 CSV 처리 및 WeeklyFilteredStocks DB 저장 완료.")
         else:
             print("\nSTEP 2: 주간 필터링 CSV 처리는 건너뜁니다.")
+
+        # --- STEP 2.5: 최종 필터링된 주간 종목 리스트 DB에 적재 ---
+        if LOAD_FILTERED_STOCKS_CSV:
+            print("\n" + "="*50)
+            print(f"STEP 2.5: 최종 필터링된 주간 종목 CSV 파일 DB 적재 시작")
+            print(f"대상 파일: {FILTERED_STOCKS_CSV_PATH}")
+            print("="*50)
+            db_engine = filtered_stock_loader.get_db_engine()
+            filtered_stock_loader.load_filtered_stocks_to_db(FILTERED_STOCKS_CSV_PATH, db_engine)
+        else:
+            print("\nSTEP 2.5: 최종 필터링 CSV DB 적재는 건너뜁니다.")
 
         # --- STEP 3: OHLCV 데이터 수집 및 DB 저장 ---
         if COLLECT_OHLCV_DATA:
