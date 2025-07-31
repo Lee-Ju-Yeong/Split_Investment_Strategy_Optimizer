@@ -82,5 +82,17 @@ def create_tables(conn):
         PRIMARY KEY (stock_code, date)
     )
     ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS CalculatedIndicators (
+        stock_code VARCHAR(6),
+        date DATE,
+        ma_5 FLOAT NULL,
+        ma_20 FLOAT NULL,
+        atr_14_ratio FLOAT NULL,
+        price_vs_5y_low_pct FLOAT NULL,
+        price_vs_10y_low_pct FLOAT NULL,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
     conn.commit()
     cur.close()
