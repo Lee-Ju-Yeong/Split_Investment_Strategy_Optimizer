@@ -17,6 +17,7 @@ from db_setup import get_db_connection, create_tables
 import company_info_manager
 import weekly_stock_filter_parser
 import ohlcv_collector
+import indicator_calculator
 
 # --- 0. 설정 ---
 # HTS CSV 파일들이 저장된 폴더 (사용자 환경에 맞게 설정 필요)
@@ -30,6 +31,7 @@ UPDATE_COMPANY_INFO_DB = False  # True로 설정 시 CompanyInfo DB를 최신 �
 PROCESS_HTS_CSV_FILES = True   # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
 COLLECT_OHLCV_DATA = True       # True로 설정 시 OHLCV 데이터 수집 및 DB 저장 실행
 FORCE_RECOLLECT_OHLCV = False    # True로 설정 시, 기존 OHLCV 데이터를 모두 지우고 처음부터 다시 수집
+CALCULATE_INDICATORS = True     # True로 설정 시 기술적/변동성 지표 계산 및 저장 실행
 
 if __name__ == "__main__":
     db_connection = None  # DB 커넥션 객체 초기화
@@ -94,6 +96,12 @@ if __name__ == "__main__":
             print("OHLCV 데이터 수집 및 DailyStockPrice DB 저장 완료.")
         else:
             print("\nSTEP 3: OHLCV 데이터 수집은 건너뜁니다.")
+
+        # --- STEP 4: 기술적/변동성 지표 계산 및 저장 ---
+        if CALCULATE_INDICATORS:
+            indicator_calculator.calculate_and_store_indicators_for_all(db_connection)
+        else:
+            print("\nSTEP 4: 기술적/변동성 지표 계산은 건너뜁니다.")
 
         print("\n모든 데이터 파이프라인 작업 완료.")
 
