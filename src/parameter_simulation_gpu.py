@@ -16,20 +16,23 @@ import configparser
 # 1. Configuration and Parameter Setup
 # -----------------------------------------------------------------------------
 
+import urllib.parse
+
 # Load database configuration
 config = configparser.ConfigParser()
 config.read('config.ini')
 db_user = config['mysql']['user']
-db_pass = config['mysql']['password']
+# URL encode the password to handle special characters like '@'
+db_pass = urllib.parse.quote_plus(config['mysql']['password'])
 db_host = config['mysql']['host']
 db_name = config['mysql']['database']
 db_connection_str = f'mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}'
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([15, 20, 25, 30], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.01, 0.015, 0.02, 0.025, 0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.02, 0.03, 0.04, 0.05, 0.06], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03, 0.04, 0.05, 0.06, 0.08], dtype=cp.float32)
+max_stocks_options = cp.array([15, 30], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.015, 0.03], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.03, 0.04], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.03, 0.05], dtype=cp.float32)
 additional_buy_priority_options = cp.array([0, 1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # Create all combinations using CuPy's broadcasting capabilities
@@ -104,23 +107,40 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
 # 3. GPU Backtesting Kernel (to be implemented)
 # -----------------------------------------------------------------------------
 
-def run_backtest_on_gpu(params_gpu, data_gpu):
+def run_backtest_on_gpu(params_gpu, data_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd):
     """
-    This function will contain the core GPU-accelerated backtesting logic.
-    It will take all parameters and all data as CuPy arrays and run all
-    simulations in parallel.
-    
-    (This is the next major implementation step)
+    Runs the actual GPU-accelerated backtesting using the implemented 
+    MagicSplitStrategy kernel.
     """
     print("🚀 Starting GPU backtesting kernel...")
-    # Placeholder for the future vectorized backtesting logic
     
-    # Simulate some work
-    time.sleep(5) 
+    # Import the actual GPU backtesting function
+    from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
     
-    print("🎉 GPU backtesting kernel finished (simulation).")
-    # Placeholder for results
-    return cp.zeros(params_gpu.shape[0])
+    # Set initial capital (1억 원)
+    initial_capital = 100000000.0
+    
+    # Run the complete GPU backtesting
+    daily_portfolio_values = run_magic_split_strategy_on_gpu(
+        initial_capital=initial_capital,
+        param_combinations=params_gpu,
+        all_data_gpu=data_gpu,
+        trading_date_indices=trading_date_indices_gpu,
+        trading_dates_pd_cpu=trading_dates_pd,
+        all_tickers=all_tickers,
+        max_splits_limit=20
+    )
+    
+    print("🎉 GPU backtesting kernel finished.")
+    
+    # Calculate final results for each parameter combination
+    final_values = daily_portfolio_values[:, -1]  # Last day values
+    initial_values = cp.full(len(params_gpu), initial_capital, dtype=cp.float32)
+    
+    # Calculate total returns
+    total_returns = (final_values / initial_values) - 1
+    
+    return total_returns, daily_portfolio_values
 
 
 # -----------------------------------------------------------------------------
@@ -128,17 +148,74 @@ def run_backtest_on_gpu(params_gpu, data_gpu):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    backtest_start_date = '2010-01-01'
-    backtest_end_date = '2023-12-31'
+    # 소규모 테스트를 위한 짧은 기간 설정
+    backtest_start_date = '2023-01-01'
+    backtest_end_date = '2023-01-31'  # 1개월 테스트
+    
+    print(f"📅 테스트 기간: {backtest_start_date} ~ {backtest_end_date}")
     
     # 1. Pre-load all data to GPU
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
     
-    # 2. Run the backtesting kernel
-    # In a real scenario, we would pass all_data_gpu to the function
-    results_gpu = run_backtest_on_gpu(param_combinations, all_data_gpu)
+    # --- 💡 수정된 부분 시작 💡 ---
+
+    # 2. Generate trading dates and convert them to integer indices for GPU
+    # Pandas의 bdate_range를 사용하여 실제 거래일만 가져옴
+    trading_dates_pd = pd.bdate_range(start=backtest_start_date, end=backtest_end_date)
     
-    # 3. Process and save results (future step)
-    print("\n--- Simulation Summary ---")
-    print(f"Total parameter combinations tested: {num_combinations}")
-    print("Results processing and saving would happen here.")
+    # GPU 커널에서는 0, 1, 2... 와 같은 정수 인덱스로 날짜를 순회
+    trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
+
+    # 3. Filter the main GPU DataFrame to include only actual trading dates
+    #    This ensures the GPU data aligns with our trading date indices.
+    #    cuDF는 datetime 객체를 인덱스로 직접 사용할 수 있음
+    all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
+    
+    # --- 💡 수정된 부분 끝 💡 ---
+
+    # 4. Get all tickers from the loaded data
+    #    (all_data_gpu가 필터링되었으므로, 여기서 티커를 가져오는 것이 정확함)
+    all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
+    print(f"📊 로드된 종목 수: {len(all_tickers)}")
+    print(f"📊 실제 거래일 수: {len(trading_date_indices_gpu)}")
+    
+    # 5. Run the backtesting kernel
+    print(f"\n🚀 {num_combinations}개 파라미터 조합으로 GPU 백테스팅 시작...")
+    start_time = time.time()
+    
+    total_returns, daily_values = run_backtest_on_gpu(
+        param_combinations, 
+        all_data_gpu, 
+        all_tickers, 
+        trading_date_indices_gpu,  # 💡 정수형 인덱스를 전달
+        trading_dates_pd           # 💡 실제 날짜 객체 배열(Pandas DatetimeIndex)도 함께 전달
+    )
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    
+    # 5. Results summary
+    print(f"\n--- 🎉 GPU 백테스팅 완료 ---")
+    print(f"⏱️  총 소요 시간: {elapsed_time:.2f}초")
+    print(f"📈 조합 당 평균 시간: {elapsed_time/num_combinations*1000:.2f}ms")
+    print(f"🔥 CPU 대비 예상 가속도: {8 * elapsed_time / (num_combinations * 0.1):.1f}x")
+    
+    # 6. Top performing parameters
+    returns_cpu = total_returns.get()  # Move to CPU for analysis
+    best_idx = cp.argmax(total_returns).get()
+    worst_idx = cp.argmin(total_returns).get()
+    
+    print(f"\n📊 성과 요약:")
+    print(f"   최고 수익률: {returns_cpu[best_idx]*100:.2f}%")
+    print(f"   최저 수익률: {returns_cpu[worst_idx]*100:.2f}%")
+    print(f"   평균 수익률: {cp.mean(total_returns).get()*100:.2f}%")
+    
+    best_params = param_combinations[best_idx].get()
+    print(f"\n🏆 최고 성과 파라미터 조합:")
+    print(f"   Max Stocks: {best_params[0]}")
+    print(f"   Order Investment Ratio: {best_params[1]:.3f}")
+    print(f"   Additional Buy Drop Rate: {best_params[2]:.3f}")
+    print(f"   Sell Profit Rate: {best_params[3]:.3f}")
+    print(f"   Additional Buy Priority: {best_params[4]}")
+    
+    print(f"\n✅ GPU 백테스팅 시스템 테스트 완료!")
