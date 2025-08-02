@@ -125,16 +125,50 @@
 - **2024년 7월 24일**: 백테스팅을 구현할 수 있는 Flask 웹페이지 개발
 
 ## 향후 계획
-1. **사용자 맞춤 종목선정 기능 **:
-    - 현재는 조건에 맞는 종목 중에 랜덤으로 선택하는 방식에서, 사용자 맞춤형으로 변경.
-    - 사용자가 선택한 종목들을 기반으로 백테스팅을 수행하고 결과를 시각화하는 기능 제공
+# Project Roadmap
 
-2. **성능 최적화**:
-    - 대용량 데이터 처리를 위한 성능 최적화.
-    - 백테스팅에 필요한 모든 데이터를 처음에 한 번에 불러와 캐시에 저장하고, 캐시에서 데이터를 조회하도록 로직 변경 시도.
+This document outlines the development roadmap for the GPU-accelerated backtesting optimizer.
 
-3. **상장폐지 가능성 예측 모델**::
-    - 재무 데이터와 시장 데이터를 기반으로 상장폐지 가능성을 평가하는 모델을 개발.
+---
+
+### ✅ Epic 0: Initial Setup & Data Pipeline (Completed)
+- [x] #5 HTS 조건검색 결과 CSV 파일 파싱 로직 구현
+- [x] #8 OHLCV 데이터 수집 및 DailyStockPrice DB 적재 기능 개발
+- [x] #9 기술적/변동성 지표 계산 및 CalculatedIndicators DB 적재 기능 개발
+
+---
+
+### 🚀 Epic 1: GPU Acceleration (In Progress)
+*백테스팅 및 최적화 속도를 극적으로 향상시키기 위한 핵심 기반 작업입니다.*
+
+- [x] #41 GPU 개발 환경 구축
+- [x] #42 기술적 지표 계산 로직 GPU로 전환
+- [ ] #43 파라미터 최적화 로직 병렬화 리팩토링
+- [ ] #44 데이터 핸들러 GPU 호환성 확보
+
+---
+
+### 📊 Epic 2: Analysis & Usability
+*GPU로 얻은 결과를 의미있게 분석하고, 프로젝트 사용성을 높입니다.*
+
+- [ ] #45 백테스트 성과 지표 상세 계산
+- [ ] #46 최적화 결과 저장 및 리포트 생성
+- [ ] #47 CLI (Command-Line Interface) 도입
+
+---
+
+### 📚 Epic 3: Documentation & Maintainability
+*누구나 프로젝트를 이해하고 기여할 수 있도록 프로젝트의 완성도를 높입니다.*
+
+- [ ] #48 README.md 상세 문서화
+- [ ] #49 코드 내 Docstring 작성
+
+---
+
+### 🧩 Epic 4: Strategy & Extensibility
+*장기적으로 다양한 전략을 쉽게 추가하고 실험할 수 있는 유연한 구조를 만듭니다.*
+
+- [ ] #50 설정 기반 전략 로딩 구조로 리팩토링
 
 ## 연락처 정보
 
