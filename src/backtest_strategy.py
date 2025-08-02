@@ -1,3 +1,9 @@
+"""
+backtest_strategy.py
+
+This module contains the CPU-based backtesting logic for the Magic Split Strategy.
+"""
+
 import matplotlib
 matplotlib.use('Agg')  # 그래프를 파일로 저장하기 위해 'Agg' 백엔드를 사용
 

@@ -1,3 +1,9 @@
+"""
+main_script.py
+
+This module contains the main script for running the data pipeline for the Magic Split Strategy.
+"""
+
 from datetime import datetime
 import os
 import warnings
