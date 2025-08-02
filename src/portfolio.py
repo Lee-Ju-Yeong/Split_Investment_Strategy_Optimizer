@@ -67,3 +67,13 @@ class Portfolio:
 
     def record_daily_value(self, date, value):
         self.daily_value_history.append({'date': date, 'value': value})
+        
+    # --- 💡 추가: 종목 청산 로직 수정 시작 💡 ---
+    def liquidate_ticker(self, ticker):
+        """
+        포트폴리오 관리 목록에서 특정 종목을 완전히 제거합니다.
+        이는 1차 매수분이 매도되어 더 이상 해당 종목을 추적/관리하지 않을 때 호출됩니다.
+        """
+        if ticker in self.positions:
+            # 해당 종목의 모든 포지션 정보가 담긴 리스트 자체를 삭제
+            del self.positions[ticker]
