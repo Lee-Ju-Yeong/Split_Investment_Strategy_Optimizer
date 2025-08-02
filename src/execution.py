@@ -1,6 +1,6 @@
 import math
 from abc import ABC, abstractmethod
-from .portfolio import Trade
+from portfolio import Trade
 
 class ExecutionHandler(ABC):
     @abstractmethod
@@ -45,7 +45,7 @@ class BasicExecutionHandler(ExecutionHandler):
         
         current_price = data_handler.get_latest_price(current_date, ticker, start_date, end_date)
         
-        if current_price is None:
+        if current_price is None or math.isnan(current_price):
             return
 
         if order_type == 'BUY':
