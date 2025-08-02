@@ -282,6 +282,7 @@ def run_magic_split_strategy_on_gpu(
     initial_capital: float,
     param_combinations: cp.ndarray,
     all_data_gpu: cudf.DataFrame,
+    weekly_filtered_gpu: cudf.DataFrame,
     trading_date_indices: cp.ndarray,  # 💡 파라미터 이름 변경 (trading_dates -> trading_date_indices)
     trading_dates_pd_cpu: pd.DatetimeIndex, # 💡 새로운 파라미터 추가
     all_tickers: list,
@@ -310,7 +311,10 @@ def run_magic_split_strategy_on_gpu(
 
     print(f"    - State arrays created. Portfolio State Shape: {portfolio_state.shape}")
     print(f"    - Positions State Array Shape: {positions_state.shape}")
-
+    
+ # 💡 티커를 인덱스로 변환하는 딕셔너리를 미리 만들어 성능 향상
+    ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
+    
     # --- 2. Main Simulation Loop (Vectorized) ---
     previous_month = -1
     # 💡 정수 인덱스(0, 1, 2...)를 순회하도록 루프 변경
@@ -345,6 +349,61 @@ def run_magic_split_strategy_on_gpu(
             portfolio_state, positions_state = _process_additional_buy_signals_gpu(
                 portfolio_state, positions_state, param_combinations, current_prices
             )
+            # --- 💡 Process New Entry Signals 💡 ---
+            # 오늘 날짜에 해당하는 주간 필터링 종목 목록 가져오기
+            # 💡 'asof' 기능 수동 구현 시작
+            # 1. weekly_filtered_gpu의 인덱스를 일반 컬럼으로 되돌림 (필터링을 위해)
+            weekly_filtered_reset = weekly_filtered_gpu.reset_index()
+
+            # 2. 오늘을 포함한 과거 데이터만 필터링
+            past_data = weekly_filtered_reset[weekly_filtered_reset['date'] <= current_date]
+
+            candidates_of_the_week = cudf.DataFrame() # 초기화
+            if not past_data.empty:
+                # 3. 과거 데이터 중 가장 최근 날짜(MAX)의 데이터만 선택
+                most_recent_date = past_data['date'].max()
+                candidates_of_the_week = past_data[past_data['date'] == most_recent_date]
+            # 💡 'asof' 기능 수동 구현 끝
+            
+            candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+            candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+
+            if not candidates_of_the_week.empty:
+                # 후보 종목들의 티커를 인덱스로 변환
+                candidate_tickers_str = candidates_of_the_week['ticker'].to_arrow().to_pylist() # 💡 수정된 부분
+                candidate_indices = [ticker_to_idx.get(t) for t in candidate_tickers_str if ticker_to_idx.get(t) is not None]
+                
+                if candidate_indices:
+                    # 후보 종목들의 현재 ATR 값 가져오기
+                    # 💡 .loc 대신 불리언 마스킹으로 수정
+                    # 1. 인덱스를 일반 컬럼으로 리셋
+                    data_for_filtering = all_data_gpu.reset_index()
+                    
+                    # 2. 원하는 티커 목록과 날짜로 필터링
+                    mask_ticker = data_for_filtering['ticker'].isin(candidate_tickers_str)
+                    mask_date = data_for_filtering['date'] == current_date
+                    candidate_data_today = data_for_filtering[mask_ticker & mask_date]
+                    
+                    # 3. 다시 인덱스 설정 (필요 시)
+                    if not candidate_data_today.empty:
+                        candidate_data_today = candidate_data_today.set_index(['ticker', 'date'])
+
+                    if not candidate_data_today.empty:
+                        # atr_14_ratio가 있는 종목만 최종 후보로 선정
+                        valid_candidates = candidate_data_today.dropna(subset=['atr_14_ratio'])
+                        if not valid_candidates.empty:
+                            valid_tickers_str = valid_candidates.index.get_level_values('ticker').to_arrow().to_pylist() # 💡 tolist()도 수정
+                            valid_indices = [ticker_to_idx[t] for t in valid_tickers_str]
+                            
+                            candidate_tickers_for_day = cp.array(valid_indices, dtype=cp.int32)
+                            candidate_atrs_for_day = cp.asarray(valid_candidates['atr_14_ratio'].values)
+            
+            # 신규 진입 로직 실행
+            portfolio_state, positions_state = _process_new_entry_signals_gpu(
+                portfolio_state, positions_state, param_combinations, current_prices,
+                candidate_tickers_for_day, candidate_atrs_for_day, all_tickers
+            )
+            
             
             # --- Calculate and store daily portfolio values ---
             quantities = positions_state[..., 0]
@@ -360,3 +419,97 @@ def run_magic_split_strategy_on_gpu(
     print("🎉 GPU backtesting simulation finished.")
     
     return daily_portfolio_values
+
+
+def _process_new_entry_signals_gpu(
+    portfolio_state: cp.ndarray,
+    positions_state: cp.ndarray,
+    param_combinations: cp.ndarray,
+    current_prices: cp.ndarray,
+    candidate_tickers_for_day: cp.ndarray,  # 오늘 매수 후보군 티커의 '인덱스' 배열
+    candidate_atrs_for_day: cp.ndarray,     # 오늘 매수 후보군 티커의 ATR 값 배열
+    all_tickers: list
+):
+    """
+    Vectorized new entry signal processing for all simulations.
+
+    This function implements the new entry logic:
+    1. Identify simulations with available slots (max_stocks > current_stocks).
+    2. For those simulations, select top N candidates based on ATR.
+    3. Execute 1st order buy for the selected tickers.
+    """
+    num_combinations, num_stocks_total, max_splits, _ = positions_state.shape
+    
+    # --- Step 1: Calculate available slots for each simulation ---
+    # 현재 보유 종목 수 계산 (종목별로 하나라도 포지션이 있으면 1, 아니면 0)
+    has_any_position = cp.any(positions_state[..., 0] > 0, axis=2) # Shape: (num_combinations, num_stocks_total)
+    current_num_stocks = cp.sum(has_any_position, axis=1) # Shape: (num_combinations,)
+    
+    max_stocks_per_sim = param_combinations[:, 0]
+    available_slots = max_stocks_per_sim - current_num_stocks
+    available_slots = cp.maximum(0, available_slots).astype(cp.int32) # 음수 방지
+
+    sims_with_slots = available_slots > 0
+    if not cp.any(sims_with_slots):
+        return portfolio_state, positions_state # 살 수 있는 시뮬레이션이 없으면 즉시 종료
+
+    # --- Step 2: Prepare candidate data ---
+    # 오늘 진입 가능한 후보가 없으면 종료
+    if candidate_tickers_for_day.size == 0:
+        return portfolio_state, positions_state
+
+    # ATR 기준으로 후보군 내림차순 정렬 (이미 정렬되었다고 가정하지만, 안전하게 한번 더)
+    sort_indices = cp.argsort(candidate_atrs_for_day)[::-1]
+    sorted_candidate_indices = candidate_tickers_for_day[sort_indices]
+
+    # --- Step 3: Iterate through candidates and execute buys ---
+    # 이 부분은 순차적으로 처리해야 함 (최상위 후보부터 슬롯을 채워나가야 하므로)
+    # 하지만 시뮬레이션 간에는 병렬 처리가 가능
+    
+    investment_per_order = portfolio_state[:, 1] # Shape: (num_combinations,)
+    current_capital = portfolio_state[:, 0]     # Shape: (num_combinations,)
+    
+    # 한 번에 한 종목씩 처리
+    for i in range(len(sorted_candidate_indices)):
+        ticker_idx = sorted_candidate_indices[i]
+        
+        # 모든 시뮬레이션이 꽉 찼으면 루프 종료
+        if cp.all(available_slots <= 0):
+            break
+
+        # 이 종목을 아직 보유하지 않은 시뮬레이션 찾기
+        is_not_holding = ~has_any_position[:, ticker_idx]
+        
+        # 이 종목을 매수할 수 있는 시뮬레이션의 최종 조건
+        # 1. 슬롯이 있고 (available_slots > 0)
+        # 2. 이 종목을 보유하지 않았고 (is_not_holding)
+        # 3. 자본이 충분한가 (아래에서 계산)
+        
+        stock_price = current_prices[ticker_idx]
+        if stock_price <= 0: continue # 가격이 0이거나 음수면 스킵
+
+        required_capital = stock_price * (investment_per_order / stock_price).astype(cp.int32)
+        has_capital = current_capital >= required_capital
+
+        # 최종 매수 대상 시뮬레이션 마스크
+        buy_mask = (available_slots > 0) & is_not_holding & has_capital
+
+        # 매수 실행
+        if cp.any(buy_mask):
+            # 매수 수량 계산
+            quantity_to_buy = (investment_per_order[buy_mask] / stock_price).astype(cp.int32)
+            
+            # positions_state 업데이트
+            positions_state[buy_mask, ticker_idx, 0, 0] = quantity_to_buy # 1차(order 0)에 수량 기록
+            positions_state[buy_mask, ticker_idx, 0, 1] = stock_price   # 1차(order 0)에 매수가 기록
+
+            # 자본 차감
+            cost = quantity_to_buy * stock_price
+            portfolio_state[buy_mask, 0] -= cost
+            
+            # 매수한 시뮬레이션의 정보 업데이트
+            available_slots[buy_mask] -= 1
+            has_any_position[buy_mask, ticker_idx] = True
+            current_capital[buy_mask] -= cost # 다음 후보 처리를 위해 현재 자본 즉시 업데이트
+            
+    return portfolio_state, positions_state
