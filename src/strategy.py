@@ -7,7 +7,7 @@ This module contains the functions for generating the signals for the Magic Spli
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-from portfolio import Position
+from .portfolio import Position
 
 class Strategy(ABC):
     @abstractmethod
@@ -45,10 +45,10 @@ class MagicSplitStrategy(Strategy):
 
         existing_pos_signals = self._generate_signals_for_existing_positions(current_date, portfolio, data_handler)
         for s in existing_pos_signals:
-            if s['type'] == 'SELL':
-                sell_signals.append(s)
-            else:
+            if s['type'] == 'BUY':
                 buy_signals.append(s)
+            else:  # 'SELL' 또는 'LIQUIDATE_TICKER' 신호
+                sell_signals.append(s)
 
         if len(portfolio.positions) < self.max_stocks:
             new_entry_signals = self._generate_signals_for_new_entries(current_date, portfolio, data_handler)
