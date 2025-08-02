@@ -66,18 +66,36 @@ class MagicSplitStrategy(Strategy):
 
             row = stock_data.loc[current_date]
             positions = portfolio.positions[ticker]
+            # --- 💡 매도 로직 수정 시작 💡 ---
             
-            first_pos = next((p for p in positions if p.order == 1), None)
+            # 1. 모든 포지션을 개별적으로 순회하며 매도 조건 확인
+            positions_to_sell = []
+            is_first_position_sold = False
 
-            # 1. 전체 매도 조건 (1차 매수 기준)
-            if first_pos and row['close_price'] > first_pos.buy_price * (1 + self.sell_profit_rate):
-                for p in positions:
-                    signals.append({'date': current_date, 'ticker': ticker, 'type': 'SELL', 'quantity': p.quantity, 'position': p})
-            # 2. 전체 매도 조건이 아닐 경우에만, 2차 이상 포지션의 부분 매도 확인
-            else:
-                positions_to_sell_partially = [p for p in positions if p.order > 1 and row['close_price'] >= p.buy_price * (1 + self.sell_profit_rate)]
-                for p in positions_to_sell_partially:
-                    signals.append({'date': current_date, 'ticker': ticker, 'type': 'SELL', 'quantity': p.quantity, 'position': p})
+            for p in positions:
+                if row['close_price'] >= p.buy_price * (1 + self.sell_profit_rate):
+                    # 매도 신호 생성
+                    signals.append({
+                        'date': current_date, 
+                        'ticker': ticker, 
+                        'type': 'SELL', 
+                        'quantity': p.quantity, 
+                        'position': p # 어떤 포지션을 팔지 명시
+                    })
+                    
+                    # 1차 포지션이 팔렸는지 여부 플래그
+                    if p.order == 1:
+                        is_first_position_sold = True
+            
+            # 2. 1차 포지션이 팔렸다면, '종목 청산' 신호를 추가
+            if is_first_position_sold:
+                signals.append({
+                    'date': current_date,
+                    'ticker': ticker,
+                    'type': 'LIQUIDATE_TICKER' # 포트폴리오에서 이 종목을 제거하라는 신호
+                })
+
+            # --- 💡 매도 로직 수정 끝 💡 ---
             
             # 3. 추가 매수 조건 (매도 조건과 별개로 항상 체크)
             last_pos = positions[-1] if positions else None

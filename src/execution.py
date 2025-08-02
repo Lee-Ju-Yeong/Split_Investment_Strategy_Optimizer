@@ -38,6 +38,12 @@ class BasicExecutionHandler(ExecutionHandler):
     def execute_order(self, order_event, portfolio, data_handler):
         ticker = order_event['ticker']
         order_type = order_event['type']
+        # --- 💡 수정: LIQUIDATE_TICKER 신호는 quantity, price 등이 없으므로 먼저 처리 ---
+        if order_type == 'LIQUIDATE_TICKER':
+            portfolio.liquidate_ticker(ticker) # 포트폴리오에서 해당 종목 관리 중단
+            # print(f"{order_event['date'].strftime('%Y-%m-%d')}: 종목 {ticker} 포트폴리오에서 청산됨.") # 로그 필요 시 주석 해제
+            return # 이 신호는 매매가 아니므로 여기서 함수 종료
+        
         quantity = order_event['quantity']
         current_date = order_event['date']
         start_date = order_event['start_date']
