@@ -58,7 +58,9 @@ class DataHandler:
             return None
         
         try:
-            return stock_data.asof(date)['close_price']
+            # datetime.date 객체를 Timestamp로 변환
+            target_date = pd.to_datetime(date)
+            return stock_data.asof(target_date)['close_price']
         except (KeyError, IndexError):
             return None
 
@@ -89,5 +91,5 @@ if __name__ == '__main__':
     stock_data = data_handler.load_stock_data('005930', '2022-01-01', '2023-12-31')
     print("\nSamsung Electronics Data (005930):")
     print(stock_data.head())
-    price = data_handler.get_latest_price('2022-01-10', '005930', '2022-01-01', '2023-12-31')
+    price = data_handler.get_latest_price(date(2022, 1, 10), '005930', '2022-01-01', '2023-12-31')
     print(f"\nPrice of 005930 on or before 2022-01-10: {price}")
