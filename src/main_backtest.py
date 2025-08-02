@@ -12,6 +12,7 @@ from .strategy import MagicSplitStrategy
 from .portfolio import Portfolio
 from .execution import BasicExecutionHandler
 from .backtester import BacktestEngine
+from .performance_analyzer import PerformanceAnalyzer 
 
 # 프로그램 전역에서 pandas의 UserWarning을 무시하도록 설정
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
@@ -54,25 +55,58 @@ def main():
     
     final_portfolio = engine.run()
 
-    print("\n--- 백테스팅 결과 ---")
-    print(f"초기 자산: {initial_cash:,.0f} 원")
-    final_value = final_portfolio.daily_value_history[-1]['value'] if final_portfolio.daily_value_history else initial_cash
-    print(f"최종 자산: {final_value:,.0f} 원")
+    # 1. PerformanceAnalyzer를 이용한 거시적 성과 리포트 출력
+    history_df = pd.DataFrame(final_portfolio.daily_value_history)
+    history_df['date'] = pd.to_datetime(history_df['date'])
+    history_df.set_index('date', inplace=True)
+    daily_values = history_df['value']
+
+    try:
+        analyzer = PerformanceAnalyzer(daily_values)
+        
+        print("\n" + "="*50)
+        print("📈 백테스팅 성과 요약 (거시 분석)")
+        print("="*50)
+        formatted_metrics = analyzer.get_metrics(formatted=True)
+        for key, value in formatted_metrics.items():
+            print(f"{key:<30}: {value}")
+        print("="*50)
+        
+        analyzer.plot_equity_curve(save_path="latest_single_test_report.png")
+
+    except ValueError as e:
+        print(f"성과 분석 중 오류 발생: {e}")
+
+    # 2. 기존 코드를 활용한 미시적 상세 정보 출력 (순서만 뒤로)
+    print("\n" + "="*50)
+    print("📂 백테스팅 상세 정보 (미시 분석)")
+    print("="*50)
 
     print("\n--- 최종 보유 포지션 ---")
     if not final_portfolio.positions:
         print("보유 중인 포지션이 없습니다.")
     else:
+        # 최종 포지션을 보기 좋게 데이터프레임으로 변환
+        positions_list = []
         for ticker, positions in final_portfolio.positions.items():
             for pos in positions:
-                print(f"종목: {ticker}, 차수: {pos.order}, 수량: {pos.quantity}, 매수가: {pos.buy_price:,.0f} 원")
+                positions_list.append({
+                    '종목코드': ticker,
+                    '차수': pos.order,
+                    '수량': pos.quantity,
+                    '매수가': f"{pos.buy_price:,.0f}"
+                })
+        positions_df = pd.DataFrame(positions_list)
+        print(positions_df.to_string())
 
-    print("\n--- 전체 거래 내역 ---")
+    print("\n--- 전체 거래 내역 (최근 20건) ---")
     if not final_portfolio.trade_history:
         print("거래 내역이 없습니다.")
     else:
         trade_df = pd.DataFrame([vars(t) for t in final_portfolio.trade_history])
-        print(trade_df.to_string())
+        # 너무 길 수 있으니 최근 20건만 출력하거나, 파일로 저장
+        print(trade_df[['date', 'code', 'trade_type', 'order', 'quantity', 'buy_price', 'sell_price', 'profit']].tail(20).to_string())
+        # trade_df.to_csv("latest_trade_history.csv", index=False) # 전체 내역은 파일로 저장
 
 if __name__ == "__main__":
     main()
