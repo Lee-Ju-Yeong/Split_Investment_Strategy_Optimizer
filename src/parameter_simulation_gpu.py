@@ -102,12 +102,36 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
     
     return gdf
 
+def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
+    """
+    Loads all weekly filtered stock codes for the backtest period into a
+    cuDF DataFrame.
+    """
+    print("⏳ Loading weekly filtered stocks data to GPU memory...")
+    start_time = time.time()
+    
+    # WeeklyFilteredStocks 테이블에서 해당 기간의 모든 데이터를 가져옴
+    query =  f"""
+    SELECT `filter_date` as date, `stock_code` as ticker
+    FROM WeeklyFilteredStocks
+    WHERE `filter_date` BETWEEN '{start_date}' AND '{end_date}'
+    """
+    sql_engine = create_engine(engine)
+    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
+    
+    # cuDF로 변환
+    gdf = cudf.from_pandas(df_pd)
+    gdf = gdf.set_index('date')
+    
+    end_time = time.time()
+    print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s")
+    return gdf
 
 # -----------------------------------------------------------------------------
 # 3. GPU Backtesting Kernel (to be implemented)
 # -----------------------------------------------------------------------------
 
-def run_backtest_on_gpu(params_gpu, data_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd):
+def run_backtest_on_gpu(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd):
     """
     Runs the actual GPU-accelerated backtesting using the implemented 
     MagicSplitStrategy kernel.
@@ -125,6 +149,7 @@ def run_backtest_on_gpu(params_gpu, data_gpu, all_tickers, trading_date_indices_
         initial_capital=initial_capital,
         param_combinations=params_gpu,
         all_data_gpu=data_gpu,
+        weekly_filtered_gpu=weekly_filtered_gpu,
         trading_date_indices=trading_date_indices_gpu,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
@@ -156,6 +181,9 @@ if __name__ == "__main__":
     
     # 1. Pre-load all data to GPU
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
+    # 💡 새로운 데이터 로더 호출: 주간 필터링된 종목 데이터 로드
+    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
+    
     
     # --- 💡 수정된 부분 시작 💡 ---
 
@@ -186,6 +214,7 @@ if __name__ == "__main__":
     total_returns, daily_values = run_backtest_on_gpu(
         param_combinations, 
         all_data_gpu, 
+        weekly_filtered_gpu, # 💡 새로운 인자 추가
         all_tickers, 
         trading_date_indices_gpu,  # 💡 정수형 인덱스를 전달
         trading_dates_pd           # 💡 실제 날짜 객체 배열(Pandas DatetimeIndex)도 함께 전달
