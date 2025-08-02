@@ -1,3 +1,9 @@
+"""
+single_backtest.py
+
+This module contains the functions for running the single backtest for the Magic Split Strategy.
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt

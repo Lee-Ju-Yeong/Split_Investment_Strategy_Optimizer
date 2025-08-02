@@ -1,3 +1,9 @@
+"""
+strategy.py
+
+This module contains the functions for generating the signals for the Magic Split Strategy.
+"""
+
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
