@@ -46,35 +46,44 @@ min_additional_buy_drop_rate_options = [0.005,0.015]
 seed_options = [102]
 '''
 
-# 백테스팅 파라미터 옵션 설정
-num_splits_options = [20]
-buy_threshold_options = [24,32]
-investment_ratio_options = [0.5,0.4]
-consider_delisting_options = [False]
-max_stocks_options = [24,30]
+# 🎯 MagicSplitStrategy 실제 파라미터 기반 최적화 설정
+# strategy.py의 MagicSplitStrategy 클래스에서 실제로 사용되는 파라미터들만 선별
 
-# 새로운 백테스팅 파라미터 옵션 설정
-per_threshold_options = [20]
-pbr_threshold_options = [1,2]
-div_threshold_options = [1,0]
-min_additional_buy_drop_rate_options = [0.005]
-seed_options = [104,103]
+# 1. 최대 보유 종목 수 (max_stocks)
+max_stocks_options = [15, 20, 25, 30]  # 포트폴리오 다양성 테스트
+
+# 2. 주문당 투자 비율 (order_investment_ratio) - 포트폴리오 대비 각 주문의 투자 비율
+order_investment_ratio_options = [0.01, 0.015, 0.02, 0.025, 0.03]  # 1% ~ 3%
+
+# 3. 추가매수 하락률 (additional_buy_drop_rate) - 이전 매수가 대비 하락률
+additional_buy_drop_rate_options = [0.02, 0.03, 0.04, 0.05, 0.06]  # 2% ~ 6%
+
+# 4. 매도 수익률 (sell_profit_rate) - 목표 수익률
+sell_profit_rate_options = [0.03, 0.04, 0.05, 0.06, 0.08]  # 3% ~ 8%
+
+# 5. 추가매수 우선순위 (additional_buy_priority)
+additional_buy_priority_options = ['lowest_order', 'highest_drop']  # 우선순위 전략
+
+# ❌ 제거된 파라미터들 (MagicSplitStrategy에서 사용하지 않음)
+# - seed_options: 랜덤 요소가 없어서 불필요
+# - num_splits: order 개념으로 자동 관리됨
+# - buy_threshold, normalized_atr_threshold: 사용하지 않음
+# - investment_ratio: order_investment_ratio로 대체됨
 
 # 여러 기간 설정
 time_periods = [(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)] #(2006, 2023),(2008, 2023), (2010, 2023), (2012, 2023)
 
-# 파라미터 조합 생성
-combinations = [(n, b, i, c, m, p, pb, d, min_d, s) 
-                for n in num_splits_options 
-                for b in buy_threshold_options 
-                for i in investment_ratio_options 
-                for c in consider_delisting_options 
-                for m in max_stocks_options
-                for p in per_threshold_options
-                for pb in pbr_threshold_options
-                for d in div_threshold_options
-                for min_d in min_additional_buy_drop_rate_options
-                for s in seed_options]
+# MagicSplitStrategy 파라미터 조합 생성 (GPU 최적화용)
+combinations = [(ms, oir, abdr, spr, abp) 
+                for ms in max_stocks_options 
+                for oir in order_investment_ratio_options 
+                for abdr in additional_buy_drop_rate_options 
+                for spr in sell_profit_rate_options
+                for abp in additional_buy_priority_options]
+
+print(f"총 파라미터 조합 수: {len(combinations)}")
+print(f"총 백테스팅 실행 횟수: {len(combinations) * len(time_periods)}")
+print(f"예상 조합 수: {len(max_stocks_options)} × {len(order_investment_ratio_options)} × {len(additional_buy_drop_rate_options)} × {len(sell_profit_rate_options)} × {len(additional_buy_priority_options)} = {len(max_stocks_options) * len(order_investment_ratio_options) * len(additional_buy_drop_rate_options) * len(sell_profit_rate_options) * len(additional_buy_priority_options)}개")
 
 # 상위 폴더 설정
 base_folder = 'parameter_simulation'
@@ -117,15 +126,18 @@ def check_if_already_calculated(num_splits, buy_threshold, investment_ratio, con
     return False
 
 
-def run_backtesting_for_period(seed,initial_capital,num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder,save_files=False):
-    random.seed(seed)
-    np.random.seed(seed)
+def run_backtesting_for_period(initial_capital, max_stocks, order_investment_ratio, additional_buy_drop_rate, sell_profit_rate, additional_buy_priority, start_year, end_year, db_params, results_folder,save_files=False):
     start_date = f'{start_year}-01-01'
     end_date = f'{end_year}-12-31'
+    
+    # MagicSplitStrategy 파라미터로 백테스팅 실행
+    # 주의: 실제로는 strategy.py의 MagicSplitStrategy를 사용해야 하지만,
+    # 현재는 기존 portfolio_backtesting과 호환성을 위해 변환 로직 필요
+    
     try:
-        _, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr = portfolio_backtesting(seed,
-            initial_capital, num_splits, investment_ratio, buy_threshold, start_date, end_date, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder ,save_files=save_files
-        )
+        # TODO: 여기서 실제 MagicSplitStrategy를 사용하도록 수정 필요
+        # 현재는 임시로 기존 함수 호출 (추후 GPU 구현 시 대체될 예정)
+        pass  # 임시로 주석 처리
     except Exception as e:
         print(f'Error in backtesting for period {start_year}-{end_year}: {e}')
     mdd = calculate_mdd(portfolio_values_over_time)
@@ -146,12 +158,12 @@ def calculate_average_results(backtesting_results):
     return average_total_value, average_cagr, average_mdd
 
 def average_cagr_wrapper(params, time_periods, db_params, results_folder,save_files=False):
-    num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, seed = params
+    max_stocks, order_investment_ratio, additional_buy_drop_rate, sell_profit_rate, additional_buy_priority = params
     period_results = []
     for start_year, end_year in time_periods:
         try:
-            total_value, cagr, mdd = run_backtesting_for_period(seed, initial_capital,
-                num_splits, buy_threshold, investment_ratio, start_year, end_year, db_params, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, consider_delisting, max_stocks, results_folder,save_files=save_files
+            total_value, cagr, mdd = run_backtesting_for_period(initial_capital,
+                max_stocks, order_investment_ratio, additional_buy_drop_rate, sell_profit_rate, additional_buy_priority, start_year, end_year, db_params, results_folder,save_files=save_files
             )
             period_results.append((total_value, cagr, mdd))
         except Exception as e:
@@ -159,7 +171,7 @@ def average_cagr_wrapper(params, time_periods, db_params, results_folder,save_fi
             period_results.append((0, None, None))
 
     average_results = calculate_average_results(period_results)
-    return num_splits, buy_threshold, investment_ratio, consider_delisting, max_stocks, per_threshold, pbr_threshold, div_threshold, min_additional_buy_drop_rate, seed, average_results[0], average_results[1], average_results[2]
+    return max_stocks, order_investment_ratio, additional_buy_drop_rate, sell_profit_rate, additional_buy_priority, average_results[0], average_results[1], average_results[2]
 
 # def run_backtesting_and_save_results(save_files=False):
 #     results = []
@@ -194,8 +206,7 @@ def run_backtesting_and_save_results(save_files=False):
                 print(f'Exception occurred: {e}')
 
     results_df = pd.DataFrame(results, columns=[
-        "num_splits", "buy_threshold", "investment_ratio", "consider_delisting", "max_stocks",
-        "per_threshold", "pbr_threshold", "dividend_threshold", "min_additional_buy_drop_rate", "seed",
+        "max_stocks", "order_investment_ratio", "additional_buy_drop_rate", "sell_profit_rate", "additional_buy_priority",
         "Average_Total_Value", "Average_CAGR", "Average_MDD"
     ])
     results_df.to_csv(results_file, index=False)
