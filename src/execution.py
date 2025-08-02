@@ -6,7 +6,7 @@ This module contains the functions for executing the orders for the Magic Split 
 
 import math
 from abc import ABC, abstractmethod
-from portfolio import Trade
+from .portfolio import Trade
 
 class ExecutionHandler(ABC):
     @abstractmethod
