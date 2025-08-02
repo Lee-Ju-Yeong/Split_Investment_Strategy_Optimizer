@@ -1,3 +1,9 @@
+"""
+execution.py
+
+This module contains the functions for executing the orders for the Magic Split Strategy.
+"""
+
 import math
 from abc import ABC, abstractmethod
 from portfolio import Trade

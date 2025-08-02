@@ -1,3 +1,9 @@
+"""
+company_info_manager.py
+
+This module contains the functions for managing the company information cache.
+"""
+
 import pandas as pd
 from pykrx import stock
 import time

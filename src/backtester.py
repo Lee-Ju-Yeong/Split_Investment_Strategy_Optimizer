@@ -1,3 +1,9 @@
+"""
+backtester.py
+
+This module contains the backtesting engine for the Magic Split Strategy.
+"""
+
 from tqdm import tqdm
 import pandas as pd
 

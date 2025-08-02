@@ -1,3 +1,9 @@
+"""
+portfolio.py
+
+This module contains the functions for managing the portfolio for the Magic Split Strategy.
+"""
+
 import pandas as pd
 import numpy as np
 

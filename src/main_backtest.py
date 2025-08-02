@@ -1,3 +1,9 @@
+"""
+main_backtest.py
+
+This module contains the main function for running the backtest for the Magic Split Strategy.
+"""
+
 import warnings
 import configparser
 import pandas as pd
