@@ -2,7 +2,15 @@
 import pandas as pd
 import numpy as np
 import time
+import warnings
 from datetime import datetime, timedelta
+
+# pandas SQLAlchemy 경고 메시지 억제
+warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
+
+# GPU 버전 함수 임포트
+from src.indicator_calculator_gpu import calculate_indicators_gpu
+
 
 def get_ohlcv_from_db(conn, ticker_code):
     """
@@ -129,12 +137,12 @@ def save_indicators_to_db(conn, ticker_code, df_indicators):
         conn.rollback()
 
 
-def calculate_and_store_indicators_for_all(conn):
+def calculate_and_store_indicators_for_all(conn, use_gpu=False):
     """
     모든 종목에 대해 지표를 계산하고 저장하는 메인 함수
     """
     print("\n" + "="*50)
-    print("STEP 4: 기술적/변동성 지표 계산 및 저장 시작")
+    print(f"STEP 4: 기술적/변동성 지표 계산 및 저장 시작 (Mode: {'GPU' if use_gpu else 'CPU'})")
     print("="*50)
 
     try:
@@ -146,15 +154,23 @@ def calculate_and_store_indicators_for_all(conn):
         print(f"  [오류] DailyStockPrice에서 종목코드 로드 중: {e}")
         return
 
+    total_start_time = time.time()
     for i, ticker_code in enumerate(all_tickers):
         print(f"\n  ({i+1}/{len(all_tickers)}) {ticker_code} 지표 계산 중...")
         
         df_ohlcv = get_ohlcv_from_db(conn, ticker_code)
         if df_ohlcv.empty:
             continue
-            
-        df_indicators = calculate_indicators(df_ohlcv)
         
+        calc_start_time = time.time()
+        if use_gpu:
+            df_indicators = calculate_indicators_gpu(df_ohlcv)
+        else:
+            df_indicators = calculate_indicators(df_ohlcv)
+        calc_end_time = time.time()
+        print(f"    - {ticker_code}: 지표 계산 완료 (소요 시간: {calc_end_time - calc_start_time:.4f}초)")
+            
         save_indicators_to_db(conn, ticker_code, df_indicators)
-
-    print("\n--- 모든 종목의 지표 계산 및 저장 완료 ---")
+    
+    total_end_time = time.time()
+    print(f"\n--- 모든 종목의 지표 계산 및 저장 완료 (총 소요 시간: {total_end_time - total_start_time:.2f}초) ---")
