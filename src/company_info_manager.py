@@ -3,7 +3,7 @@ from pykrx import stock
 import time
 from datetime import datetime
 # from sqlalchemy import text # SQLAlchemy 의존성 제거
-from .db_setup import get_db_connection # MySQL 연결 함수 임포트
+from db_setup import get_db_connection # MySQL 연결 함수 임포트
 
 # 전역 변수로 사용할 인메모리 캐시
 STOCK_NAME_TO_CODE_CACHE = {}

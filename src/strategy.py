@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-from .portfolio import Position
+from portfolio import Position
 
 class Strategy(ABC):
     @abstractmethod
-    def generate_signals(self, current_date, portfolio, data_handler, end_date):
+    def generate_signals(self, current_date, portfolio, data_handler):
         raise NotImplementedError("generate_signals() 메소드를 구현해야 합니다.")
 
 class MagicSplitStrategy(Strategy):
