@@ -1,3 +1,9 @@
+"""
+parameter_simulation.py
+
+This module contains the functions for running the parameter simulation for the Magic Split Strategy.
+"""
+
 import os
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor

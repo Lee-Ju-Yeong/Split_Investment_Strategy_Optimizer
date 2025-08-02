@@ -30,9 +30,9 @@ db_connection_str = f'mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}'
 
 # Define the parameter space to be tested
 max_stocks_options = cp.array([15, 30], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015, 0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03, 0.04], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03, 0.05], dtype=cp.float32)
+order_investment_ratio_options = cp.array([0.015, 0.022, 0.03], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
 additional_buy_priority_options = cp.array([0, 1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # Create all combinations using CuPy's broadcasting capabilities
@@ -174,8 +174,8 @@ def run_backtest_on_gpu(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, 
 
 if __name__ == "__main__":
     # 소규모 테스트를 위한 짧은 기간 설정
-    backtest_start_date = '2023-01-01'
-    backtest_end_date = '2023-01-31'  # 1개월 테스트
+    backtest_start_date = '2015-01-01'
+    backtest_end_date = '2025-01-01'  # 1개월 테스트
     
     print(f"📅 테스트 기간: {backtest_start_date} ~ {backtest_end_date}")
     

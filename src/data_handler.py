@@ -1,3 +1,9 @@
+"""
+data_handler.py
+
+This module contains the functions for handling the data for the Magic Split Strategy.
+"""
+
 import pandas as pd
 import mysql.connector
 from mysql.connector import pooling
