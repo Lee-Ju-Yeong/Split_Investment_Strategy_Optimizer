@@ -11,6 +11,9 @@ import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
 import configparser
+# --- 필요한 모듈 추가 임포트 ---
+from src.config_loader import load_config
+from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
@@ -18,15 +21,17 @@ import configparser
 
 import urllib.parse
 
-# Load database configuration
-config = configparser.ConfigParser()
-config.read('config.ini')
-db_user = config['mysql']['user']
-# URL encode the password to handle special characters like '@'
-db_pass = urllib.parse.quote_plus(config['mysql']['password'])
-db_host = config['mysql']['host']
-db_name = config['mysql']['database']
-db_connection_str = f'mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}'
+# --- 설정 파일 로드 (YAML 로더로 통일) ---
+config = load_config()
+db_config = config['database']
+backtest_settings = config['backtest_settings']
+
+# URL 인코딩을 포함하여 DB 연결 문자열 생성
+db_pass_encoded = urllib.parse.quote_plus(db_config['password'])
+db_connection_str = (
+    f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}"
+    f"@{db_config['host']}/{db_config['database']}"
+)
 
 # Define the parameter space to be tested
 max_stocks_options = cp.array([15, 30], dtype=cp.int32)
@@ -131,22 +136,15 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
 # 3. GPU Backtesting Kernel (to be implemented)
 # -----------------------------------------------------------------------------
 
-def run_backtest_on_gpu(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd):
+def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value):
     """
-    Runs the actual GPU-accelerated backtesting using the implemented 
-    MagicSplitStrategy kernel.
+    GPU-accelerated backtesting을 오케스트레이션합니다.
     """
     print("🚀 Starting GPU backtesting kernel...")
     
-    # Import the actual GPU backtesting function
-    from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
-    
-    # Set initial capital (1억 원)
-    initial_cash = 100000000.0
-    
-    # Run the complete GPU backtesting
+    # GPU 백테스팅 함수 직접 호출
     daily_portfolio_values = run_magic_split_strategy_on_gpu(
-        initial_cash=initial_cash,
+        initial_cash=initial_cash_value, # <<< 수정된 인자 이름 및 외부에서 받은 값 사용
         param_combinations=params_gpu,
         all_data_gpu=data_gpu,
         weekly_filtered_gpu=weekly_filtered_gpu,
@@ -173,9 +171,9 @@ def run_backtest_on_gpu(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, 
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # 소규모 테스트를 위한 짧은 기간 설정
-    backtest_start_date = '2015-01-01'
-    backtest_end_date = '2025-01-01'  # 1개월 테스트
+    backtest_start_date = backtest_settings['start_date']
+    backtest_end_date = backtest_settings['end_date']
+    initial_cash = backtest_settings['initial_cash'] # <<< config에서 초기 자본 가져오기
     
     print(f"📅 테스트 기간: {backtest_start_date} ~ {backtest_end_date}")
     
@@ -211,13 +209,15 @@ if __name__ == "__main__":
     print(f"\n🚀 {num_combinations}개 파라미터 조합으로 GPU 백테스팅 시작...")
     start_time = time.time()
     
-    total_returns, daily_values = run_backtest_on_gpu(
+    # 함수 이름 변경 및 initial_cash 전달
+    total_returns, daily_values = run_gpu_optimization(
         param_combinations, 
         all_data_gpu, 
-        weekly_filtered_gpu, # 💡 새로운 인자 추가
+        weekly_filtered_gpu,
         all_tickers, 
-        trading_date_indices_gpu,  # 💡 정수형 인덱스를 전달
-        trading_dates_pd           # 💡 실제 날짜 객체 배열(Pandas DatetimeIndex)도 함께 전달
+        trading_date_indices_gpu,
+        trading_dates_pd,
+        initial_cash # <<< config에서 읽어온 값을 전달
     )
     
     end_time = time.time()
