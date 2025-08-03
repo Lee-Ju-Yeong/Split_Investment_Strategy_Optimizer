@@ -2,9 +2,26 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
 # C extensions
 *.so
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# local database
+*.db
+*.db-journal
+*.db-lock
+*.db-trace
+*.sqlite3
 
 # Distribution / packaging
 .Python
@@ -111,6 +128,9 @@ venv.bak/
 *.iml
 *.iws
 *.ipr
+.vscode/
+# os specific
+.DS_Store
 
 # Logs
 logs/
@@ -120,6 +140,14 @@ logs/
 results/
 *.csv
 *.h5
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.xlsx
+*.xls
 
 # Config
 config.ini
