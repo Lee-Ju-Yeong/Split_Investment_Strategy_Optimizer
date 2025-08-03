@@ -43,7 +43,9 @@ def run_backtest_from_config(config: dict) -> dict:
         paths = config['paths']
     except KeyError as e:
         return {"error": f"설정 파일에 필요한 키가 없습니다: {e}"}
-
+    # --- ★★★ 1. 설정 파일에서 save_full_trade_history 옵션 읽기 ★★★ ---
+    # .get()을 사용하여 키가 없어도 에러가 나지 않고 기본값 False를 사용하도록 함
+    should_save_trades = backtest_settings.get('save_full_trade_history', False)
     start_date = backtest_settings['start_date']
     end_date = backtest_settings['end_date']
     initial_cash = backtest_settings['initial_cash']
@@ -95,8 +97,14 @@ def run_backtest_from_config(config: dict) -> dict:
         )
         
         trade_df = pd.DataFrame([vars(t) for t in final_portfolio.trade_history])
-        if not trade_df.empty:
-            trade_df.to_csv(os.path.join(result_dir, trade_filename), index=False, encoding='utf-8-sig')
+        trade_filepath_for_response = None  # 기본값은 None
+        
+        if not trade_df.empty and should_save_trades:
+            trade_filename = "full_trade_history.csv" # 파일 이름 변경
+            trade_filepath = os.path.join(result_dir, trade_filename)
+            trade_df.to_csv(trade_filepath, index=False, encoding='utf-8-sig')
+            trade_filepath_for_response = trade_filepath.replace('\\', '/')
+            print(f"상세 거래 내역이 '{trade_filepath_for_response}'에 저장되었습니다.")
 
         # 3-3. 미시적 정보(최종 포지션, 거래 내역) 생성
         final_positions_list = []
@@ -120,7 +128,7 @@ def run_backtest_from_config(config: dict) -> dict:
             "success": True,
             "metrics": raw_metrics,
             "plot_file_path": os.path.join(result_dir, plot_filename).replace('\\', '/'),
-            "trade_file_path": os.path.join(result_dir, trade_filename).replace('\\', '/'),
+            "trade_file_path": trade_filepath_for_response,
             "daily_values": daily_values.reset_index().rename(columns={'date': 'x', 'value': 'y'}).to_dict('records'),
             "final_positions": final_positions_list,
             "trade_history": trade_history_list
