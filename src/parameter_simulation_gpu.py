@@ -158,7 +158,7 @@ def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers,
     
     # Calculate final results for each parameter combination
     final_values = daily_portfolio_values[:, -1]  # Last day values
-    initial_values = cp.full(len(params_gpu), initial_cash, dtype=cp.float32)
+    initial_values = cp.full(len(params_gpu), initial_cash_value, dtype=cp.float32)
     
     # Calculate total returns
     total_returns = (final_values / initial_values) - 1
