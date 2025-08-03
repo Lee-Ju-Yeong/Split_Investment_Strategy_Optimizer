@@ -15,10 +15,9 @@ class Strategy(ABC):
         raise NotImplementedError("generate_signals() 메소드를 구현해야 합니다.")
 
 class MagicSplitStrategy(Strategy):
-    def __init__(self, initial_capital, max_stocks, order_investment_ratio, 
+    def __init__(self,  max_stocks, order_investment_ratio, 
                  additional_buy_drop_rate, sell_profit_rate, backtest_start_date, backtest_end_date,
-                 additional_buy_priority='lowest_order', consider_delisting=False):
-        self.initial_capital = initial_capital
+                 additional_buy_priority='lowest_order'):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
         self.additional_buy_drop_rate = additional_buy_drop_rate
@@ -26,7 +25,6 @@ class MagicSplitStrategy(Strategy):
         self.backtest_start_date = pd.to_datetime(backtest_start_date)
         self.backtest_end_date = pd.to_datetime(backtest_end_date)
         self.additional_buy_priority = additional_buy_priority
-        self.consider_delisting = consider_delisting
         self.investment_per_order = 0
         self.previous_month = -1
 

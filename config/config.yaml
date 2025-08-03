@@ -1,0 +1,36 @@
+# ===================================================================
+# Magic Split Strategy - Global Configuration
+# config.yaml
+# ===================================================================
+
+# --- 1. Database Connection ---
+database:
+  host: 172.21.224.1
+  user: root
+  password: "@waren2ss"
+  database: stocks
+
+# --- 2. Backtest Period & Capital ---
+backtest_settings:
+  start_date: '2023-12-01'
+  end_date: '2023-12-31'
+  initial_cash: 100000000
+
+# --- 3. Magic Split Strategy Parameters ---
+strategy_params:
+  max_stocks: 20
+  order_investment_ratio: 0.02
+  additional_buy_drop_rate: 0.04
+  sell_profit_rate: 0.04
+  additional_buy_priority: 'lowest_order'
+
+# --- 4. Execution Handler Parameters ---
+execution_params:
+  buy_commission_rate: 0.00015
+  sell_commission_rate: 0.00015
+  sell_tax_rate: 0.0018
+
+# --- 5. Result & Log Paths ---
+paths:
+  results_dir: "results/"
+  log_dir: "logs/"

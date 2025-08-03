@@ -1,83 +1,69 @@
+# app.py
+
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
 import os
-import pandas as pd
-import numpy as np
-import datetime
-import random
-import configparser
-from concurrent.futures import ThreadPoolExecutor
-from single_backtest import single_backtesting
-from backtest_strategy import calculate_mdd
+
+# --- 새로운 프레임워크의 컴포넌트 임포트 ---
+from main_backtest import run_backtest_from_config
+from config_loader import load_config
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
 
-# 설정 파일 읽기
-config = configparser.ConfigParser()
-config.read('config.ini')
-
-# 데이터베이스 연결 정보 설정
-db_params = {
-    'host': config['mysql']['host'],
-    'user': config['mysql']['user'],
-    'password': config['mysql']['password'],
-    'database': config['mysql']['database'],
-}
 
 @app.route('/')
 def index():
+    """메인 페이지를 렌더링합니다."""
     return render_template('index.html')
 
 @app.route('/run_backtest', methods=['POST'])
-def run_backtest():
-    data = request.json
-    initial_capital = int(data['initial-capital'])
-    num_splits = int(data['num-splits'])
-    investment_ratio = float(data['investment-ratio'])
-    pbr_threshold = float(data['pbr-threshold'])
-    per_threshold = float(data['per-threshold'])
-    div_threshold = float(data['dividend-threshold'])
-    buy_threshold = int(data['buy-threshold'])
-    start_date = data['start-date']
-    end_date = data['end-date']
-    consider_delisting = data['consider-delisting'] == 'on'
-    max_stocks = int(data['portfolio-size'])
-    seed = random.randint(0, 10000)
-    results_folder = "results_of_single_test"
+def run_backtest_endpoint():
+    """웹 UI로부터 백테스트 요청을 받아 실행하고 결과를 반환합니다."""
+    
+    # 1. 웹 UI에서 전송된 파라미터를 받음
+    form_data = request.json
+    
+    # 2. 기본 config.yaml 설정을 불러옴
+    try:
+        config = load_config('config.yaml')
+    except Exception as e:
+        return jsonify({"error": f"설정 파일 로딩 실패: {e}"}), 500
 
-    # 백테스팅 실행
-    positions_dict, total_portfolio_value, portfolio_values_over_time, capital_over_time, buy_signals, sell_signals, all_trading_dates, cagr,mdd= single_backtesting(
-        seed, num_splits, buy_threshold, investment_ratio, start_date, end_date,
-        per_threshold, pbr_threshold, div_threshold, 0.005, consider_delisting,
-        max_stocks, save_files=True
-    )
+    # 3. UI에서 받은 값으로 기본 설정을 덮어씀
+    #    (HTML 폼의 name 속성과 config.yaml의 키를 일치시키는 것이 좋음)
+    config['backtest_settings']['start_date'] = form_data.get('start_date', config['backtest_settings']['start_date'])
+    config['backtest_settings']['end_date'] = form_data.get('end_date', config['backtest_settings']['end_date'])
+    config['backtest_settings']['initial_cash'] = int(form_data.get('initial_cash', config['backtest_settings']['initial_cash']))
+    
+    # 전략 파라미터 덮어쓰기
+    config['strategy_params']['max_stocks'] = int(form_data.get('max_stocks', config['strategy_params']['max_stocks']))
+    # ... UI에 있는 다른 전략 파라미터들도 동일하게 덮어쓰기 ...
 
-    # 결과 파일 경로
-    current_time_str = datetime.datetime.now().strftime('%Y%m%d_%H%M')
-    excel_file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.xlsx'
-    plot_file_name = f'trading_history_{num_splits}_{max_stocks}_{buy_threshold}_{current_time_str}.png'
-    excel_file_path = os.path.join(results_folder, excel_file_name)
-    plot_file_path = os.path.join(results_folder, plot_file_name)
+    # 4. 수정된 config를 사용하여 새로운 백테스팅 함수 호출
+    result = run_backtest_from_config(config)
 
-    # 결과 반환
-    response = {
-        'total_portfolio_value': total_portfolio_value,
-        'cagr': cagr,
-        'mdd': mdd,
-        'all_trading_dates': all_trading_dates,
-        'portfolio_values_over_time': portfolio_values_over_time.tolist(),
-        'capital_over_time': capital_over_time.tolist(),
-        'excel_file_path': excel_file_name,
-        'plot_file_path': plot_file_name
-    }
-    return jsonify(response)
+    # 5. 결과를 JSON 형태로 프론트엔드에 반환
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result)
 
-
-@app.route('/results_of_single_test/<path:filename>', methods=['GET'])
-def download_file(filename):
-    return send_from_directory('results_of_single_test', filename, as_attachment=True)
-
+@app.route('/results/<path:subpath>', methods=['GET'])
+def download_file(subpath):
+    """
+    결과 파일(이미지, CSV)을 다운로드할 수 있도록 서빙합니다.
+    예: /results/run_20231027_123456/equity_curve.png
+    """
+    # 보안을 위해 실제 파일 시스템 경로를 직접 노출하지 않도록 주의
+    # 여기서는 간단하게 구현
+    base_dir = os.path.abspath("results")
+    file_path = os.path.join(base_dir, subpath)
+    
+    if os.path.exists(file_path):
+        return send_from_directory(base_dir, subpath)
+    else:
+        return "File not found.", 404
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0'debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
