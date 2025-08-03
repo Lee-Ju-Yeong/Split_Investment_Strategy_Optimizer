@@ -279,7 +279,7 @@ def _process_additional_buy_signals_gpu(
 
 
 def run_magic_split_strategy_on_gpu(
-    initial_capital: float,
+    initial_cash: float,
     param_combinations: cp.ndarray,
     all_data_gpu: cudf.DataFrame,
     weekly_filtered_gpu: cudf.DataFrame,
@@ -298,7 +298,7 @@ def run_magic_split_strategy_on_gpu(
     # --- 1. State Management Arrays ---
     # Portfolio-level state: [0:capital, 1:investment_per_order]
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
-    portfolio_state[:, 0] = initial_capital
+    portfolio_state[:, 0] = initial_cash
 
     # Position-level state: [0: quantity, 1: buy_price]
     max_stocks_param = int(cp.max(param_combinations[:, 0]).get()) # Get max_stocks from user parameters
