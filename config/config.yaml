@@ -12,16 +12,17 @@ database:
 
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
-  start_date: '2023-12-01'
-  end_date: '2023-12-31'
+  start_date: '2023-01-01'
+  end_date: '2023-03-31'
   initial_cash: 100000000
+  save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
 # --- 3. Magic Split Strategy Parameters ---
 strategy_params:
-  max_stocks: 20
-  order_investment_ratio: 0.02
-  additional_buy_drop_rate: 0.04
-  sell_profit_rate: 0.04
+  max_stocks: 15
+  order_investment_ratio: 0.015
+  additional_buy_drop_rate: 0.03
+  sell_profit_rate: 0.03
   additional_buy_priority: 'lowest_order'
 
 # --- 4. Execution Handler Parameters ---

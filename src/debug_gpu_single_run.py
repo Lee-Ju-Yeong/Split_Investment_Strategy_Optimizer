@@ -1,9 +1,11 @@
 """
-parameter_simulation_gpu.py
+debug_gpu_single_run.py
 
-GPU-accelerated parameter simulation for the MagicSplitStrategy.
-This script orchestrates the backtesting of thousands of parameter combinations
-by leveraging CuPy and CuDF for massive parallelization on the GPU.
+This script is used to debug the GPU single run.
+It is used to test the GPU single run with the parameters from the config.yaml file.
+
+
+
 """
 import time
 import cudf
@@ -33,12 +35,20 @@ db_connection_str = (
     f"@{db_config['host']}/{db_config['database']}"
 )
 
-# Define the parameter space to be tested
-max_stocks_options = cp.array([15, 30], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015, 0.022, 0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
-additional_buy_priority_options = cp.array([0, 1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
+# --- Debug를 위한 단일 파라미터 조합 정의 ---
+# CPU 단일 테스트(config.yaml)와 동일한 값으로 설정
+cpu_test_params = config['strategy_params']
+
+# 변경 후 (config에서 읽어온 값을 사용):
+max_stocks_options = cp.array([cpu_test_params['max_stocks']], dtype=cp.int32)
+order_investment_ratio_options = cp.array([cpu_test_params['order_investment_ratio']], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([cpu_test_params['additional_buy_drop_rate']], dtype=cp.float32)
+sell_profit_rate_options = cp.array([cpu_test_params['sell_profit_rate']], dtype=cp.float32)
+
+# additional_buy_priority는 문자열이므로 숫자로 변환
+priority_map = {'lowest_order': 0, 'highest_drop': 1}
+priority_val = priority_map.get(cpu_test_params['additional_buy_priority'], 0)
+additional_buy_priority_options = cp.array([priority_val], dtype=cp.int32)
 
 # Create all combinations using CuPy's broadcasting capabilities
 grid = cp.meshgrid(
@@ -52,6 +62,8 @@ grid = cp.meshgrid(
 param_combinations = cp.vstack([item.flatten() for item in grid]).T
 num_combinations = param_combinations.shape[0]
 
+print("✅ [DEBUG MODE] Single parameter combination for GPU test:")
+print(param_combinations)
 print(f"✅ Total parameter combinations generated for GPU: {num_combinations}")
 
 
