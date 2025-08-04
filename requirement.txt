@@ -1,30 +1,50 @@
-# Flask and CORS
+# ===================================================================
+# Core Application & Data Processing
+# ===================================================================
+pandas
+numpy
+tqdm         # Progress bar for loops
+PyYAML       # For reading config.yaml file
+
+# ===================================================================
+# Database Connection
+# ===================================================================
+pymysql      # Unified MySQL database connector
+
+# ===================================================================
+# Data Collection
+# ===================================================================
+pykrx        # Korean stock market data
+selenium     # For web scraping (e.g., ETF list)
+webdriver-manager # To manage browser drivers for Selenium
+
+# ===================================================================
+# Configuration and Security
+# ===================================================================
+cryptography # May be required by pymysql for specific auth methods
+
+
+# ===================================================================
+# Web UI & Server (Optional)
+# ===================================================================
 flask
 flask-cors
 
-# Data Processing and Analysis
-pandas
-numpy
-
-# Visualization
+# ===================================================================
+# Data Visualization (Optional)
+# ===================================================================
 matplotlib
 seaborn
 
-# Configuration and Encryption
-configparser
-cryptography
+# ===================================================================
+# GPU Acceleration (Optional - Install only if you have a compatible NVIDIA GPU)
+# ===================================================================
+# Note: Choose the version that matches your CUDA toolkit version.
+# Example for CUDA 11.x:
+# cupy-cuda11x
+# cudf-cu11
 
-# MySQL Database Connection
-mysql-connector-python
-sqlalchemy
-pymysql
+# Example for CUDA 12.x:
+cupy-cuda12x
+cudf-cu12
 
-# Web Driver and Automation
-selenium
-webdriver-manager
-
-# Korean Stock Data
-pykrx
-
-# Progress Bar for loops
-tqdm
