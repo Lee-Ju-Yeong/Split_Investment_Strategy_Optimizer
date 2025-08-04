@@ -12,6 +12,28 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 
+@cp.fuse()
+def get_tick_size_gpu(price_array):
+    """주가 배열에 따른 호가 단위 배열을 반환합니다."""
+    condlist = [
+        price_array < 2000,
+        price_array < 5000,
+        price_array < 20000,
+        price_array < 50000,
+        price_array < 200000,
+        price_array < 500000,
+    ]
+    choicelist = [1, 5, 10, 50, 100, 500]
+    return cp.select(condlist, choicelist, default=1000)
+
+
+@cp.fuse()
+def adjust_price_up_gpu(price_array):
+    """주어진 가격 배열을 호가 단위에 맞춰 올림 처리합니다."""
+    tick_size = get_tick_size_gpu(price_array)
+    return cp.ceil(price_array / tick_size) * tick_size
+
+
 # This function was accidentally removed, re-adding for the unit test.
 def calculate_portfolio_value_gpu(capital, quantities, prices):
     """Calculates the total portfolio value for a given date on the GPU."""
@@ -78,105 +100,108 @@ def _calculate_monthly_investment_gpu(
     return portfolio_state
 
 
+# ==============================================================================
+# 아래 함수로 기존 _process_sell_signals_gpu 함수를 완전히 대체합니다.
+# ==============================================================================
 def _process_sell_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    # config.yaml에서 읽어온 실행 파라미터를 추가로 받습니다.
+    sell_commission_rate: float,
+    sell_tax_rate: float,
 ):
     """
-    Vectorized sell signal processing for all simulations.
-
-    This function implements the MagicSplitStrategy sell logic:
-    1. Full liquidation: If 1st position profit >= sell_profit_rate, sell all positions for that stock
-    2. Partial liquidation: If 2nd+ position profit >= sell_profit_rate, sell only that position
-
-    Args:
-        portfolio_state: (num_combinations, 2) [capital, investment_per_order]
-        positions_state: (num_combinations, num_stocks, max_splits, 2) [quantity, buy_price]
-        param_combinations: (num_combinations, 5) [max_stocks, order_inv_ratio, add_buy_drop, sell_profit, add_buy_prio]
-        current_prices: (num_stocks,) current market prices for all stocks
-
-    Returns:
-        Updated portfolio_state and positions_state after sell executions
+    Vectorized sell signal processing for all simulations, reflecting exact execution logic.
+    CPU(execution.py)의 매도 로직을 GPU로 완벽하게 포팅한 버전입니다.
     """
-    num_combinations, num_stocks, max_splits, _ = positions_state.shape
 
-    # Extract sell profit rates for each simulation: shape (num_combinations, 1, 1)
-    sell_profit_rates = param_combinations[:, 3:4].reshape(-1, 1, 1)
+    # --- Step 0: 파라미터 및 상태 준비 ---
+    sell_profit_rates = param_combinations[:, 3:4].reshape(-1, 1, 1)  # (comb, 1, 1)
+    quantities = positions_state[..., 0]  # (comb, stock, split)
+    buy_prices = positions_state[..., 1]  # (comb, stock, split)
 
-    # Get quantities and buy prices: shape (num_combinations, num_stocks, max_splits)
-    quantities = positions_state[..., 0]
-    buy_prices = positions_state[..., 1]
+    # 현재가가 브로드캐스팅된 배열
+    # (1, stock, 1) -> (comb, stock, split)
+    broadcasted_prices = cp.broadcast_to(
+        current_prices.reshape(1, -1, 1), buy_prices.shape
+    )
 
-    # Reshape current prices for broadcasting: (1, num_stocks, 1)
-    current_prices_reshaped = current_prices.reshape(1, -1, 1)
-
-    # Calculate current profit rates for all positions
-    # Avoid division by zero: only calculate for positions with buy_price > 0
+    # 매도 대상이 될 수 있는 유효한 포지션 (매수가가 0보다 큼)
     valid_positions = buy_prices > 0
-    profit_rates = cp.zeros_like(buy_prices)
 
-    # --- 💡 수정된 부분 시작 💡 ---
-    # `current_prices_reshaped`를 `buy_prices`와 동일한 shape으로 브로드캐스팅합니다.
-    # (1, 357, 1) shape이 (1000, 357, 20) shape에 맞게 확장됩니다.
-    # 이렇게 하면 boolean 인덱싱 전에 shape이 일치하게 됩니다.
-    broadcasted_prices = cp.broadcast_to(current_prices_reshaped, buy_prices.shape)
+    # --- Step 1: CPU 로직과 동일하게 실제 체결가 및 순수익 계산 ---
 
-    # 이제 broadcasted_prices를 사용하여 계산합니다.
-    profit_rates[valid_positions] = (
-        broadcasted_prices[valid_positions] - buy_prices[valid_positions]
-    ) / buy_prices[valid_positions]
-    # --- 💡 수정된 부분 끝 💡 ---
+    # 1. 비용 팩터 계산
+    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
 
-    # --- Step 1: Check for full liquidation conditions ---
-    # Get 1st positions (order=1): shape (num_combinations, num_stocks)
-    first_positions_profit = profit_rates[:, :, 0]  # First split (index 0)
-    first_positions_valid = valid_positions[:, :, 0]
+    # 2. 최소 목표 매도가 계산
+    # (comb, stock, split) * (comb, 1, 1) -> (comb, stock, split)
+    target_sell_prices = (buy_prices * (1 + sell_profit_rates)) / cost_factor
 
-    # Full liquidation condition: 1st position profit >= sell_profit_rate
-    full_liquidation_mask = (
-        first_positions_profit >= sell_profit_rates.squeeze(-1)
-    ) & first_positions_valid
+    # 3. 실제 체결가 결정 (호가 단위 올림)
+    actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
 
-    # --- Step 2: Check for partial liquidation conditions ---
-    # For 2nd+ positions, check individual profit conditions
-    partial_liquidation_mask = (profit_rates >= sell_profit_rates) & valid_positions
-    # But exclude 1st positions from partial liquidation (they're handled by full liquidation)
-    partial_liquidation_mask[:, :, 0] = False
+    # 4. 매도 체결 조건: 현재가(종가)가 계산된 실제 체결가에 도달했거나 넘어섰는가?
+    # (comb, stock, split) >= (comb, stock, split)
+    sell_trigger_condition = (
+        broadcasted_prices >= actual_sell_prices
+    ) & valid_positions
 
-    # If full liquidation is triggered for a stock, disable partial liquidation for that stock
-    full_liquidation_expanded = full_liquidation_mask[
-        :, :, cp.newaxis
-    ]  # Shape: (num_combinations, num_stocks, 1)
-    partial_liquidation_mask = partial_liquidation_mask & (~full_liquidation_expanded)
+    # --- Step 2: 매도 로직 실행 (부분 매도 / 전체 청산) ---
 
-    # --- Step 3: Execute full liquidations ---
-    # Calculate proceeds from full liquidations
-    full_liquidation_expanded_all = full_liquidation_expanded.repeat(max_splits, axis=2)
-    full_liquidation_quantities = quantities * full_liquidation_expanded_all
-    full_liquidation_proceeds = cp.sum(
-        full_liquidation_quantities * current_prices_reshaped, axis=(1, 2)
-    )  # Shape: (num_combinations,)
+    # 1. 1차 매도분 청산 조건: 1차 포지션(split_idx=0)의 매도 조건이 충족되었는가?
+    # (comb, stock)
+    first_position_sell_triggered = sell_trigger_condition[:, :, 0]
 
-    # Clear all positions for fully liquidated stocks
-    positions_state[full_liquidation_expanded_all, 0] = 0  # Set quantities to 0
-    positions_state[full_liquidation_expanded_all, 1] = 0  # Set buy_prices to 0
+    # 2. 부분 매도(2차 이상) 조건: 전체 청산 대상이 아니면서, 개별 매도 조건이 충족되었는가?
+    partial_sell_mask = sell_trigger_condition.copy()
+    partial_sell_mask[:, :, 0] = False  # 1차 매도분은 부분 매도 대상에서 제외
 
-    # --- Step 4: Execute partial liquidations ---
-    # Calculate proceeds from partial liquidations
-    partial_liquidation_quantities = quantities * partial_liquidation_mask
-    partial_liquidation_proceeds = cp.sum(
-        partial_liquidation_quantities * current_prices_reshaped, axis=(1, 2)
-    )  # Shape: (num_combinations,)
+    # 1차 청산이 발동된 종목은 그 종목의 다른 차수들도 부분 매도 대상에서 제외 (전체 청산되므로)
+    # (comb, stock, 1) -> (comb, stock, split)
+    partial_sell_mask &= ~cp.broadcast_to(
+        first_position_sell_triggered[:, :, cp.newaxis], partial_sell_mask.shape
+    )
 
-    # Clear partially liquidated positions
-    positions_state[partial_liquidation_mask, 0] = 0  # Set quantities to 0
-    positions_state[partial_liquidation_mask, 1] = 0  # Set buy_prices to 0
+    # --- Step 3: 매도 대금 계산 및 자본 업데이트 ---
 
-    # --- Step 5: Update capital ---
-    total_proceeds = full_liquidation_proceeds + partial_liquidation_proceeds
-    portfolio_state[:, 0] += total_proceeds  # Add proceeds to capital
+    # 1. 전체 청산될 포지션들의 매도 대금 계산
+    full_liquidation_mask = cp.broadcast_to(
+        first_position_sell_triggered[:, :, cp.newaxis], quantities.shape
+    )
+
+    # 전체 청산 시, 모든 포지션은 '자신의 계산된 실제 매도가'에 팔린다고 가정
+    full_liquidation_raw_proceeds_matrix = (
+        quantities * actual_sell_prices * full_liquidation_mask
+    )
+    full_liquidation_raw_proceeds = cp.sum(
+        full_liquidation_raw_proceeds_matrix, axis=(1, 2)
+    )
+
+    # 2. 부분 매도될 포지션들의 매도 대금 계산
+    partial_sell_raw_proceeds_matrix = (
+        quantities * actual_sell_prices * partial_sell_mask
+    )
+    partial_sell_raw_proceeds = cp.sum(partial_sell_raw_proceeds_matrix, axis=(1, 2))
+
+    # 3. 총 매도 대금을 합산하고 비용을 차감하여 최종 입금액 계산
+    total_raw_proceeds = full_liquidation_raw_proceeds + partial_sell_raw_proceeds
+    net_proceeds = total_raw_proceeds * cost_factor
+
+    # 4. 자본에 최종 입금액 반영
+    portfolio_state[:, 0] += net_proceeds
+
+    # --- Step 4: 포지션 상태 업데이트 ---
+
+    # 1. 전체 청산된 포지션들 정리
+    positions_state[full_liquidation_mask, 0] = 0  # quantity to 0
+    positions_state[full_liquidation_mask, 1] = 0  # buy_price to 0
+
+    # 2. 부분 매도된 포지션들 정리
+    positions_state[partial_sell_mask, 0] = 0
+    positions_state[partial_sell_mask, 1] = 0
 
     return portfolio_state, positions_state
 
@@ -347,6 +372,7 @@ def run_magic_split_strategy_on_gpu(
     trading_date_indices: cp.ndarray,  # 💡 파라미터 이름 변경 (trading_dates -> trading_date_indices)
     trading_dates_pd_cpu: pd.DatetimeIndex,  # 💡 새로운 파라미터 추가
     all_tickers: list,
+    execution_params: dict,  # ★★★ 추가 ★★★
     max_splits_limit: int = 20,
 ):
     """
@@ -512,6 +538,10 @@ def run_magic_split_strategy_on_gpu(
                 candidate_tickers_for_day,
                 candidate_atrs_for_day,
                 all_tickers,
+                sell_commission_rate=execution_params[
+                    "sell_commission_rate"
+                ],  # ★★★ 추가
+                sell_tax_rate=execution_params["sell_tax_rate"],  # ★★★ 추가
             )
             # 2. Process Additional Buy Signals
             portfolio_state, positions_state = _process_additional_buy_signals_gpu(
