@@ -155,7 +155,14 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
 # 3. GPU Backtesting Kernel (to be implemented)
 # -----------------------------------------------------------------------------
 
-def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value,exec_params: dict):
+def run_gpu_optimization(params_gpu, data_gpu,
+                         weekly_filtered_gpu, all_tickers,
+                         trading_date_indices_gpu,
+                         trading_dates_pd,
+                         initial_cash_value,
+                         exec_params: dict,
+                         debug_mode: bool = False,
+                         ):
     """
     GPU-accelerated backtesting을 오케스트레이션합니다.
     """
@@ -171,7 +178,8 @@ def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
         max_splits_limit=20,
-        execution_params=exec_params
+        execution_params=exec_params,
+        debug_mode=debug_mode,
     )
     
     print("🎉 GPU backtesting kernel finished.")
@@ -238,7 +246,8 @@ if __name__ == "__main__":
         trading_date_indices_gpu,
         trading_dates_pd,
         initial_cash,
-        execution_params
+        execution_params,
+        debug_mode=True,
     )
     
     end_time = time.time()
