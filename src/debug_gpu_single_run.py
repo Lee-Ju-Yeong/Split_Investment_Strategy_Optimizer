@@ -27,6 +27,7 @@ import urllib.parse
 config = load_config()
 db_config = config['database']
 backtest_settings = config['backtest_settings']
+execution_params = config['execution_params']
 
 # URL 인코딩을 포함하여 DB 연결 문자열 생성
 db_pass_encoded = urllib.parse.quote_plus(db_config['password'])
@@ -148,7 +149,7 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
 # 3. GPU Backtesting Kernel (to be implemented)
 # -----------------------------------------------------------------------------
 
-def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value):
+def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value,exec_params: dict):
     """
     GPU-accelerated backtesting을 오케스트레이션합니다.
     """
@@ -163,7 +164,8 @@ def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers,
         trading_date_indices=trading_date_indices_gpu,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
-        max_splits_limit=20
+        max_splits_limit=20,
+        execution_params=exec_params
     )
     
     print("🎉 GPU backtesting kernel finished.")
@@ -229,7 +231,8 @@ if __name__ == "__main__":
         all_tickers, 
         trading_date_indices_gpu,
         trading_dates_pd,
-        initial_cash # <<< config에서 읽어온 값을 전달
+        initial_cash,
+        execution_params
     )
     
     end_time = time.time()

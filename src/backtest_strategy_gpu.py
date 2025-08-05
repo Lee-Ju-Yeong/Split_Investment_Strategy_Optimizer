@@ -12,9 +12,12 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 
-@cp.fuse()
 def get_tick_size_gpu(price_array):
-    """주가 배열에 따른 호가 단위 배열을 반환합니다."""
+    """
+    주가 배열에 따른 호가 단위 배열을 반환합니다.
+    @cp.fuse() 데코레이터는 CuPy의 엄격한 타입 요구사항으로 인해 제거되었습니다.
+    """
+    # 조건 리스트는 그대로 둡니다.
     condlist = [
         price_array < 2000,
         price_array < 5000,
@@ -23,11 +26,22 @@ def get_tick_size_gpu(price_array):
         price_array < 200000,
         price_array < 500000,
     ]
-    choicelist = [1, 5, 10, 50, 100, 500]
+    # ★★★ 핵심 수정 부분 ★★★
+    # 선택지 리스트를 스칼라가 아닌, 'CuPy 배열의 리스트'로 만듭니다.
+    # cp.full_like(price_array, 값)은 price_array와 똑같은 모양과 타입의 배열을
+    # '값'으로 가득 채워서 만들어줍니다.
+    choicelist = [
+        cp.full_like(price_array, 1),
+        cp.full_like(price_array, 5),
+        cp.full_like(price_array, 10),
+        cp.full_like(price_array, 50),
+        cp.full_like(price_array, 100),
+        cp.full_like(price_array, 500),
+    ]
+
     return cp.select(condlist, choicelist, default=1000)
 
 
-@cp.fuse()
 def adjust_price_up_gpu(price_array):
     """주어진 가격 배열을 호가 단위에 맞춰 올림 처리합니다."""
     tick_size = get_tick_size_gpu(price_array)
@@ -312,8 +326,10 @@ def _process_additional_buy_signals_gpu(
         sim_indices, stock_indices = cp.where(initial_buy_condition)
 
         # 2. 비용 계산 (벡터화)
-        prices_for_buy = current_prices(prices_for_buy)  # 호가 적용
-        buy_prices_for_buy = adjust_price_up_gpu[sim_indices, 0, 0]
+        # current_prices 배열에서 stock_indices를 사용해 필요한 가격만 가져옵니다.
+        prices_for_buy = current_prices[stock_indices]
+
+        buy_prices_for_buy = adjust_price_up_gpu(prices_for_buy)
         # 가격이 0인 경우 방어
         valid_price_mask = buy_prices_for_buy > 0
         if not cp.any(valid_price_mask):
@@ -551,7 +567,8 @@ def run_magic_split_strategy_on_gpu(
             )
             # 3. Process Sell Signals
             portfolio_state, positions_state = _process_sell_signals_gpu(
-                portfolio_state, positions_state, param_combinations, current_prices
+                portfolio_state, positions_state, param_combinations, current_prices,
+                execution_params["sell_commission_rate"], execution_params["sell_tax_rate"]
             )
 
             capital_after_actions = portfolio_state[
