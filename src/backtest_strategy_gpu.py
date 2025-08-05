@@ -211,6 +211,7 @@ def _process_additional_buy_signals_gpu(
     positions_state: cp.ndarray,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    buy_commission_rate: float,  # 매수 수수료율 인자
 ):
     """
     Vectorized additional buy signal processing for all simulations.
@@ -228,7 +229,7 @@ def _process_additional_buy_signals_gpu(
         Updated portfolio_state and positions_state after additional buy executions
     """
     num_combinations, num_stocks, max_splits, _ = positions_state.shape
-
+    # --- Step 0: 파라미터 및 상태 준비 ---
     # Extract additional buy drop rates: shape (num_combinations, 1, 1)
     add_buy_drop_rates = param_combinations[:, 2:3].reshape(-1, 1, 1)
 
@@ -241,26 +242,24 @@ def _process_additional_buy_signals_gpu(
     # Reshape current prices: (1, num_stocks, 1)
     current_prices_reshaped = current_prices.reshape(1, -1, 1)
 
-    # --- Step 1: Find stocks that have existing positions ---
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
-
+    # --- Step 1: 추가 매수 조건 탐색 (자본 확인 전) ---
+    # 마지막 차수 정보 추출 (이 부분은 성능 개선의 여지가 있지만, 현재는 정확성에 초점)
     # Find the last (highest order) position for each stock in each simulation
     # We'll iterate through splits in reverse to find the last non-zero position
     has_positions = quantities > 0  # Shape: (num_combinations, num_stocks, max_splits)
-
-    # Find the last position for each stock (rightmost True in the max_splits dimension)
-    last_position_indices = cp.zeros((num_combinations, num_stocks), dtype=cp.int32)
     has_any_position = cp.any(
         has_positions, axis=2
     )  # Shape: (num_combinations, num_stocks)
+    last_position_indices = cp.zeros((num_combinations, num_stocks), dtype=cp.int32)
+    # Find the last position for each stock (rightmost True in the max_splits dimension)
 
     for sim in range(num_combinations):
         for stock in range(num_stocks):
             if has_any_position[sim, stock]:
                 # Find the last True position
-                positions_for_stock = has_positions[sim, stock, :]
-                last_idx = cp.where(positions_for_stock)[0]
+                last_idx = cp.where(has_positions[sim, stock, :])[0]
                 if len(last_idx) > 0:
                     last_position_indices[sim, stock] = last_idx[-1]
 
@@ -305,44 +304,46 @@ def _process_additional_buy_signals_gpu(
                         can_add_position[sim, stock] = True
                         next_split_indices_to_buy[sim, stock] = first_empty_slot
 
-    # --- Step 4: Check capital availability ---
-    # Calculate required capital for additional buys
-    quantities_to_buy = (
-        investment_per_order.squeeze(-1) / current_prices_2d
-    )  # Shape: (num_combinations, num_stocks)
-    required_capital_per_stock = quantities_to_buy * current_prices_2d
-
-    # Check if simulation has enough capital for each potential buy
-    has_capital = current_capital.reshape(-1, 1) >= required_capital_per_stock
-
-    # Final condition: all conditions must be met
-    final_buy_condition = (
-        can_add_position & has_capital
-    )  # 이 has_capital은 아직 안전하지 않음
-    if cp.any(final_buy_condition):
+    initial_buy_condition = can_add_position
+    if cp.any(initial_buy_condition):
         # --- ★★★ 안전한 자본 차감 로직 추가 ★★★ ---
 
         # 1. 실제 매수 대상의 인덱스 가져오기
-        sim_indices, stock_indices = cp.where(final_buy_condition)
+        sim_indices, stock_indices = cp.where(initial_buy_condition)
 
         # 2. 비용 계산 (벡터화)
-        prices_for_buy = current_prices[stock_indices]
+        prices_for_buy = current_prices(prices_for_buy)  # 호가 적용
+        buy_prices_for_buy = adjust_price_up_gpu[sim_indices, 0, 0]
+        # 가격이 0인 경우 방어
+        valid_price_mask = buy_prices_for_buy > 0
+        if not cp.any(valid_price_mask):
+            return portfolio_state, positions_state  # 살 수 있는게 없으면 종료
+        # 유효한 가격을 가진 대상에 대해서만 계산 진행
+        sim_indices = sim_indices[valid_price_mask]
+        stock_indices = stock_indices[valid_price_mask]
+        buy_prices_for_buy = buy_prices_for_buy[valid_price_mask]
         inv_per_order_for_buy = investment_per_order[sim_indices, 0, 0]
-        quantities_to_buy = cp.floor(inv_per_order_for_buy / prices_for_buy).astype(
+        quantities_to_buy = cp.floor(inv_per_order_for_buy / buy_prices_for_buy).astype(
             cp.int32
         )
-        costs = quantities_to_buy * prices_for_buy
 
-        # 3. 자본이 충분한지 최종 확인
+        # 수수료 포함 총 비용
+        total_costs = (buy_prices_for_buy * quantities_to_buy) * (
+            1 + buy_commission_rate
+        )
+
+        # 3. ★★★ 자본이 충분한지 최종 확인 ★★★
         capital_for_buy = current_capital[sim_indices]
-        final_buy_mask = capital_for_buy >= costs
+        final_buy_mask = capital_for_buy >= total_costs
 
         # 4. 최종 매수 대상에 대해서만 상태 업데이트 수행
         if cp.any(final_buy_mask):
+            # 최종 매수 대상 필터링
             final_sim_indices = sim_indices[final_buy_mask]
             final_stock_indices = stock_indices[final_buy_mask]
             final_quantities = quantities_to_buy[final_buy_mask]
-            final_costs = costs[final_buy_mask]
+            final_buy_prices = buy_prices_for_buy[final_buy_mask]
+            final_total_costs = total_costs[final_buy_mask]
             final_next_splits = next_split_indices_to_buy[
                 final_sim_indices, final_stock_indices
             ]
@@ -354,12 +355,13 @@ def _process_additional_buy_signals_gpu(
                 sim_idx = int(final_sim_indices[i])
                 stock_idx = int(final_stock_indices[i])
                 split_idx = int(final_next_splits[i])
-
+                if split_idx == -1:
+                    continue  # 혹시 모를 오류 방지
                 positions_state[sim_idx, stock_idx, split_idx, 0] = final_quantities[i]
-                positions_state[sim_idx, stock_idx, split_idx, 1] = current_prices[
-                    stock_idx
-                ]
-                portfolio_state[sim_idx, 0] -= final_costs[i]
+                # 포지션 정보에는 순수 매수가를 저장
+                positions_state[sim_idx, stock_idx, split_idx, 1] = final_buy_prices[i]
+                # 자본에서는 수수료 포함 비용을 차감
+                portfolio_state[sim_idx, 0] -= final_total_costs[i]
 
     return portfolio_state, positions_state
 
@@ -537,15 +539,15 @@ def run_magic_split_strategy_on_gpu(
                 current_prices,
                 candidate_tickers_for_day,
                 candidate_atrs_for_day,
-                all_tickers,
-                sell_commission_rate=execution_params[
-                    "sell_commission_rate"
-                ],  # ★★★ 추가
-                sell_tax_rate=execution_params["sell_tax_rate"],  # ★★★ 추가
+                buy_commission_rate=execution_params["buy_commission_rate"],
             )
             # 2. Process Additional Buy Signals
             portfolio_state, positions_state = _process_additional_buy_signals_gpu(
-                portfolio_state, positions_state, param_combinations, current_prices
+                portfolio_state,
+                positions_state,
+                param_combinations,
+                current_prices,
+                buy_commission_rate=execution_params["buy_commission_rate"],
             )
             # 3. Process Sell Signals
             portfolio_state, positions_state = _process_sell_signals_gpu(
@@ -604,7 +606,7 @@ def _process_new_entry_signals_gpu(
     current_prices: cp.ndarray,
     candidate_tickers_for_day: cp.ndarray,  # 오늘 매수 후보군 티커의 '인덱스' 배열
     candidate_atrs_for_day: cp.ndarray,  # 오늘 매수 후보군 티커의 ATR 값 배열
-    all_tickers: list,
+    buy_commission_rate: float,  # ★★★ 추가: 매수 수수료율 인자
 ):
     """
     Vectorized new entry signal processing for all simulations.
@@ -658,16 +660,27 @@ def _process_new_entry_signals_gpu(
             break
 
         stock_price = current_prices[ticker_idx]
-        if stock_price <= 0:
+        # 호가 올림 처리하여 실제 매수가 결정
+        buy_price = adjust_price_up_gpu(stock_price)
+        if buy_price <= 0:
             continue
+        # --- ★★★ 자본 확인 로직 수정 ★★★ ---
+        # 1. 수수료를 포함한 총 비용 계산
+        safe_investment = cp.where(buy_price > 0, investment_per_order, 0)
+        quantity_to_buy_f = cp.floor(safe_investment / buy_price)  # float 수량
 
+        # 수수료 포함 총 비용
+        total_cost_per_sim = (buy_price * quantity_to_buy_f) * (1 + buy_commission_rate)
+
+        # 2. 자본 충분 여부 확인
+        has_capital = current_capital >= total_cost_per_sim
+        # --- ★★★ 수정 끝 ★★★ ---
         # 이 종목을 매수할 수 있는 시뮬레이션의 최종 조건
         # 1. 슬롯이 있고 (available_slots > 0)
         # 2. 이 종목을 보유하지 않았고 (is_not_holding)
         # 3. 자본이 충분한가 (아래에서 계산)
-        safe_investment = cp.where(stock_price > 0, investment_per_order, 0)
-        required_capital = stock_price * cp.floor(safe_investment / stock_price)
-        has_capital = current_capital >= required_capital
+        # 4. 호가 올림 처리된 가격이 0보다 큰가 (아래에서 계산)
+        # 5. 수수료 포함 총 비용이 자본보다 작은가 (아래에서 계산)
 
         is_not_holding = ~has_any_position[:, ticker_idx]
         # --- ★★★ 중복 코드 제거 및 안전 로직 통합 ★★★ ---
