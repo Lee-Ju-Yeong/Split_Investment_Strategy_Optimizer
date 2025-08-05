@@ -162,6 +162,7 @@ def run_gpu_optimization(
     trading_dates_pd,
     initial_cash_value,
     execution_params,
+    debug_mode: bool = False,
 ):
     """
     GPU-accelerated backtesting을 오케스트레이션합니다.
@@ -179,6 +180,7 @@ def run_gpu_optimization(
         all_tickers=all_tickers,
         execution_params=execution_params,  # ★★★ 추가된 인자 전달
         max_splits_limit=20,
+        debug_mode=debug_mode,
     )
 
     print("🎉 GPU backtesting kernel finished.")
@@ -255,6 +257,7 @@ if __name__ == "__main__":
         trading_dates_pd,
         initial_cash,  # <<< config에서 읽어온 값을 전달
         execution_params,
+        debug_mode=False,
     )
 
     end_time = time.time()
