@@ -81,7 +81,7 @@ class MagicSplitStrategy(Strategy):
     def _generate_signals_for_existing_positions(
         self, current_date, portfolio, data_handler
     ):
-        signals = []
+        signals = []    # list()로 감싸서 순회 중 portfolio.positions가 변경되어도 오류가 나지 않도록 방지
         for ticker in list(portfolio.positions.keys()):
             stock_data = data_handler.load_stock_data(
                 ticker, self.backtest_start_date, self.backtest_end_date
@@ -93,86 +93,60 @@ class MagicSplitStrategy(Strategy):
             ):
                 continue
 
-            row = stock_data.loc[current_date]
+            row = stock_data.loc[current_date]  # 해당 ticker의 포지션이 비어있을 경우를 대비 (청산 후 다음 신호 처리 시)
             positions = portfolio.positions[ticker]
-            # --- 💡 매도 로직 수정 시작 💡 ---
-
-            # 1. 모든 포지션을 개별적으로 순회하며 매도 조건 확인
-            positions_to_sell = []
-            is_first_position_sold = False
-
+            # --- 매도 신호 생성 로직 (수정된 버전) ---
             for p in positions:
                 if row["close_price"] >= p.buy_price * (1 + self.sell_profit_rate):
-                    # 매도 신호 생성
                     signals.append(
                         {
                             "date": current_date,
                             "ticker": ticker,
                             "type": "SELL",
                             "quantity": p.quantity,
-                            "position": p,  # 어떤 포지션을 팔지 명시
+                            "position": p,
                         }
                     )
-
-                    # 1차 포지션이 팔렸는지 여부 플래그
-                    if p.order == 1:
-                        is_first_position_sold = True
-
-            # 2. 1차 포지션이 팔렸다면, '종목 청산' 신호를 추가
-            if is_first_position_sold:
-                signals.append(
-                    {
-                        "date": current_date,
-                        "ticker": ticker,
-                        "type": "LIQUIDATE_TICKER",  # 포트폴리오에서 이 종목을 제거하라는 신호
-                    }
-                )
-
-            # --- 💡 매도 로직 수정 끝 💡 ---
-
-            # 3. 추가 매수 조건 (매도 조건과 별개로 항상 체크)
-            last_pos = positions[-1] if positions else None
-            if last_pos and row["close_price"] <= last_pos.buy_price * (
-                1 - self.additional_buy_drop_rate
-            ):
-                quantity = int(self.investment_per_order / row["close_price"])
-                if quantity > 0:
-                    new_pos = Position(
-                        row["close_price"],
-                        quantity,
-                        len(positions) + 1,
-                        self.additional_buy_drop_rate,
-                        self.sell_profit_rate,
-                    )
-
-                    sort_metric = (
-                        len(positions)
-                        if self.additional_buy_priority == "lowest_order"
-                        else -(
-                            (last_pos.buy_price - row["close_price"])
-                            / last_pos.buy_price
-                        )
-                    )
-
-                    signals.append(
-                        {
-                            "date": current_date,
-                            "ticker": ticker,
-                            "type": "BUY",
-                            "quantity": quantity,
-                            "position": new_pos,
-                            "priority_group": 2,
-                            "sort_metric": sort_metric,
-                        }
-                    )
+            
+            # --- 추가 매수 신호 생성 로직 (이 부분만 남김) ---
+            if positions:
+                last_pos = positions[-1]
+                if row["close_price"] <= last_pos.buy_price * (1 - self.additional_buy_drop_rate):
+                    if row["close_price"] > 0:
+                        quantity = int(self.investment_per_order / row["close_price"])
+                        if quantity > 0:
+                            new_pos = Position(
+                                row["close_price"],
+                                quantity,
+                                len(positions) + 1,
+                                self.additional_buy_drop_rate,
+                                self.sell_profit_rate,
+                            )
+                            sort_metric = (
+                                len(positions)
+                                if self.additional_buy_priority == "lowest_order"
+                                else -((last_pos.buy_price - row["close_price"]) / last_pos.buy_price)
+                            )
+                            signals.append(
+                                {
+                                    "date": current_date,
+                                    "ticker": ticker,
+                                    "type": "BUY",
+                                    "quantity": quantity,
+                                    "position": new_pos,
+                                    "priority_group": 2,
+                                    "sort_metric": sort_metric,
+                                }
+                            )
         return signals
+                
 
     def _generate_signals_for_new_entries(self, current_date, portfolio, data_handler):
         signals = []
         available_slots = self.max_stocks - len(portfolio.positions)
         if available_slots <= 0:
             return signals
-
+        print(f"  [CPU_NEW_BUY_DEBUG] Available slots: {available_slots}")
         candidate_codes = data_handler.get_filtered_stock_codes(current_date)
         if not candidate_codes:
             return signals
@@ -180,6 +154,7 @@ class MagicSplitStrategy(Strategy):
         new_candidates = [
             code for code in candidate_codes if code not in portfolio.positions
         ]
+        print(f"  [CPU_NEW_BUY_DEBUG] Total candidates: {len(candidate_codes)}, New candidates: {len(new_candidates)}")
         candidate_atrs = []
         for ticker in new_candidates:
             stock_data = data_handler.load_stock_data(
@@ -200,6 +175,7 @@ class MagicSplitStrategy(Strategy):
         sorted_candidates = sorted(
             candidate_atrs, key=lambda x: x["atr_14_ratio"], reverse=True
         )
+        print(f"  [CPU_NEW_BUY_DEBUG] Candidates to check: {len(sorted_candidates)}")
 
         for candidate in sorted_candidates:
             if len(signals) >= available_slots:

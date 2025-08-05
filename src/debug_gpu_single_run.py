@@ -13,6 +13,7 @@ import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
 import configparser
+from datetime import timedelta # timedelta 임포트 추가
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
 from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
@@ -128,11 +129,17 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
     print("⏳ Loading weekly filtered stocks data to GPU memory...")
     start_time = time.time()
     
+    # ★★★ 핵심 수정 ★★★
+    # 백테스팅 시작일보다 넉넉하게 2주 전 데이터부터 로드하여,
+    # 연초에 이전 년도 데이터를 참조할 수 있도록 함
+    extended_start_date = pd.to_datetime(start_date) - timedelta(days=14)
+    extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+    
     # WeeklyFilteredStocks 테이블에서 해당 기간의 모든 데이터를 가져옴
     query =  f"""
     SELECT `filter_date` as date, `stock_code` as ticker
     FROM WeeklyFilteredStocks
-    WHERE `filter_date` BETWEEN '{start_date}' AND '{end_date}'
+    WHERE `filter_date` BETWEEN '{extended_start_date_str}' AND '{end_date}'
     """
     sql_engine = create_engine(engine)
     df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
