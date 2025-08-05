@@ -11,11 +11,13 @@ import cudf
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
-from datetime import timedelta # timedelta 임포트 추가
-
+from datetime import timedelta, datetime  # timedelta 임포트 추가
+import os # os 추가
+import urllib.parse
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
 from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+from src.performance_analyzer import PerformanceAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
@@ -37,12 +39,12 @@ db_connection_str = (
 )
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([15,24], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015,0.022,0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03,0.04,0.05], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03,0.04,0.05], dtype=cp.float32)
+max_stocks_options = cp.array([15], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.015], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.03], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.03], dtype=cp.float32)
 additional_buy_priority_options = cp.array(
-    [0,1], dtype=cp.int32
+    [0], dtype=cp.int32
 )  # 0: lowest_order, 1: highest_drop
 
 # Create all combinations using CuPy's broadcasting capabilities
@@ -185,15 +187,90 @@ def run_gpu_optimization(
 
     print("🎉 GPU backtesting kernel finished.")
 
-    # Calculate final results for each parameter combination
-    final_values = daily_portfolio_values[:, -1]  # Last day values
-    initial_values = cp.full(len(params_gpu), initial_cash_value, dtype=cp.float32)
+    return daily_portfolio_values
 
-    # Calculate total returns
-    total_returns = (final_values / initial_values) - 1
+# parameter_simulation_gpu.py 파일에 있는 이 함수를 아래 코드로 교체하세요.
 
-    return total_returns, daily_portfolio_values
+def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_dates_pd, initial_cash):
+    """
+    Analyzes the results from the GPU backtest, calculates detailed metrics,
+    prints the top performers, and saves the full results to a CSV file.
 
+    Args:
+        param_combinations_gpu (cp.ndarray): The parameter combinations tested.
+        daily_values_gpu (cp.ndarray): The daily portfolio values for each combination.
+        trading_dates_pd (pd.DatetimeIndex): The trading dates for the backtest period.
+        initial_cash (float): The initial capital for the backtest.
+    """
+    print("\n--- 🔬 Analyzing detailed performance metrics ---")
+    start_time = time.time()
+    
+    # 1. GPU에서 CPU로 데이터 이동
+    param_combinations_cpu = param_combinations_gpu.get()
+    daily_values_cpu = daily_values_gpu.get()
+    
+    results_list = []
+    num_combinations = daily_values_cpu.shape[0]
+
+    # 2. 각 파라미터 조합에 대해 상세 지표 계산
+    for i in range(num_combinations):
+        # 일별 가치 데이터를 Pandas Series로 변환
+        daily_series = pd.Series(daily_values_cpu[i], index=trading_dates_pd)
+        
+        # PerformanceAnalyzer를 사용하여 지표 계산
+        analyzer = PerformanceAnalyzer(daily_series)
+        metrics = analyzer.get_metrics(formatted=False) # 원본 숫자 데이터로 받기
+        results_list.append(metrics)
+
+    # 3. 파라미터와 성과 지표를 하나의 DataFrame으로 결합
+    param_names = ['max_stocks', 'order_investment_ratio', 'additional_buy_drop_rate', 'sell_profit_rate', 'additional_buy_priority']
+    params_df = pd.DataFrame(param_combinations_cpu, columns=param_names)
+    metrics_df = pd.DataFrame(results_list)
+    
+    full_results_df = pd.concat([params_df, metrics_df], axis=1)
+
+    # 4. Calmar Ratio 기준으로 정렬하여 상위 결과 출력
+    # Calmar Ratio가 무한대(inf)나 NaN인 경우를 대비하여 정렬 전에 처리
+    full_results_df.replace([cp.inf, -cp.inf], cp.nan, inplace=True)
+    sorted_df = full_results_df.sort_values(by='calmar_ratio', ascending=False).dropna(subset=['calmar_ratio'])
+
+    print("\n🏆 Top 10 Performing Parameter Combinations (by Calmar Ratio):")
+    
+    # 출력할 컬럼 선택 및 포맷팅
+    display_columns = [
+        'calmar_ratio', 'cagr', 'mdd', 'sharpe_ratio', 'sortino_ratio', 'annualized_volatility',
+        'max_stocks', 'order_investment_ratio', 'additional_buy_drop_rate', 'sell_profit_rate'
+    ]
+    # 'additional_buy_priority'가 있는지 확인하고 추가
+    if 'additional_buy_priority' in sorted_df.columns:
+        display_columns.append('additional_buy_priority')
+        
+    display_df = sorted_df.head(10).get(display_columns, pd.DataFrame())
+
+    if not display_df.empty:
+        # 숫자 포맷팅
+        display_df['calmar_ratio'] = display_df['calmar_ratio'].map('{:.2f}'.format)
+        display_df['cagr'] = display_df['cagr'].map('{:.2%}'.format)
+        display_df['mdd'] = display_df['mdd'].map('{:.2%}'.format)
+        display_df['sharpe_ratio'] = display_df['sharpe_ratio'].map('{:.2f}'.format)
+        display_df['sortino_ratio'] = display_df['sortino_ratio'].map('{:.2f}'.format)
+        display_df['annualized_volatility'] = display_df['annualized_volatility'].map('{:.2%}'.format)
+        
+        print(display_df.to_string(index=False))
+    else:
+        print("결과를 표시할 데이터가 없습니다.")
+
+    # 5. 전체 결과를 CSV 파일로 저장
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = 'results'
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, f'gpu_simulation_results_{timestamp}.csv')
+    
+    sorted_df.to_csv(filepath, index=False, float_format='%.4f')
+    
+    end_time = time.time()
+    print(f"\n✅ Full analysis saved to: {filepath}")
+    print(f"⏱️  Analysis and saving took: {end_time - start_time:.2f} seconds.")
 
 # -----------------------------------------------------------------------------
 # 4. Main Execution Block
@@ -248,16 +325,16 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # 함수 이름 변경 및 initial_cash 전달
-    total_returns, daily_values = run_gpu_optimization(
+    daily_values_result = run_gpu_optimization(
         param_combinations,
         all_data_gpu,
         weekly_filtered_gpu,
         all_tickers,
         trading_date_indices_gpu,
         trading_dates_pd,
-        initial_cash,  # <<< config에서 읽어온 값을 전달
+        initial_cash,
         execution_params,
-        debug_mode=False,
+        debug_mode=False, # 대규모 실행 시에는 디버그 모드 비활성화
     )
 
     end_time = time.time()
@@ -271,22 +348,8 @@ if __name__ == "__main__":
         f"🔥 CPU 대비 예상 가속도: {8 * elapsed_time / (num_combinations * 0.1):.1f}x"
     )
 
-    # 6. Top performing parameters
-    returns_cpu = total_returns.get()  # Move to CPU for analysis
-    best_idx = cp.argmax(total_returns).get()
-    worst_idx = cp.argmin(total_returns).get()
 
-    print(f"\n📊 성과 요약:")
-    print(f"   최고 수익률: {returns_cpu[best_idx]*100:.2f}%")
-    print(f"   최저 수익률: {returns_cpu[worst_idx]*100:.2f}%")
-    print(f"   평균 수익률: {cp.mean(total_returns).get()*100:.2f}%")
-
-    best_params = param_combinations[best_idx].get()
-    print(f"\n🏆 최고 성과 파라미터 조합:")
-    print(f"   Max Stocks: {best_params[0]}")
-    print(f"   Order Investment Ratio: {best_params[1]:.3f}")
-    print(f"   Additional Buy Drop Rate: {best_params[2]:.3f}")
-    print(f"   Sell Profit Rate: {best_params[3]:.3f}")
-    print(f"   Additional Buy Priority: {best_params[4]}")
-
-    print(f"\n✅ GPU 백테스팅 시스템 테스트 완료!")
+    # ### 이슈 #3 구현: 새로운 분석 및 저장 함수 호출 ###
+    analyze_and_save_results(param_combinations, daily_values_result, trading_dates_pd, initial_cash)
+    
+    print(f"\n✅ GPU 파라미터 최적화 및 분석 완료!")
