@@ -12,7 +12,6 @@ import cudf
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
-import configparser
 from datetime import timedelta # timedelta 임포트 추가
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
