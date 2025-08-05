@@ -11,7 +11,7 @@ import cudf
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
-import configparser
+from datetime import timedelta # timedelta 임포트 추가
 
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
@@ -37,12 +37,12 @@ db_connection_str = (
 )
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([15, 30], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015, 0.022, 0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03, 0.04, 0.05], dtype=cp.float32)
+max_stocks_options = cp.array([15,24], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.015,0.022,0.03], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.03,0.04,0.05], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.03,0.04,0.05], dtype=cp.float32)
 additional_buy_priority_options = cp.array(
-    [0, 1], dtype=cp.int32
+    [0,1], dtype=cp.int32
 )  # 0: lowest_order, 1: highest_drop
 
 # Create all combinations using CuPy's broadcasting capabilities
@@ -123,24 +123,28 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
     """
     print("⏳ Loading weekly filtered stocks data to GPU memory...")
     start_time = time.time()
-
+    
+    # ★★★ 핵심 수정 ★★★
+    # 백테스팅 시작일보다 넉넉하게 2주 전 데이터부터 로드하여,
+    # 연초에 이전 년도 데이터를 참조할 수 있도록 함
+    extended_start_date = pd.to_datetime(start_date) - timedelta(days=14)
+    extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+    
     # WeeklyFilteredStocks 테이블에서 해당 기간의 모든 데이터를 가져옴
-    query = f"""
+    query =  f"""
     SELECT `filter_date` as date, `stock_code` as ticker
     FROM WeeklyFilteredStocks
-    WHERE `filter_date` BETWEEN '{start_date}' AND '{end_date}'
+    WHERE `filter_date` BETWEEN '{extended_start_date_str}' AND '{end_date}'
     """
     sql_engine = create_engine(engine)
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=["date"])
-
+    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
+    
     # cuDF로 변환
     gdf = cudf.from_pandas(df_pd)
-    gdf = gdf.set_index("date")
-
+    gdf = gdf.set_index('date')
+    
     end_time = time.time()
-    print(
-        f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s"
-    )
+    print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s")
     return gdf
 
 
@@ -157,6 +161,7 @@ def run_gpu_optimization(
     trading_date_indices_gpu,
     trading_dates_pd,
     initial_cash_value,
+    execution_params,
 ):
     """
     GPU-accelerated backtesting을 오케스트레이션합니다.
@@ -249,6 +254,7 @@ if __name__ == "__main__":
         trading_date_indices_gpu,
         trading_dates_pd,
         initial_cash,  # <<< config에서 읽어온 값을 전달
+        execution_params,
     )
 
     end_time = time.time()
