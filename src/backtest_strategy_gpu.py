@@ -125,6 +125,7 @@ def _process_sell_signals_gpu(
     # config.yaml에서 읽어온 실행 파라미터를 추가로 받습니다.
     sell_commission_rate: float,
     sell_tax_rate: float,
+    debug_mode: bool = False, # ★★★ 추가
     is_debug_day: bool = False,      
     debug_ticker_idx: int = -1  
 ):
@@ -143,8 +144,9 @@ def _process_sell_signals_gpu(
     broadcasted_prices = cp.broadcast_to(
         current_prices.reshape(1, -1, 1), buy_prices.shape
     )
+    
      # ★★★ 함수 내부에 디버깅 블록 추가 ★★★
-    if is_debug_day:
+    if debug_mode and is_debug_day: 
         # 0번 시뮬레이션, 디버그 티커, 1차 매도분(split_idx=0)에 대한 모든 변수 값 출력
         sim_idx, stock_idx, split_idx = 0, debug_ticker_idx, 0
         
@@ -213,55 +215,57 @@ def _process_sell_signals_gpu(
     full_liquidation_mask = cp.broadcast_to(
         first_position_sell_triggered[:, :, cp.newaxis], quantities.shape
     )
+
     # --- ★★★ 로그 추가 시작 ★★★ ---
-    # 0번 시뮬레이션에서 어떤 거래가 일어났는지 확인하여 출력
-    
-    # 1. 0번 시뮬레이션에서 '부분 매도'가 일어난 포지션 찾기
-    sim0_partial_sell_mask = partial_sell_mask[0] # (num_stocks, max_splits)
-    if cp.any(sim0_partial_sell_mask):
-        # 매도가 일어난 (stock_idx, split_idx) 쌍의 인덱스를 가져옴
-        partial_stock_indices, partial_split_indices = cp.where(sim0_partial_sell_mask)
+    if debug_mode: # ★★★ 수정: if 문으로 전체 로그 블록 감싸기
+        # 0번 시뮬레이션에서 어떤 거래가 일어났는지 확인하여 출력
         
-        # 각 매도 건에 대해 로그 출력
-        for stock_idx, split_idx in zip(partial_stock_indices, partial_split_indices):
-            stock_idx, split_idx = int(stock_idx), int(split_idx)
-            order_num = split_idx + 1
-            qty = int(quantities[0, stock_idx, split_idx])
-            close = float(current_prices[stock_idx])
-            buy_price = float(buy_prices[0, stock_idx, split_idx])
-            sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
-            net_revenue = (sell_price * qty) * cost_factor
+        # 1. 0번 시뮬레이션에서 '부분 매도'가 일어난 포지션 찾기
+        sim0_partial_sell_mask = partial_sell_mask[0] # (num_stocks, max_splits)
+        if cp.any(sim0_partial_sell_mask):
+            # 매도가 일어난 (stock_idx, split_idx) 쌍의 인덱스를 가져옴
+            partial_stock_indices, partial_split_indices = cp.where(sim0_partial_sell_mask)
             
-            print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL, Order: {order_num}, "
-                  f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
-                  f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
+            # 각 매도 건에 대해 로그 출력
+            for stock_idx, split_idx in zip(partial_stock_indices, partial_split_indices):
+                stock_idx, split_idx = int(stock_idx), int(split_idx)
+                order_num = split_idx + 1
+                qty = int(quantities[0, stock_idx, split_idx])
+                close = float(current_prices[stock_idx])
+                buy_price = float(buy_prices[0, stock_idx, split_idx])
+                sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
+                net_revenue = (sell_price * qty) * cost_factor
+                
+                print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL, Order: {order_num}, "
+                    f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
+                    f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
 
-    # 2. 0번 시뮬레이션에서 '전체 청산'이 일어난 종목 찾기
-    sim0_full_liquidation_mask = full_liquidation_mask[0]
-    if cp.any(sim0_full_liquidation_mask):
-        # 전체 청산이 일어난 종목의 인덱스 (stock_idx)를 가져옴
-        full_stock_indices = cp.where(cp.any(sim0_full_liquidation_mask, axis=1))[0]
+        # 2. 0번 시뮬레이션에서 '전체 청산'이 일어난 종목 찾기
+        sim0_full_liquidation_mask = full_liquidation_mask[0]
+        if cp.any(sim0_full_liquidation_mask):
+            # 전체 청산이 일어난 종목의 인덱스 (stock_idx)를 가져옴
+            full_stock_indices = cp.where(cp.any(sim0_full_liquidation_mask, axis=1))[0]
 
-        for stock_idx in full_stock_indices:
-            stock_idx = int(stock_idx)
-            # 해당 종목의 모든 유효한 포지션(차수)에 대해 로그 출력
-            for split_idx in range(positions_state.shape[2]): # max_splits
-                # 이 차수가 실제로 매도 대상이었는지 확인
-                if quantities[0, stock_idx, split_idx] > 0 and sim0_full_liquidation_mask[stock_idx, split_idx]:
-                    order_num = split_idx + 1
-                    qty = int(quantities[0, stock_idx, split_idx])
-                    close = float(current_prices[stock_idx])
-                    buy_price = float(buy_prices[0, stock_idx, split_idx])
-                    sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
-                    net_revenue = (sell_price * qty) * cost_factor
-                    
-                    print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL (Full), Order: {order_num}, "
-                          f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
-                          f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
-            
-            # 종목 청산 로그 (CPU의 Liquidate와 유사)
-            print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: Liquidate")
-    # --- ★★★ 로그 추가 끝 ★★★ ---
+            for stock_idx in full_stock_indices:
+                stock_idx = int(stock_idx)
+                # 해당 종목의 모든 유효한 포지션(차수)에 대해 로그 출력
+                for split_idx in range(positions_state.shape[2]): # max_splits
+                    # 이 차수가 실제로 매도 대상이었는지 확인
+                    if quantities[0, stock_idx, split_idx] > 0 and sim0_full_liquidation_mask[stock_idx, split_idx]:
+                        order_num = split_idx + 1
+                        qty = int(quantities[0, stock_idx, split_idx])
+                        close = float(current_prices[stock_idx])
+                        buy_price = float(buy_prices[0, stock_idx, split_idx])
+                        sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
+                        net_revenue = (sell_price * qty) * cost_factor
+                        
+                        print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL (Full), Order: {order_num}, "
+                            f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
+                            f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
+                
+                # 종목 청산 로그 (CPU의 Liquidate와 유사)
+                print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: Liquidate")
+        # --- ★★★ 로그 추가 끝 ★★★ ---
 
     # 전체 청산 시, 모든 포지션은 '자신의 계산된 실제 매도가'에 팔린다고 가정
     full_liquidation_raw_proceeds_matrix = (
@@ -316,6 +320,7 @@ def _process_additional_buy_signals_gpu(
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
     buy_commission_rate: float,  # 매수 수수료율 인자
+    debug_mode: bool = False, # ★★★ 추가
 ):
     """
     Vectorized additional buy signal processing for all simulations.
@@ -477,7 +482,7 @@ def _process_additional_buy_signals_gpu(
             if float(current_sim_capital) >= total_cost:
                 # --- ★★★ 로그 추가 시작 ★★★ ---
                 # 0번 시뮬레이션에 대해서만 로그 출력
-                if sim_idx == 0:
+                if debug_mode and sim_idx == 0: # ★★★ 수정: debug_mode 조건 추가
                     # 로그에 필요한 변수들 준비
                     order_num = next_split_idx + 1 # 차수는 1부터 시작
                     close_price = float(current_price)
@@ -508,11 +513,13 @@ def run_magic_split_strategy_on_gpu(
     all_tickers: list,
     execution_params: dict,  # ★★★ 추가 ★★★
     max_splits_limit: int = 20,
+    debug_mode: bool = False, # ★★★ 추가 
 ):
     """
     Main GPU-accelerated backtesting function for the MagicSplitStrategy.
     """
-    print("🚀 Initializing GPU backtesting environment...")
+    if debug_mode:
+        print("🚀 Initializing GPU backtesting environment...")
     num_combinations = param_combinations.shape[0]
     num_trading_days = len(trading_date_indices)  # 💡 길이는 정수 인덱스 배열 기준
 
@@ -525,21 +532,24 @@ def run_magic_split_strategy_on_gpu(
     max_stocks_param = int(
         cp.max(param_combinations[:, 0]).get()
     )  # Get max_stocks from user parameters
-    print(f"max_stocks_param: {max_stocks_param}")
+    if debug_mode:
+        print(f"max_stocks_param: {max_stocks_param}")
     num_tickers = len(all_tickers)
 
     # The actual dimension used for arrays must match the full list of tickers
     positions_state = cp.zeros(
         (num_combinations, num_tickers, max_splits_limit, 2), dtype=cp.float32
     )
-    print(f"portfolio_state: {portfolio_state.get()}")
-    print(f"positions_state: {cp.any(positions_state > 0).get()}")
+    if debug_mode:
+        print(f"portfolio_state: {portfolio_state.get()}")
+        print(f"positions_state: {cp.any(positions_state > 0).get()}")
     daily_portfolio_values = cp.zeros(
         (num_combinations, num_trading_days), dtype=cp.float32
     )
 
-    print(f"    - State arrays created. Portfolio State Shape: {portfolio_state.shape}")
-    print(f"    - Positions State Array Shape: {positions_state.shape}")
+    if debug_mode:
+        print(f"    - State arrays created. Portfolio State Shape: {portfolio_state.shape}")
+        print(f"    - Positions State Array Shape: {positions_state.shape}")
 
     # 💡 티커를 인덱스로 변환하는 딕셔너리를 미리 만들어 성능 향상
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
@@ -553,15 +563,15 @@ def run_magic_split_strategy_on_gpu(
         current_month = current_date.month
 
         # --- [DEBUG] 루프 시작 시점의 상태 ---
-        capital_before_day = portfolio_state[0, 0].get()
-        positions_before_day = cp.sum(positions_state[0, :, :, 0] > 0).get()
-        print(
-            f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---"
-        )
-        print(
-            f"[BEGIN] Capital: {capital_before_day:,.0f} | Total Positions: {positions_before_day}"
-        )
-        # ---
+        if debug_mode:
+            capital_before_day = portfolio_state[0, 0].get()
+            positions_before_day = cp.sum(positions_state[0, :, :, 0] > 0).get()
+            print(
+                f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---"
+            )
+            print(
+                f"[BEGIN] Capital: {capital_before_day:,.0f} | Total Positions: {positions_before_day}"
+            )
 
         data_for_lookup = all_data_gpu.reset_index()
         current_day_data = data_for_lookup[data_for_lookup["date"] == current_date]
@@ -581,9 +591,10 @@ def run_magic_split_strategy_on_gpu(
                     all_data_gpu,
                     all_tickers,
                 )
-                inv_per_order = portfolio_state[0, 1].get()
-                print(
-                    f"  [REBALANCE] Month changed to {current_month}. New Investment/Order: {inv_per_order:,.0f}"
+                if debug_mode:
+                    inv_per_order = portfolio_state[0, 1].get()
+                    print(
+                        f"  [REBALANCE] Month changed to {current_month}. New Investment/Order: {inv_per_order:,.0f}"
                 )
                 previous_month = current_month
 
@@ -612,7 +623,7 @@ def run_magic_split_strategy_on_gpu(
                 candidates_of_the_week = past_data[
                     past_data["date"] == most_recent_date_cudf
                 ]
-                if len(candidates_of_the_week) > 0:
+                if len(candidates_of_the_week) > 0 and debug_mode:
                     print(
                         f"  [DEBUG] Current Date: {current_date.strftime('%Y-%m-%d')}, Using Filter Date: {most_recent_date_pd.strftime('%Y-%m-%d')}, Candidates Found: {len(candidates_of_the_week)}"
                     )
@@ -637,9 +648,10 @@ def run_magic_split_strategy_on_gpu(
                     )
                     mask_date = data_for_filtering["date"] == current_date
                     candidate_data_today = data_for_filtering[mask_ticker & mask_date]
-                    print(
-                        f"  [DEBUG] Found {len(candidate_data_today)} candidates with today's price data."
-                    )
+                    if debug_mode:
+                        print(
+                            f"  [DEBUG] Found {len(candidate_data_today)} candidates with today's price data."
+                        )
                     if not candidate_data_today.empty:
                         candidate_data_today = candidate_data_today.set_index(
                             ["ticker", "date"]
@@ -674,6 +686,7 @@ def run_magic_split_strategy_on_gpu(
                 candidate_tickers_for_day,
                 candidate_atrs_for_day,
                 buy_commission_rate=execution_params["buy_commission_rate"],
+                debug_mode=debug_mode,
             )
             # 2. Process Additional Buy Signals
             portfolio_state, positions_state = _process_additional_buy_signals_gpu(
@@ -682,6 +695,7 @@ def run_magic_split_strategy_on_gpu(
                 param_combinations,
                 current_prices,
                 buy_commission_rate=execution_params["buy_commission_rate"],
+                debug_mode=debug_mode,
             )
             # 3. Process Sell Signals
              # --- ★★★ 디버깅 코드 추가 시작 ★★★ ---
@@ -695,13 +709,14 @@ def run_magic_split_strategy_on_gpu(
                 portfolio_state, positions_state, param_combinations, current_prices,
                 execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
                 is_debug_day=is_debug_day,
-                debug_ticker_idx=debug_ticker_idx
+                debug_ticker_idx=debug_ticker_idx,
+                debug_mode=debug_mode,
             )
             # --- ★★★ 디버깅 코드 추가 끝 ★★★ ---
             capital_after_actions = portfolio_state[
                 0, 0
             ].get()  # 모든 매매 행위 후의 자본
-            if capital_after_actions != capital_before_actions:
+            if capital_after_actions != capital_before_actions and debug_mode:
                 print(
                     f"  [TRADE]   Capital changed by: {capital_after_actions - capital_before_actions:,.0f}"
                 )
@@ -720,33 +735,32 @@ def run_magic_split_strategy_on_gpu(
                 daily_portfolio_values[:, i] = initial_cash
 
         # --- [DEBUG] 루프 종료 시점의 상태 ---
-        final_capital_of_day = portfolio_state[0, 0].get()
-        final_stock_value_of_day = (
-            stock_values[0].get()
-            if "stock_values" in locals() and stock_values.size > 0
-            else 0
-        )
-        final_total_value_of_day = final_capital_of_day + final_stock_value_of_day
-        final_positions_of_day = cp.sum(positions_state[0, :, :, 0] > 0).get()
-        # --- ★★★ 로그 추가 시작 ★★★ ---
-        # 0번 시뮬레이션의 최종 보유 종목 리스트 출력
-        # 1. 현재 어떤 종목을 보유하고 있는지 (종목 단위) boolean 마스크 생성
-        has_any_position = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
-        # 2. 보유 중인 종목의 인덱스(ticker_idx)를 가져옴
-        held_stock_indices = cp.where(has_any_position)[0].get().tolist()
-        # 3. 인덱스를 실제 티커 코드로 변환 (all_tickers 리스트 활용)
-        held_tickers = sorted([all_tickers[idx] for idx in held_stock_indices])
-        print(f"  [GPU_HOLDINGS] {held_tickers}")
-        # --- ★★★ 로그 추가 끝 ★★★ ---
-        print(
-            f"[END]   Capital: {final_capital_of_day:,.0f} | Stock Val: {final_stock_value_of_day:,.0f} | Total Val: {final_total_value_of_day:,.0f} | Positions: {final_positions_of_day}"
-        )
+        if debug_mode:
+            final_capital_of_day = portfolio_state[0, 0].get()
+            final_total_value_of_day = daily_portfolio_values[0, i].get()
+            final_stock_value_of_day = final_total_value_of_day - final_capital_of_day
+            final_positions_of_day = cp.sum(positions_state[0, :, :, 0] > 0).get()
+            # --- ★★★ 로그 추가 시작 ★★★ ---
+            # 0번 시뮬레이션의 최종 보유 종목 리스트 출력
+            # 1. 현재 어떤 종목을 보유하고 있는지 (종목 단위) boolean 마스크 생성
+            has_any_position = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
+            # 2. 보유 중인 종목의 인덱스(ticker_idx)를 가져옴
+            held_stock_indices = cp.where(has_any_position)[0].get().tolist()
+            # 3. 인덱스를 실제 티커 코드로 변환 (all_tickers 리스트 활용)
+            held_tickers = sorted([all_tickers[idx] for idx in held_stock_indices])
+            print(f"  [GPU_HOLDINGS] {held_tickers}")
+            # --- ★★★ 로그 추가 끝 ★★★ ---
+            print(
+                f"[END]   Capital: {final_capital_of_day:,.0f} | Stock Val: {final_stock_value_of_day:,.0f} | Total Val: {final_total_value_of_day:,.0f} | Positions: {final_positions_of_day}"
+            )
         # ---
 
         if (i + 1) % 252 == 0:
-            year = current_date.year
-            print(f"    - Simulating year: {year} ({i+1}/{num_trading_days})")
+            if debug_mode:
+                year = current_date.year
+                print(f"    - Simulating year: {year} ({i+1}/{num_trading_days})")
 
+    if debug_mode:
         print("🎉 GPU backtesting simulation finished.")
 
     return daily_portfolio_values
@@ -760,6 +774,7 @@ def _process_new_entry_signals_gpu(
     candidate_tickers_for_day: cp.ndarray,  # 오늘 매수 후보군 티커의 '인덱스' 배열
     candidate_atrs_for_day: cp.ndarray,  # 오늘 매수 후보군 티커의 ATR 값 배열
     buy_commission_rate: float,  # ★★★ 추가: 매수 수수료율 인자
+    debug_mode: bool = False, # ★★★ 추가
 ):
     """
     Vectorized new entry signal processing for all simulations.
@@ -802,8 +817,10 @@ def _process_new_entry_signals_gpu(
 
     investment_per_order = portfolio_state[:, 1]  # Shape: (num_combinations,)
     current_capital = portfolio_state[:, 0]  # Shape: (num_combinations,)
-
-    print(f"  [NEW_BUY_DEBUG] Candidates to check: {len(sorted_candidate_indices)}")
+    
+    if debug_mode: # ★★★ 수정
+        print(f"  [NEW_BUY_DEBUG] Candidates to check: {len(sorted_candidate_indices)}")
+    
 
     # 한 번에 한 종목씩 처리
     for ticker_idx_cupy in sorted_candidate_indices:
