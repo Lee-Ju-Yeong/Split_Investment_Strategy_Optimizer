@@ -125,12 +125,14 @@ def _process_sell_signals_gpu(
     # config.yaml에서 읽어온 실행 파라미터를 추가로 받습니다.
     sell_commission_rate: float,
     sell_tax_rate: float,
+    is_debug_day: bool = False,      
+    debug_ticker_idx: int = -1  
 ):
     """
     Vectorized sell signal processing for all simulations, reflecting exact execution logic.
     CPU(execution.py)의 매도 로직을 GPU로 완벽하게 포팅한 버전입니다.
     """
-
+   
     # --- Step 0: 파라미터 및 상태 준비 ---
     sell_profit_rates = param_combinations[:, 3:4].reshape(-1, 1, 1)  # (comb, 1, 1)
     quantities = positions_state[..., 0]  # (comb, stock, split)
@@ -141,6 +143,32 @@ def _process_sell_signals_gpu(
     broadcasted_prices = cp.broadcast_to(
         current_prices.reshape(1, -1, 1), buy_prices.shape
     )
+     # ★★★ 함수 내부에 디버깅 블록 추가 ★★★
+    if is_debug_day:
+        # 0번 시뮬레이션, 디버그 티커, 1차 매도분(split_idx=0)에 대한 모든 변수 값 출력
+        sim_idx, stock_idx, split_idx = 0, debug_ticker_idx, 0
+        
+        # 1. 입력 값 확인
+        bp = buy_prices[sim_idx, stock_idx, split_idx].get()
+        spr = sell_profit_rates[sim_idx, 0, 0].get()
+        cp_val = current_prices[stock_idx].get()
+        
+        print("\n--- SELL DEBUGGER (2023-01-06, TickerIdx: 287) ---")
+        print(f"  Input -> BuyPrice: {bp}, SellProfitRate: {spr}, CurrentPrice: {cp_val}")
+
+        # 2. 중간 계산 과정 확인
+        cost_f = 1.0 - sell_commission_rate - sell_tax_rate
+        target_sp = (bp * (1 + spr)) / cost_f
+        actual_sp = adjust_price_up_gpu(cp.array([target_sp])).get()[0]
+
+        print(f"  Calc  -> TargetSellPrice: {target_sp}, ActualSellPrice: {actual_sp}")
+
+        # 3. 최종 조건 및 결과 확인
+        final_condition = cp_val >= actual_sp
+        print(f"  Result-> Sell Condition ({cp_val} >= {actual_sp}): {final_condition}")
+        print("---------------------------------------------------\n")
+
+    
 
     # 매도 대상이 될 수 있는 유효한 포지션 (매수가가 0보다 큼)
     valid_positions = buy_prices > 0
@@ -185,6 +213,55 @@ def _process_sell_signals_gpu(
     full_liquidation_mask = cp.broadcast_to(
         first_position_sell_triggered[:, :, cp.newaxis], quantities.shape
     )
+    # --- ★★★ 로그 추가 시작 ★★★ ---
+    # 0번 시뮬레이션에서 어떤 거래가 일어났는지 확인하여 출력
+    
+    # 1. 0번 시뮬레이션에서 '부분 매도'가 일어난 포지션 찾기
+    sim0_partial_sell_mask = partial_sell_mask[0] # (num_stocks, max_splits)
+    if cp.any(sim0_partial_sell_mask):
+        # 매도가 일어난 (stock_idx, split_idx) 쌍의 인덱스를 가져옴
+        partial_stock_indices, partial_split_indices = cp.where(sim0_partial_sell_mask)
+        
+        # 각 매도 건에 대해 로그 출력
+        for stock_idx, split_idx in zip(partial_stock_indices, partial_split_indices):
+            stock_idx, split_idx = int(stock_idx), int(split_idx)
+            order_num = split_idx + 1
+            qty = int(quantities[0, stock_idx, split_idx])
+            close = float(current_prices[stock_idx])
+            buy_price = float(buy_prices[0, stock_idx, split_idx])
+            sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
+            net_revenue = (sell_price * qty) * cost_factor
+            
+            print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL, Order: {order_num}, "
+                  f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
+                  f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
+
+    # 2. 0번 시뮬레이션에서 '전체 청산'이 일어난 종목 찾기
+    sim0_full_liquidation_mask = full_liquidation_mask[0]
+    if cp.any(sim0_full_liquidation_mask):
+        # 전체 청산이 일어난 종목의 인덱스 (stock_idx)를 가져옴
+        full_stock_indices = cp.where(cp.any(sim0_full_liquidation_mask, axis=1))[0]
+
+        for stock_idx in full_stock_indices:
+            stock_idx = int(stock_idx)
+            # 해당 종목의 모든 유효한 포지션(차수)에 대해 로그 출력
+            for split_idx in range(positions_state.shape[2]): # max_splits
+                # 이 차수가 실제로 매도 대상이었는지 확인
+                if quantities[0, stock_idx, split_idx] > 0 and sim0_full_liquidation_mask[stock_idx, split_idx]:
+                    order_num = split_idx + 1
+                    qty = int(quantities[0, stock_idx, split_idx])
+                    close = float(current_prices[stock_idx])
+                    buy_price = float(buy_prices[0, stock_idx, split_idx])
+                    sell_price = float(actual_sell_prices[0, stock_idx, split_idx])
+                    net_revenue = (sell_price * qty) * cost_factor
+                    
+                    print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: SELL (Full), Order: {order_num}, "
+                          f"Qty: {qty}, Close: {close:,.0f}, BuyPrice(Original): {buy_price:,.0f}, "
+                          f"SellPrice: {sell_price:,.0f}, NetRevenue: {net_revenue:,.0f}")
+            
+            # 종목 청산 로그 (CPU의 Liquidate와 유사)
+            print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: Liquidate")
+    # --- ★★★ 로그 추가 끝 ★★★ ---
 
     # 전체 청산 시, 모든 포지션은 '자신의 계산된 실제 매도가'에 팔린다고 가정
     full_liquidation_raw_proceeds_matrix = (
@@ -209,14 +286,27 @@ def _process_sell_signals_gpu(
 
     # --- Step 4: 포지션 상태 업데이트 ---
 
-    # 1. 전체 청산된 포지션들 정리
-    positions_state[full_liquidation_mask, 0] = 0  # quantity to 0
-    positions_state[full_liquidation_mask, 1] = 0  # buy_price to 0
+    # 1. 부분 매도(2차 이상)가 일어난 포지션의 '수량'만 0으로 설정합니다.
+    #    partial_sell_mask는 전체 청산 대상 종목을 이미 제외했으므로 안전합니다.
+    positions_state[..., 0][partial_sell_mask] = 0
 
-    # 2. 부분 매도된 포지션들 정리
-    positions_state[partial_sell_mask, 0] = 0
-    positions_state[partial_sell_mask, 1] = 0
-
+    # 2. 전체 청산(1차 매도)이 일어난 종목을 처리합니다.
+    #    해당 종목의 '모든 차수'에 대해 수량을 0으로, 매수가를 -1로 만듭니다.
+    
+    # first_position_sell_triggered: (comb, stock) 형태의 2D 마스크
+    # 이를 브로드캐스팅하여 (comb, stock, split) 형태의 3D 마스크로 확장합니다.
+    full_liquidation_stock_mask = cp.broadcast_to(
+        first_position_sell_triggered[:, :, cp.newaxis], positions_state[..., 0].shape
+    )
+    
+    # 청산 대상 종목의 모든 차수 수량을 0으로 설정합니다.
+    # 이것이 총자산 계산의 정확성을 보장합니다.
+    positions_state[..., 0][full_liquidation_stock_mask] = 0
+    
+    # 청산 대상 종목의 모든 차수 매수가를 -1로 설정합니다.
+    # 이것이 향후 해당 종목이 추가매수/매도 대상에서 제외되도록 보장합니다.
+    positions_state[..., 1][full_liquidation_stock_mask] = -1
+    
     return portfolio_state, positions_state
 
 
@@ -325,60 +415,86 @@ def _process_additional_buy_signals_gpu(
         # 1. 실제 매수 대상의 인덱스 가져오기
         sim_indices, stock_indices = cp.where(initial_buy_condition)
 
-        # 2. 비용 계산 (벡터화)
-        # current_prices 배열에서 stock_indices를 사용해 필요한 가격만 가져옵니다.
-        prices_for_buy = current_prices[stock_indices]
-
-        buy_prices_for_buy = adjust_price_up_gpu(prices_for_buy)
-        # 가격이 0인 경우 방어
-        valid_price_mask = buy_prices_for_buy > 0
-        if not cp.any(valid_price_mask):
-            return portfolio_state, positions_state  # 살 수 있는게 없으면 종료
-        # 유효한 가격을 가진 대상에 대해서만 계산 진행
-        sim_indices = sim_indices[valid_price_mask]
-        stock_indices = stock_indices[valid_price_mask]
-        buy_prices_for_buy = buy_prices_for_buy[valid_price_mask]
-        inv_per_order_for_buy = investment_per_order[sim_indices, 0, 0]
-        quantities_to_buy = cp.floor(inv_per_order_for_buy / buy_prices_for_buy).astype(
-            cp.int32
+        # 2. 후보군들의 'sort_metric' 계산에 필요한 정보 가져오기
+        # 2-1. 현재 보유 차수 계산 (len(positions)에 해당)
+        num_existing_splits = cp.sum(has_positions[sim_indices, stock_indices], axis=1)
+        # 2-2. 하락률 계산
+        last_buy_prices_for_candidates = last_buy_prices[sim_indices, stock_indices]
+        current_prices_for_candidates = current_prices[stock_indices]
+        # 분모 0 방지
+        drop_rates = cp.zeros_like(last_buy_prices_for_candidates)
+        valid_mask = last_buy_prices_for_candidates > 0
+        drop_rates[valid_mask] = (last_buy_prices_for_candidates[valid_mask] - current_prices_for_candidates[valid_mask]) / last_buy_prices_for_candidates[valid_mask]
+        # 3. 각 시뮬레이션의 'additional_buy_priority' 파라미터 가져오기
+        # 0: lowest_order, 1: highest_drop
+        add_buy_priority_params = param_combinations[sim_indices, 4]
+        # 4. 'sort_metric' 최종 계산
+        # priority가 0이면 보유 차수, 1이면 (-하락률)을 sort_metric으로 사용
+        sort_metric = cp.where(
+            add_buy_priority_params == 0,
+            num_existing_splits.astype(cp.float32),
+            -drop_rates
         )
+        # 5. 모든 후보 정보를 cuDF DataFrame으로 변환
+        candidates_gdf = cudf.DataFrame({
+            'sim_idx': sim_indices,
+            'sort_metric': sort_metric,
+            'stock_idx': stock_indices,
+            'next_split_idx': next_split_indices_to_buy[sim_indices, stock_indices]
+        })
+        # 6. DataFrame을 시뮬레이션 번호 -> 우선순위(sort_metric) 순으로 정렬
+        sorted_candidates_gdf = candidates_gdf.sort_values(by=['sim_idx', 'sort_metric'], ascending=[True, True])
+        # 7. 정렬된 각 열을 다시 CuPy 배열로 변환
+        sorted_sim_indices = sorted_candidates_gdf['sim_idx'].values
+        sorted_stock_indices = sorted_candidates_gdf['stock_idx'].values
+        sorted_next_split_indices = sorted_candidates_gdf['next_split_idx'].values
+        # 8. CuPy 배열을 순회하며 순차적 매수 실행
+        for i in range(len(sorted_sim_indices)):
+            sim_idx = int(sorted_sim_indices[i])
+            stock_idx = int(sorted_stock_indices[i])
+            next_split_idx = int(sorted_next_split_indices[i])
+            
+            # 현재 시뮬레이션의 최신 자본 상태를 가져옴
+            current_sim_capital = portfolio_state[sim_idx, 0]
+            
+            # 매수에 필요한 정보 계산
+            inv_per_order = investment_per_order[sim_idx, 0, 0]
+            current_price = current_prices[stock_idx]
+            buy_price = adjust_price_up_gpu(current_price)
+            
+            if buy_price <= 0:
+                continue
 
-        # 수수료 포함 총 비용
-        total_costs = (buy_prices_for_buy * quantities_to_buy) * (
-            1 + buy_commission_rate
-        )
+            # .astype(cp.int32) 대신 int()로 CPU 스칼라로 변환
+            quantity = int(cp.floor(inv_per_order / buy_price))
+            if quantity <= 0:
+                continue
+                
+            # CPU 스칼라 값으로 최종 비용 계산
+            total_cost = (float(buy_price) * quantity) * (1 + buy_commission_rate)
 
-        # 3. ★★★ 자본이 충분한지 최종 확인 ★★★
-        capital_for_buy = current_capital[sim_indices]
-        final_buy_mask = capital_for_buy >= total_costs
+            # 자본이 충분한 경우에만 매수 실행
+            if float(current_sim_capital) >= total_cost:
+                # --- ★★★ 로그 추가 시작 ★★★ ---
+                # 0번 시뮬레이션에 대해서만 로그 출력
+                if sim_idx == 0:
+                    # 로그에 필요한 변수들 준비
+                    order_num = next_split_idx + 1 # 차수는 1부터 시작
+                    close_price = float(current_price)
+                    bp_float = float(buy_price)
+                    
+                    print(f"  [GPU_TRADE_LOG] TickerIdx: {stock_idx}, Action: ADD_BUY, Order: {order_num}, "
+                          f"Qty: {quantity}, Close: {close_price:,.0f}, BuyPrice: {bp_float:,.0f}, "
+                          f"TotalCost: {total_cost:,.0f}")
+                # --- ★★★ 로그 추가 끝 ★★★ ---
+                # 자본 차감 (원본 portfolio_state를 직접 수정)
+                portfolio_state[sim_idx, 0] -= total_cost
+                
+                # 포지션 업데이트
+                positions_state[sim_idx, stock_idx, next_split_idx, 0] = quantity
+                positions_state[sim_idx, stock_idx, next_split_idx, 1] = buy_price
 
-        # 4. 최종 매수 대상에 대해서만 상태 업데이트 수행
-        if cp.any(final_buy_mask):
-            # 최종 매수 대상 필터링
-            final_sim_indices = sim_indices[final_buy_mask]
-            final_stock_indices = stock_indices[final_buy_mask]
-            final_quantities = quantities_to_buy[final_buy_mask]
-            final_buy_prices = buy_prices_for_buy[final_buy_mask]
-            final_total_costs = total_costs[final_buy_mask]
-            final_next_splits = next_split_indices_to_buy[
-                final_sim_indices, final_stock_indices
-            ]
-
-            # 포지션 및 자본 업데이트
-            # 주의: 이 부분은 고급 인덱싱이며, CuPy 버전에 따라 동작이 다를 수 있음
-            # 가장 안전한 방법은 루프를 사용하는 것
-            for i in range(len(final_sim_indices)):
-                sim_idx = int(final_sim_indices[i])
-                stock_idx = int(final_stock_indices[i])
-                split_idx = int(final_next_splits[i])
-                if split_idx == -1:
-                    continue  # 혹시 모를 오류 방지
-                positions_state[sim_idx, stock_idx, split_idx, 0] = final_quantities[i]
-                # 포지션 정보에는 순수 매수가를 저장
-                positions_state[sim_idx, stock_idx, split_idx, 1] = final_buy_prices[i]
-                # 자본에서는 수수료 포함 비용을 차감
-                portfolio_state[sim_idx, 0] -= final_total_costs[i]
-
+    # if 블록이 끝난 후, 최종적으로 portfolio_state와 positions_state를 반환
     return portfolio_state, positions_state
 
 
@@ -432,6 +548,8 @@ def run_magic_split_strategy_on_gpu(
     previous_month = -1
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
+        
+        
         current_month = current_date.month
 
         # --- [DEBUG] 루프 시작 시점의 상태 ---
@@ -566,11 +684,20 @@ def run_magic_split_strategy_on_gpu(
                 buy_commission_rate=execution_params["buy_commission_rate"],
             )
             # 3. Process Sell Signals
+             # --- ★★★ 디버깅 코드 추가 시작 ★★★ ---
+            # 1. 디버깅할 날짜와 티커 인덱스를 지정합니다.
+            is_debug_day = current_date.strftime('%Y-%m-%d') == '2023-01-06'
+            
+            # all_tickers 리스트에서 '120240'의 인덱스를 찾습니다. 없으면 -1.
+            debug_ticker_idx = ticker_to_idx.get('120240', -1) 
+            
             portfolio_state, positions_state = _process_sell_signals_gpu(
                 portfolio_state, positions_state, param_combinations, current_prices,
-                execution_params["sell_commission_rate"], execution_params["sell_tax_rate"]
+                execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
+                is_debug_day=is_debug_day,
+                debug_ticker_idx=debug_ticker_idx
             )
-
+            # --- ★★★ 디버깅 코드 추가 끝 ★★★ ---
             capital_after_actions = portfolio_state[
                 0, 0
             ].get()  # 모든 매매 행위 후의 자본
@@ -601,7 +728,16 @@ def run_magic_split_strategy_on_gpu(
         )
         final_total_value_of_day = final_capital_of_day + final_stock_value_of_day
         final_positions_of_day = cp.sum(positions_state[0, :, :, 0] > 0).get()
-
+        # --- ★★★ 로그 추가 시작 ★★★ ---
+        # 0번 시뮬레이션의 최종 보유 종목 리스트 출력
+        # 1. 현재 어떤 종목을 보유하고 있는지 (종목 단위) boolean 마스크 생성
+        has_any_position = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
+        # 2. 보유 중인 종목의 인덱스(ticker_idx)를 가져옴
+        held_stock_indices = cp.where(has_any_position)[0].get().tolist()
+        # 3. 인덱스를 실제 티커 코드로 변환 (all_tickers 리스트 활용)
+        held_tickers = sorted([all_tickers[idx] for idx in held_stock_indices])
+        print(f"  [GPU_HOLDINGS] {held_tickers}")
+        # --- ★★★ 로그 추가 끝 ★★★ ---
         print(
             f"[END]   Capital: {final_capital_of_day:,.0f} | Stock Val: {final_stock_value_of_day:,.0f} | Total Val: {final_total_value_of_day:,.0f} | Positions: {final_positions_of_day}"
         )
@@ -706,18 +842,46 @@ def _process_new_entry_signals_gpu(
 
         if cp.any(initial_buy_mask):
             buy_sim_indices = cp.where(initial_buy_mask)[0]
-            # 2. 비용 계산
+            
+            # --- ★★★ 수정 시작 ★★★ ---
+            # 1. 실제 매수가(buy_price)를 호가 올림 처리하여 결정합니다.
+            buy_price = adjust_price_up_gpu(stock_price)
+
+            # 2. 수정된 buy_price로 수량을 다시 계산합니다.
             quantity_to_buy = cp.floor(
-                investment_per_order[buy_sim_indices] / stock_price
+                investment_per_order[buy_sim_indices] / buy_price
             ).astype(cp.int32)
-            cost = quantity_to_buy * stock_price
-            # 3. 자본 상태를 직접 업데이트하며 최종 매수 실행
-            portfolio_state[buy_sim_indices, 0] -= cost
-            # 4. 나머지 상태 업데이트
+
+            # 3. 수수료를 포함한 최종 비용(total_cost)을 계산합니다.
+            total_cost = (buy_price * quantity_to_buy) * (1 + buy_commission_rate)
+            # --- ★★★ 로그 추가 시작 ★★★ ---
+            # 0번 시뮬레이션이 이번 매수 대상에 포함되는지 확인
+            is_sim0_buying = cp.any(buy_sim_indices == 0)
+            if is_sim0_buying:
+                # buy_sim_indices 배열에서 0번 시뮬레이션의 위치(인덱스)를 찾음
+                sim0_idx_in_buy_list = cp.where(buy_sim_indices == 0)[0][0]
+                
+                # 해당 위치의 수량과 비용 정보를 가져옴
+                qty = int(quantity_to_buy[sim0_idx_in_buy_list])
+                cost = float(total_cost[sim0_idx_in_buy_list])
+                
+                # 수량이 0보다 클 때만 로그 출력 (실제 매수가 일어났을 때)
+                if qty > 0:
+                    print(f"  [GPU_TRADE_LOG] TickerIdx: {ticker_idx}, Action: NEW_BUY, Order: 1, "
+                          f"Qty: {qty}, Close: {float(stock_price):,.0f}, BuyPrice: {float(buy_price):,.0f}, "
+                          f"TotalCost: {cost:,.0f}")
+            # 4. 자본 상태는 'portfolio_state' 원본에서 단 한번만 차감합니다.
+            portfolio_state[buy_sim_indices, 0] -= total_cost
+            
+            # 5. 포지션 상태를 업데이트합니다. (매수가는 호가 적용된 buy_price)
             positions_state[buy_sim_indices, ticker_idx, 0, 0] = quantity_to_buy
-            positions_state[buy_sim_indices, ticker_idx, 0, 1] = stock_price
+            positions_state[buy_sim_indices, ticker_idx, 0, 1] = buy_price
+            
             available_slots[buy_sim_indices] -= 1
             has_any_position[buy_sim_indices, ticker_idx] = True
-            current_capital[buy_sim_indices] -= cost
+            
+            # 6. 중복되는 current_capital 차감 로직을 삭제합니다.
+            # current_capital[buy_sim_indices] -= cost # 이 라인 삭제 또는 주석 처리
+
 
     return portfolio_state, positions_state
