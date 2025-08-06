@@ -27,7 +27,11 @@ from src.performance_analyzer import PerformanceAnalyzer
 config = load_config()
 db_config = config['database']
 backtest_settings = config['backtest_settings']
+strategy_params = config['strategy_params']
 execution_params = config['execution_params']
+
+# GPU 커널에 쿨다운 기간 전달을 위해 execution_params에 추가
+execution_params['cooldown_period_days'] = strategy_params.get('cooldown_period_days', 5)
 
 # URL 인코딩을 포함하여 DB 연결 문자열 생성
 db_pass_encoded = urllib.parse.quote_plus(db_config['password'])
