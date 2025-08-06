@@ -26,6 +26,7 @@ class MagicSplitStrategy(Strategy):
         backtest_start_date,
         backtest_end_date,
         additional_buy_priority="lowest_order",
+        cooldown_period_days=5,  # 쿨다운 기간 추가
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -36,6 +37,8 @@ class MagicSplitStrategy(Strategy):
         self.additional_buy_priority = additional_buy_priority
         self.investment_per_order = 0
         self.previous_month = -1
+        self.cooldown_period_days = cooldown_period_days  # 쿨다운 기간 설정
+        self.cooldown_tracker = {}  # 매도된 종목 추적
 
     def _calculate_monthly_investment(self, current_date, portfolio, data_handler):
         current_month = current_date.month
@@ -81,7 +84,7 @@ class MagicSplitStrategy(Strategy):
     def _generate_signals_for_existing_positions(
         self, current_date, portfolio, data_handler
     ):
-        signals = []    # list()로 감싸서 순회 중 portfolio.positions가 변경되어도 오류가 나지 않도록 방지
+        signals = []
         for ticker in list(portfolio.positions.keys()):
             stock_data = data_handler.load_stock_data(
                 ticker, self.backtest_start_date, self.backtest_end_date
@@ -93,9 +96,9 @@ class MagicSplitStrategy(Strategy):
             ):
                 continue
 
-            row = stock_data.loc[current_date]  # 해당 ticker의 포지션이 비어있을 경우를 대비 (청산 후 다음 신호 처리 시)
+            row = stock_data.loc[current_date]
             positions = portfolio.positions[ticker]
-            # --- 매도 신호 생성 로직 (수정된 버전) ---
+            
             for p in positions:
                 if row["close_price"] >= p.buy_price * (1 + self.sell_profit_rate):
                     signals.append(
@@ -107,8 +110,9 @@ class MagicSplitStrategy(Strategy):
                             "position": p,
                         }
                     )
-            
-            # --- 추가 매수 신호 생성 로직 (이 부분만 남김) ---
+                    # 매도 신호 발생 시 쿨다운 트래커에 기록
+                    self.cooldown_tracker[ticker] = current_date
+
             if positions:
                 last_pos = positions[-1]
                 if row["close_price"] <= last_pos.buy_price * (1 - self.additional_buy_drop_rate):
@@ -139,24 +143,36 @@ class MagicSplitStrategy(Strategy):
                                 }
                             )
         return signals
-                
 
     def _generate_signals_for_new_entries(self, current_date, portfolio, data_handler):
         signals = []
         available_slots = self.max_stocks - len(portfolio.positions)
         if available_slots <= 0:
             return signals
-        print(f"  [CPU_NEW_BUY_DEBUG] Available slots: {available_slots}")
+
         candidate_codes = data_handler.get_filtered_stock_codes(current_date)
         if not candidate_codes:
             return signals
 
-        new_candidates = [
-            code for code in candidate_codes if code not in portfolio.positions
-        ]
-        print(f"  [CPU_NEW_BUY_DEBUG] Total candidates: {len(candidate_codes)}, New candidates: {len(new_candidates)}")
+        # 쿨다운 로직 적용하여 신규 후보 필터링
+        active_candidates = []
+        for code in candidate_codes:
+            if code in portfolio.positions:
+                continue
+            
+            if code in self.cooldown_tracker:
+                exit_date = self.cooldown_tracker[code]
+                # 영업일 기준으로 쿨다운 기간 체크
+                days_since_exit = np.busday_count(exit_date.date(), current_date.date())
+                if days_since_exit < self.cooldown_period_days:
+                    continue  # 쿨다운 기간이므로 매수 후보에서 제외
+            
+            active_candidates.append(code)
+        
+        print(f"  [CPU_NEW_BUY_DEBUG] Total candidates: {len(candidate_codes)}, Active candidates after cooldown: {len(active_candidates)}")
+
         candidate_atrs = []
-        for ticker in new_candidates:
+        for ticker in active_candidates:
             stock_data = data_handler.load_stock_data(
                 ticker, self.backtest_start_date, self.backtest_end_date
             )
@@ -175,6 +191,7 @@ class MagicSplitStrategy(Strategy):
         sorted_candidates = sorted(
             candidate_atrs, key=lambda x: x["atr_14_ratio"], reverse=True
         )
+        
         print(f"  [CPU_NEW_BUY_DEBUG] Candidates to check: {len(sorted_candidates)}")
 
         for candidate in sorted_candidates:

@@ -106,7 +106,7 @@ class DataHandler:
         
         query = """
             SELECT stock_code FROM WeeklyFilteredStocks
-            WHERE filter_date = (SELECT MAX(filter_date) FROM WeeklyFilteredStocks WHERE filter_date <= %s)
+            WHERE filter_date = (SELECT MAX(filter_date) FROM WeeklyFilteredStocks WHERE filter_date < %s)
         """
         try:
             df = pd.read_sql(query, conn, params=[date_str])
