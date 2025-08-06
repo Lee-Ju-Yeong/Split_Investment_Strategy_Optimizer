@@ -15,24 +15,30 @@ class PerformanceAnalyzer:
     백테스팅 결과를 분석하고 주요 성과 지표를 계산하며,
     시각적 리포트를 생성하는 클래스.
     """
-    def __init__(self, daily_values: pd.Series, risk_free_rate: float = 0.02):
+    def __init__(self, history_df: pd.DataFrame, risk_free_rate: float = 0.02):
         """
         분석기 클래스를 초기화합니다.
 
         Args:
-            daily_values (pd.Series): 인덱스가 날짜(datetime)이고 값이 포트폴리오 가치인 pandas Series.
+            history_df (pd.DataFrame): 인덱스가 날짜(datetime)이고 'total_value' 컬럼을 포함하는 DataFrame.
             risk_free_rate (float, optional): 연간 무위험 수익률. 기본값은 2% (0.02).
         """
-        if not isinstance(daily_values, pd.Series) or daily_values.empty:
-            raise ValueError("daily_values는 비어있지 않은 pandas Series여야 합니다.")
+        # --- 올바르게 수정된 오류 체크 로직 ---
+        if not isinstance(history_df, pd.DataFrame) or history_df.empty or 'total_value' not in history_df.columns:
+            raise ValueError("history_df는 'total_value' 컬럼을 포함하는 비어있지 않은 pandas DataFrame이어야 합니다.")
         
-        self.daily_values = daily_values
+        self.history_df = history_df
+        self.daily_values = self.history_df['total_value']
+        
+        # daily_values가 비어있는 경우를 한번 더 체크
+        if self.daily_values.empty:
+            raise ValueError("'total_value' 컬럼에 유효한 데이터가 없습니다.")
+
         self.risk_free_rate = risk_free_rate
         self.daily_returns = self.daily_values.pct_change().dropna()
         
         # 주요 지표들을 계산하여 인스턴스 변수에 저장
         self.metrics = self._calculate_all_metrics()
-
     def _calculate_all_metrics(self) -> dict:
         """
         모든 핵심 성과 지표를 계산하여 딕셔너리로 반환하는 내부 메서드.

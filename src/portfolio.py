@@ -1,11 +1,12 @@
-"""
-portfolio.py
-
-This module contains the functions for managing the portfolio for the Magic Split Strategy.
-"""
+# portfolio.py (수정 필수!)
 
 import pandas as pd
 import numpy as np
+
+# DataHandler 타입 힌트를 위해 추가 (실제 임포트는 아님)
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .data_handler import DataHandler
 
 class Position:
     def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
@@ -38,7 +39,7 @@ class Portfolio:
         self.end_date = end_date
         self.positions = {}
         self.trade_history = []
-        self.daily_value_history = []
+        self.daily_snapshot_history = [] # daily_value_history에서 이름 변경 및 확장
 
     def update_cash(self, amount):
         self.cash += amount
@@ -58,7 +59,7 @@ class Portfolio:
             except ValueError:
                 print(f"Warning: 제거하려는 포지션을 {ticker} 종목에서 찾을 수 없습니다.")
 
-    def get_total_value(self, current_date, data_handler):
+    def get_total_value(self, current_date, data_handler: 'DataHandler'):
         total_market_value = 0
         for ticker, positions_list in self.positions.items():
             current_price = data_handler.get_latest_price(current_date, ticker, self.start_date, self.end_date)
@@ -71,15 +72,57 @@ class Portfolio:
     def record_trade(self, trade: Trade):
         self.trade_history.append(trade)
 
-    def record_daily_value(self, date, value):
-        self.daily_value_history.append({'date': date, 'value': value})
+    ### ### [핵심] 일별 스냅샷 기록 기능 ### ###
+    def record_daily_snapshot(self, date, total_value):
+        """일별 포트폴리오의 주요 정보를 기록합니다."""
+        snapshot = {
+            'date': date,
+            'total_value': total_value,
+            'cash': self.cash,
+            'stock_count': len(self.positions)
+        }
+        self.daily_snapshot_history.append(snapshot)
         
-    # --- 💡 추가: 종목 청산 로직 수정 시작 💡 ---
     def liquidate_ticker(self, ticker):
-        """
-        포트폴리오 관리 목록에서 특정 종목을 완전히 제거합니다.
-        이는 1차 매수분이 매도되어 더 이상 해당 종목을 추적/관리하지 않을 때 호출됩니다.
-        """
         if ticker in self.positions:
-            # 해당 종목의 모든 포지션 정보가 담긴 리스트 자체를 삭제
             del self.positions[ticker]
+
+    ### ### [핵심] 일일 스냅샷 상세 데이터 계산 메소드 ### ###
+    def get_positions_snapshot(self, current_date, data_handler: 'DataHandler', total_portfolio_value):
+        """현재 보유 중인 모든 종목의 상세 정보를 DataFrame으로 반환합니다."""
+        if not self.positions:
+            return pd.DataFrame()
+
+        snapshot_data = []
+        for ticker, positions in self.positions.items():
+            current_price = data_handler.get_latest_price(current_date, ticker, self.start_date, self.end_date)
+            # 종가를 못 가져오는 경우(거래정지 등)는 스냅샷에서 제외하지 않고, 가격을 0으로 처리하여 표시
+            if current_price is None or np.isnan(current_price):
+                current_price = 0
+
+            total_quantity = sum(p.quantity for p in positions)
+            total_invested_cost = sum(p.quantity * p.buy_price for p in positions)
+            avg_buy_price = total_invested_cost / total_quantity if total_quantity > 0 else 0
+            
+            current_total_value = total_quantity * current_price
+            unrealized_pnl = current_total_value - total_invested_cost
+            pnl_rate = unrealized_pnl / total_invested_cost if total_invested_cost > 0 else 0
+            weight = current_total_value / total_portfolio_value if total_portfolio_value > 0 else 0
+            
+            snapshot_data.append({
+                'Ticker': ticker,
+                'Name': data_handler.get_name_from_ticker(ticker) or 'N/A',
+                'Holdings': len(positions),
+                'Avg Buy Price': avg_buy_price,
+                'Current Price': current_price,
+                'Unrealized P/L': unrealized_pnl,
+                'P/L Rate': pnl_rate,
+                'Total Value': current_total_value,
+                'Weight': weight
+            })
+            
+        if not snapshot_data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(snapshot_data)
+        return df.sort_values(by='Weight', ascending=False).reset_index(drop=True)

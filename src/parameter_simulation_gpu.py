@@ -39,12 +39,12 @@ db_connection_str = (
 )
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([15], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03], dtype=cp.float32)
+max_stocks_options = cp.array([24], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.02], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.04], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.04], dtype=cp.float32)
 additional_buy_priority_options = cp.array(
-    [0], dtype=cp.int32
+    [0,1], dtype=cp.int32
 )  # 0: lowest_order, 1: highest_drop
 
 # Create all combinations using CuPy's broadcasting capabilities
@@ -217,8 +217,12 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
         # 일별 가치 데이터를 Pandas Series로 변환
         daily_series = pd.Series(daily_values_cpu[i], index=trading_dates_pd)
         
+         ### ### [핵심 수정] Series를 DataFrame으로 변환 ### ###
+        # PerformanceAnalyzer가 요구하는 'total_value' 컬럼을 가진 DataFrame 생성
+        history_df_mock = pd.DataFrame(daily_series, columns=['total_value'])
+        
         # PerformanceAnalyzer를 사용하여 지표 계산
-        analyzer = PerformanceAnalyzer(daily_series)
+        analyzer = PerformanceAnalyzer(history_df_mock)
         metrics = analyzer.get_metrics(formatted=False) # 원본 숫자 데이터로 받기
         results_list.append(metrics)
 

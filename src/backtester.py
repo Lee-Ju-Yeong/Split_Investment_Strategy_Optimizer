@@ -1,11 +1,10 @@
-"""
-backtester.py
-
-This module contains the backtesting engine for the Magic Split Strategy.
-"""
+# backtester.py (수정 필수!)
 
 from tqdm import tqdm
 import pandas as pd
+import warnings
+
+warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 class BacktestEngine:
     def __init__(self, start_date, end_date, portfolio, strategy, data_handler, execution_handler):
@@ -20,43 +19,60 @@ class BacktestEngine:
         print("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
-        trading_dates = pd.to_datetime(trading_dates)
-
-        # for current_date in tqdm(trading_dates, desc="Backtesting Progress"):
-        for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress")): # tqdm을 enumerate와 함께 사용
-            signal_events = self.strategy.generate_signals(current_date, self.portfolio, self.data_handler)
-            # --- [DEBUG] 루프 시작 시점 로그 (GPU와 형식 통일) ---
-            capital_before_day = self.portfolio.cash
-            total_positions_before_day = sum(len(p) for p in self.portfolio.positions.values())
-            print(f"\n--- Day {i+1}/{len(trading_dates)}: {current_date.strftime('%Y-%m-%d')} ---")
-            print(f"[BEGIN] Capital: {capital_before_day:,.0f} | Total Positions: {total_positions_before_day}")
-            # 월 변경 시 리밸런싱 로그 (strategy.py 에서 출력되지만 여기서도 확인 가능)
-            if hasattr(self.strategy, 'previous_month') and current_date.month != self.strategy.previous_month:
-                # 실제 investment_per_order 값은 strategy 객체에서 가져와야 함
-                print(f"  [REBALANCE] Month changed to {current_date.month}. New Investment/Order: {self.strategy.investment_per_order:,.0f}")
-
+        
+        # tqdm의 mininterval을 늘려 로그 출력이 밀리지 않게 함
+        for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress", mininterval=1.0)):
+            
+            # --- 1. 신호 생성 및 주문 실행 ---
             signal_events = self.strategy.generate_signals(current_date, self.portfolio, self.data_handler)
             
-            # --- [DEBUG] 신호 이벤트 로그 ---
+            # 거래 로그는 execution_handler에서 출력되므로 여기서는 생략
             if signal_events:
                 for signal in signal_events:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)
 
+            # --- 2. 일별 포트폴리오 가치 및 상태 기록 ---
             total_value = self.portfolio.get_total_value(current_date, self.data_handler)
-            self.portfolio.record_daily_value(current_date, total_value)
+            self.portfolio.record_daily_snapshot(current_date, total_value)
 
+            # --- 3. [핵심] 일일 포트폴리오 스냅샷 로그 출력 ---
+            if total_value > 0:
+                stock_value = total_value - self.portfolio.cash
+                # total_value가 0이 되는 엣지 케이스 방지
+                cash_ratio = (self.portfolio.cash / total_value) * 100 if total_value else 0
+                stock_ratio = (stock_value / total_value) * 100 if total_value else 0
 
-            # --- [DEBUG] 루프 종료 시점 로그 (GPU와 형식 통일) ---
-            final_capital_of_day = self.portfolio.cash
-            stock_value_of_day = total_value - final_capital_of_day
-            final_positions_of_day = sum(len(p) for p in self.portfolio.positions.values())
-            
-            # 거래 발생 여부 확인
-            capital_changed = abs(final_capital_of_day - capital_before_day) > 1 # 부동소수점 오차 감안
-            if capital_changed:
-                print(f"  [TRADE]   Capital changed by: {final_capital_of_day - capital_before_day:,.0f}")
-            print(f" [CPU_HOLDINGS] {sorted(self.portfolio.positions.keys())}")
-            print(f"[END]   Capital: {final_capital_of_day:,.0f} | Stock Val: {stock_value_of_day:,.0f} | Total Val: {total_value:,.0f} | Positions: {final_positions_of_day}")
+                # format_specifiers for readability
+                header = f"\n{'='*120}\n"
+                footer = f"\n{'='*120}"
+                
+                date_str = pd.to_datetime(current_date).strftime('%Y-%m-%d')
+                summary_str = (
+                    f"Date: {date_str} | Day {i+1}/{len(trading_dates)}\n"
+                    f"{'-'*120}\n"
+                    f"Total Value: {total_value:,.0f} | "
+                    f"Cash: {self.portfolio.cash:,.0f} ({cash_ratio:.1f}%) | "
+                    f"Stocks: {stock_value:,.0f} ({stock_ratio:.1f}%)\n"
+                    f"Holdings Count: {len(self.portfolio.positions)} Stocks"
+                )
+                
+                log_message = header + summary_str
+                
+                positions_df = self.portfolio.get_positions_snapshot(current_date, self.data_handler, total_value)
+                
+                if not positions_df.empty:
+                    positions_df['Avg Buy Price'] = positions_df['Avg Buy Price'].map('{:,.0f}'.format)
+                    positions_df['Current Price'] = positions_df['Current Price'].map('{:,.0f}'.format)
+                    positions_df['Unrealized P/L'] = positions_df['Unrealized P/L'].map('{:,.0f}'.format)
+                    positions_df['Total Value'] = positions_df['Total Value'].map('{:,.0f}'.format)
+                    positions_df['P/L Rate'] = positions_df['P/L Rate'].map('{:.2%}'.format)
+                    positions_df['Weight'] = positions_df['Weight'].map('{:.2%}'.format)
+                    
+                    log_message += f"\n{'-'*120}\n[Current Holdings]\n"
+                    log_message += positions_df.to_string()
 
-        print("백테스팅이 완료되었습니다.")
+                log_message += footer
+                tqdm.write(log_message) # tqdm 진행률 바를 깨뜨리지 않고 메시지 출력
+
+        print("\n백테스팅이 완료되었습니다.")
         return self.portfolio
