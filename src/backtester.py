@@ -26,7 +26,9 @@ class BacktestEngine:
             # --- 1. 신호 생성 및 주문 실행 ---
             signal_events = self.strategy.generate_signals(current_date, self.portfolio, self.data_handler)
             
-            # 거래 로그는 execution_handler에서 출력되므로 여기서는 생략
+            # 오늘 거래가 기록되기 전의 거래 내역 개수를 저장
+            num_trades_before = len(self.portfolio.trade_history)
+
             if signal_events:
                 for signal in signal_events:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)
@@ -35,7 +37,13 @@ class BacktestEngine:
             total_value = self.portfolio.get_total_value(current_date, self.data_handler)
             self.portfolio.record_daily_snapshot(current_date, total_value)
 
-            # --- 3. [핵심] 일일 포트폴리오 스냅샷 로그 출력 ---
+            # --- 3. [신규 로직] 당일 발생한 모든 거래에 최종 포트폴리오 가치 업데이트 ---
+            num_trades_after = len(self.portfolio.trade_history)
+            if num_trades_after > num_trades_before:
+                for i in range(num_trades_before, num_trades_after):
+                    self.portfolio.trade_history[i].total_portfolio_value = total_value
+
+            # --- 4. [핵심] 일일 포트폴리오 스냅샷 로그 출력 ---
             if total_value > 0:
                 stock_value = total_value - self.portfolio.cash
                 # total_value가 0이 되는 엣지 케이스 방지
