@@ -220,8 +220,11 @@ if __name__ == "__main__":
     if daily_values_cpu.shape[0] > 0:
         daily_series = pd.Series(daily_values_cpu[0], index=trading_dates_pd)
         
+        # PerformanceAnalyzer가 요구하는 DataFrame 형식으로 변환
+        history_df = pd.DataFrame(daily_series, columns=['total_value'])
+
         # PerformanceAnalyzer를 사용하여 지표 계산
-        analyzer = PerformanceAnalyzer(daily_series)
+        analyzer = PerformanceAnalyzer(history_df)
         # CPU 백테스터(main_backtest)와 동일한 포맷으로 출력
         metrics = analyzer.get_metrics(formatted=True)
 
