@@ -17,18 +17,35 @@ class Position:
         self.sell_profit_rate = sell_profit_rate
 
 class Trade:
-    def __init__(self, date, code, order, quantity, buy_price, sell_price, trade_type, profit, profit_rate, normalized_value, capital, total_portfolio_value):
+    def __init__(self, date, code, name, trade_type, order, reason_for_trade,
+                 trigger_price, open_price, high_price, low_price, close_price,
+                 quantity, buy_price, sell_price, commission, tax, trade_value,
+                 quantity_before, quantity_after, avg_buy_price_after,
+                 realized_pnl,
+                 cash_before, cash_after, total_portfolio_value=None):
         self.date = date
         self.code = code
+        self.name = name
+        self.trade_type = trade_type
         self.order = order
+        self.reason_for_trade = reason_for_trade
+        self.trigger_price = trigger_price
+        self.open_price = open_price
+        self.high_price = high_price
+        self.low_price = low_price
+        self.close_price = close_price
         self.quantity = quantity
         self.buy_price = buy_price
         self.sell_price = sell_price
-        self.trade_type = trade_type
-        self.profit = profit
-        self.profit_rate = profit_rate
-        self.normalized_value = normalized_value
-        self.capital = capital
+        self.commission = commission
+        self.tax = tax
+        self.trade_value = trade_value
+        self.quantity_before = quantity_before
+        self.quantity_after = quantity_after
+        self.avg_buy_price_after = avg_buy_price_after
+        self.realized_pnl = realized_pnl
+        self.cash_before = cash_before
+        self.cash_after = cash_after
         self.total_portfolio_value = total_portfolio_value
 
 class Portfolio:

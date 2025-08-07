@@ -13,16 +13,16 @@ database:
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
   start_date: '2015-01-01'
-  end_date: '2024-12-31'
+  end_date: '2025-01-01'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
 # --- 3. Magic Split Strategy Parameters ---
 strategy_params:
-  max_stocks: 24
-  order_investment_ratio: 0.02
-  additional_buy_drop_rate: 0.05
-  sell_profit_rate: 0.05
+  max_stocks: 20
+  order_investment_ratio: 0.04
+  additional_buy_drop_rate: 0.07
+  sell_profit_rate: 0.07
   additional_buy_priority: 'lowest_order'
   cooldown_period_days: 5 # 매도 후 재매수 방지 기간 (영업일 기준)
 
