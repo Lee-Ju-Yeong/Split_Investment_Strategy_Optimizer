@@ -160,7 +160,12 @@ def display_results_in_terminal(result: dict):
     trades_df = pd.DataFrame(result.get('trade_history', []))
     if not trades_df.empty:
         trades_df['date'] = pd.to_datetime(trades_df['date']).dt.strftime('%Y-%m-%d')
-        print(trades_df[['date', 'code', 'trade_type', 'order', 'quantity', 'buy_price', 'sell_price', 'profit']].tail(10).to_string())
+        # 요청사항을 반영하여 컬럼 재구성
+        display_columns = ['date', 'code', 'name', 'trade_type', 'order', 'reason_for_trade', 'quantity', 'buy_price', 'sell_price', 'commission', 'tax', 'realized_pnl']
+        
+        # DataFrame에 있는 컬럼만 선택하여 에러 방지
+        existing_columns = [col for col in display_columns if col in trades_df.columns]
+        print(trades_df[existing_columns].tail(10).to_string())
     else:
         print("거래 내역이 없습니다.")
     print("="*60)

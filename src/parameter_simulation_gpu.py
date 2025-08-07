@@ -40,9 +40,9 @@ db_connection_str = (
 
 # Define the parameter space to be tested
 max_stocks_options = cp.array([24], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.02], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.04], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.04], dtype=cp.float32)
+order_investment_ratio_options = cp.array([0.015,0.02,0.025], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.03,0.04,0.06], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.03,0.04,0.06], dtype=cp.float32)
 additional_buy_priority_options = cp.array(
     [0,1], dtype=cp.int32
 )  # 0: lowest_order, 1: highest_drop
