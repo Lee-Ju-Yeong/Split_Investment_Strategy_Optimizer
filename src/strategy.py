@@ -100,7 +100,8 @@ class MagicSplitStrategy(Strategy):
             positions = portfolio.positions[ticker]
             
             for p in positions:
-                if row["close_price"] >= p.buy_price * (1 + self.sell_profit_rate):
+                sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
+                if row["close_price"] >= sell_trigger_price:
                     signals.append(
                         {
                             "date": current_date,
@@ -108,6 +109,8 @@ class MagicSplitStrategy(Strategy):
                             "type": "SELL",
                             "quantity": p.quantity,
                             "position": p,
+                            "reason_for_trade": "수익 실현",
+                            "trigger_price": sell_trigger_price,
                         }
                     )
                     # 매도 신호 발생 시 쿨다운 트래커에 기록
@@ -115,7 +118,8 @@ class MagicSplitStrategy(Strategy):
 
             if positions:
                 last_pos = positions[-1]
-                if row["close_price"] <= last_pos.buy_price * (1 - self.additional_buy_drop_rate):
+                buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
+                if row["close_price"] <= buy_trigger_price:
                     if row["close_price"] > 0:
                         quantity = int(self.investment_per_order / row["close_price"])
                         if quantity > 0:
@@ -140,6 +144,8 @@ class MagicSplitStrategy(Strategy):
                                     "position": new_pos,
                                     "priority_group": 2,
                                     "sort_metric": sort_metric,
+                                    "reason_for_trade": "추가 매수(하락)",
+                                    "trigger_price": buy_trigger_price,
                                 }
                             )
         return signals
@@ -222,6 +228,8 @@ class MagicSplitStrategy(Strategy):
                             "position": new_pos,
                             "priority_group": 1,
                             "sort_metric": -candidate["atr_14_ratio"],
+                            "reason_for_trade": "신규 진입",
+                            "trigger_price": row["close_price"],
                         }
                     )
         return signals
