@@ -7,10 +7,7 @@ using CuPy and Numba for massive parallelization.
 
 import cupy as cp
 import cudf
-import time
 import pandas as pd
-from sqlalchemy import create_engine
-
 
 def get_tick_size_gpu(price_array):
     """
@@ -34,21 +31,10 @@ def get_tick_size_gpu(price_array):
     ]
     return cp.select(condlist, choicelist, default=1000)
 
-
 def adjust_price_up_gpu(price_array):
     """주어진 가격 배열을 호가 단위에 맞춰 올림 처리합니다."""
     tick_size = get_tick_size_gpu(price_array)
     return cp.ceil(price_array / tick_size) * tick_size
-
-
-def calculate_portfolio_value_gpu(capital, quantities, prices):
-    """Calculates the total portfolio value for a given date on the GPU."""
-    prices_col = prices.reshape(-1, 1)
-    position_values = quantities * prices_col
-    total_stock_value = cp.sum(position_values)
-    total_portfolio_value = capital + total_stock_value
-    return total_portfolio_value.get()
-
 
 def _calculate_monthly_investment_gpu(
     current_date,
@@ -58,9 +44,6 @@ def _calculate_monthly_investment_gpu(
     all_data_gpu: cudf.DataFrame,
     all_tickers: list,
 ):
-    """
-    Vectorized calculation of monthly investment amounts for all simulations.
-    """
     data_for_lookup = all_data_gpu.reset_index()
     filtered_data = data_for_lookup[data_for_lookup["date"] <= current_date]
     latest_prices = filtered_data.groupby("ticker")["close_price"].last()
@@ -77,23 +60,16 @@ def _calculate_monthly_investment_gpu(
     portfolio_state[:, 1:2] = investment_per_order
     return portfolio_state
 
-
 def _process_sell_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
-    cooldown_state: cp.ndarray, # 쿨다운 상태 배열 추가
-    current_day_idx: int,       # 현재 날짜 인덱스 추가
+    cooldown_state: cp.ndarray,
+    current_day_idx: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
     sell_commission_rate: float,
     sell_tax_rate: float,
-    debug_mode: bool = False,
-    is_debug_day: bool = False,
-    debug_ticker_idx: int = -1
 ):
-    """
-    Vectorized sell signal processing, now with cooldown state update.
-    """
     sell_profit_rates = param_combinations[:, 3:4].reshape(-1, 1, 1)
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
@@ -101,26 +77,33 @@ def _process_sell_signals_gpu(
         current_prices.reshape(1, -1, 1), buy_prices.shape
     )
     valid_positions = buy_prices > 0
-    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
-    target_sell_prices = (buy_prices * (1 + sell_profit_rates)) / cost_factor
+    
+    target_sell_prices = buy_prices * (1 + sell_profit_rates)
     actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
+    
     sell_trigger_condition = (broadcasted_prices >= actual_sell_prices) & valid_positions
     first_position_sell_triggered = sell_trigger_condition[:, :, 0]
+    
     partial_sell_mask = sell_trigger_condition.copy()
     partial_sell_mask[:, :, 0] = False
     partial_sell_mask &= ~cp.broadcast_to(
         first_position_sell_triggered[:, :, cp.newaxis], partial_sell_mask.shape
     )
+    
     full_liquidation_mask = cp.broadcast_to(
         first_position_sell_triggered[:, :, cp.newaxis], quantities.shape
     )
-    full_liquidation_raw_proceeds_matrix = (quantities * actual_sell_prices * full_liquidation_mask)
-    full_liquidation_raw_proceeds = cp.sum(full_liquidation_raw_proceeds_matrix, axis=(1, 2))
-    partial_sell_raw_proceeds_matrix = (quantities * actual_sell_prices * partial_sell_mask)
-    partial_sell_raw_proceeds = cp.sum(partial_sell_raw_proceeds_matrix, axis=(1, 2))
-    total_raw_proceeds = full_liquidation_raw_proceeds + partial_sell_raw_proceeds
-    net_proceeds = total_raw_proceeds * cost_factor
+    
+    # --- Net Proceeds Calculation with Floor ---
+    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
+    
+    full_liquidation_revenue = cp.sum(quantities * actual_sell_prices * full_liquidation_mask, axis=(1, 2))
+    partial_sell_revenue = cp.sum(quantities * actual_sell_prices * partial_sell_mask, axis=(1, 2))
+    
+    net_proceeds = cp.floor((full_liquidation_revenue + partial_sell_revenue) * cost_factor)
+    
     portfolio_state[:, 0] += net_proceeds
+    
     positions_state[..., 0][partial_sell_mask] = 0
     full_liquidation_stock_mask = cp.broadcast_to(
         first_position_sell_triggered[:, :, cp.newaxis], positions_state[..., 0].shape
@@ -128,13 +111,11 @@ def _process_sell_signals_gpu(
     positions_state[..., 0][full_liquidation_stock_mask] = 0
     positions_state[..., 1][full_liquidation_stock_mask] = -1
 
-    # --- 쿨다운 상태 업데이트 ---
     if cp.any(first_position_sell_triggered):
         sim_indices, stock_indices = cp.where(first_position_sell_triggered)
         cooldown_state[sim_indices, stock_indices] = current_day_idx
 
     return portfolio_state, positions_state, cooldown_state
-
 
 def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
@@ -142,36 +123,35 @@ def _process_additional_buy_signals_gpu(
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
     buy_commission_rate: float,
-    debug_mode: bool = False,
 ):
-    """
-    Vectorized additional buy signal processing for all simulations.
-    """
     num_combinations, num_stocks, max_splits, _ = positions_state.shape
     add_buy_drop_rates = param_combinations[:, 2:3].reshape(-1, 1, 1)
     investment_per_order = portfolio_state[:, 1:2].reshape(-1, 1, 1)
-    current_capital = portfolio_state[:, 0]
     current_prices_reshaped = current_prices.reshape(1, -1, 1)
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
     has_positions = quantities > 0
     has_any_position = cp.any(has_positions, axis=2)
     last_position_indices = cp.zeros((num_combinations, num_stocks), dtype=cp.int32)
+    
     for sim in range(num_combinations):
         for stock in range(num_stocks):
             if has_any_position[sim, stock]:
                 last_idx = cp.where(has_positions[sim, stock, :])[0]
                 if len(last_idx) > 0:
                     last_position_indices[sim, stock] = last_idx[-1]
+                    
     last_buy_prices = cp.zeros((num_combinations, num_stocks), dtype=cp.float32)
     for sim in range(num_combinations):
         for stock in range(num_stocks):
             if has_any_position[sim, stock]:
                 last_split_idx = last_position_indices[sim, stock]
                 last_buy_prices[sim, stock] = buy_prices[sim, stock, last_split_idx]
+                
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates.squeeze(-1))
     current_prices_2d = current_prices_reshaped.squeeze(-1)
     additional_buy_condition = (current_prices_2d <= trigger_prices) & has_any_position
+    
     can_add_position = cp.zeros_like(additional_buy_condition, dtype=cp.bool_)
     next_split_indices_to_buy = cp.full_like(last_position_indices, -1, dtype=cp.int32)
     for sim in range(num_combinations):
@@ -184,6 +164,7 @@ def _process_additional_buy_signals_gpu(
                     if first_empty_slot < max_splits:
                         can_add_position[sim, stock] = True
                         next_split_indices_to_buy[sim, stock] = first_empty_slot
+                        
     initial_buy_condition = can_add_position
     if cp.any(initial_buy_condition):
         sim_indices, stock_indices = cp.where(initial_buy_condition)
@@ -195,6 +176,7 @@ def _process_additional_buy_signals_gpu(
         drop_rates[valid_mask] = (last_buy_prices_for_candidates[valid_mask] - current_prices_for_candidates[valid_mask]) / last_buy_prices_for_candidates[valid_mask]
         add_buy_priority_params = param_combinations[sim_indices, 4]
         sort_metric = cp.where(add_buy_priority_params == 0, num_existing_splits.astype(cp.float32), -drop_rates)
+        
         candidates_gdf = cudf.DataFrame({
             'sim_idx': sim_indices,
             'sort_metric': sort_metric,
@@ -202,27 +184,35 @@ def _process_additional_buy_signals_gpu(
             'next_split_idx': next_split_indices_to_buy[sim_indices, stock_indices]
         })
         sorted_candidates_gdf = candidates_gdf.sort_values(by=['sim_idx', 'sort_metric'], ascending=[True, True])
+        
         sorted_sim_indices = sorted_candidates_gdf['sim_idx'].values
         sorted_stock_indices = sorted_candidates_gdf['stock_idx'].values
         sorted_next_split_indices = sorted_candidates_gdf['next_split_idx'].values
+        
         for i in range(len(sorted_sim_indices)):
             sim_idx = int(sorted_sim_indices[i])
             stock_idx = int(sorted_stock_indices[i])
             next_split_idx = int(sorted_next_split_indices[i])
+            
             current_sim_capital = portfolio_state[sim_idx, 0]
             inv_per_order = investment_per_order[sim_idx, 0, 0]
             current_price = current_prices[stock_idx]
             buy_price = adjust_price_up_gpu(current_price)
+            
             if buy_price <= 0: continue
-            quantity = int(cp.floor(inv_per_order / buy_price))
+            quantity = cp.floor(inv_per_order / buy_price)
             if quantity <= 0: continue
-            total_cost = (float(buy_price) * quantity) * (1 + buy_commission_rate)
+            
+            cost = float(buy_price) * float(quantity)
+            commission = cp.floor(cost * buy_commission_rate)
+            total_cost = cost + commission
+            
             if float(current_sim_capital) >= total_cost:
                 portfolio_state[sim_idx, 0] -= total_cost
                 positions_state[sim_idx, stock_idx, next_split_idx, 0] = quantity
                 positions_state[sim_idx, stock_idx, next_split_idx, 1] = buy_price
+                
     return portfolio_state, positions_state
-
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -236,18 +226,15 @@ def run_magic_split_strategy_on_gpu(
     max_splits_limit: int = 20,
     debug_mode: bool = False,
 ):
-    """
-    Main GPU-accelerated backtesting function for the MagicSplitStrategy.
-    """
     num_combinations = param_combinations.shape[0]
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
-    cooldown_period_days = execution_params.get("cooldown_period_days", 5) # 쿨다운 기간 파라미터
+    cooldown_period_days = execution_params.get("cooldown_period_days", 5)
 
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
     portfolio_state[:, 0] = initial_cash
     positions_state = cp.zeros((num_combinations, num_tickers, max_splits_limit, 2), dtype=cp.float32)
-    cooldown_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32) # 쿨다운 상태 배열
+    cooldown_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32)
     daily_portfolio_values = cp.zeros((num_combinations, num_trading_days), dtype=cp.float32)
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     previous_month = -1
@@ -298,19 +285,16 @@ def run_magic_split_strategy_on_gpu(
             portfolio_state, positions_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, i, cooldown_period_days,
                 param_combinations, current_prices, candidate_tickers_for_day, candidate_atrs_for_day,
-                buy_commission_rate=execution_params["buy_commission_rate"], debug_mode=debug_mode
+                buy_commission_rate=execution_params["buy_commission_rate"]
             )
             portfolio_state, positions_state = _process_additional_buy_signals_gpu(
                 portfolio_state, positions_state, param_combinations, current_prices,
-                buy_commission_rate=execution_params["buy_commission_rate"], debug_mode=debug_mode
+                buy_commission_rate=execution_params["buy_commission_rate"]
             )
-            is_debug_day = current_date.strftime('%Y-%m-%d') == '2023-01-06'
-            debug_ticker_idx = ticker_to_idx.get('120240', -1)
             portfolio_state, positions_state, cooldown_state = _process_sell_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, i,
                 param_combinations, current_prices, execution_params["sell_commission_rate"], 
-                execution_params["sell_tax_rate"], is_debug_day=is_debug_day,
-                debug_ticker_idx=debug_ticker_idx, debug_mode=debug_mode
+                execution_params["sell_tax_rate"]
             )
 
             quantities = positions_state[..., 0]
@@ -326,23 +310,18 @@ def run_magic_split_strategy_on_gpu(
 
     return daily_portfolio_values
 
-
 def _process_new_entry_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
-    cooldown_state: cp.ndarray, # 쿨다운 상태 배열 추가
-    current_day_idx: int,       # 현재 날짜 인덱스 추가
-    cooldown_period_days: int,  # 쿨다운 기간 추가
+    cooldown_state: cp.ndarray,
+    current_day_idx: int,
+    cooldown_period_days: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
     candidate_tickers_for_day: cp.ndarray,
     candidate_atrs_for_day: cp.ndarray,
     buy_commission_rate: float,
-    debug_mode: bool = False,
 ):
-    """
-    Vectorized new entry signal processing, now with cooldown logic.
-    """
     num_combinations, num_stocks_total, _, _ = positions_state.shape
     has_any_position = cp.any(positions_state[..., 0] > 0, axis=2)
     current_num_stocks = cp.sum(has_any_position, axis=1)
@@ -352,14 +331,11 @@ def _process_new_entry_signals_gpu(
     if not cp.any(available_slots > 0) or candidate_tickers_for_day.size == 0:
         return portfolio_state, positions_state
 
-    # --- 쿨다운 마스크 생성 ---
-    # is_in_cooldown: (num_combinations, num_stocks_total) 형태의 boolean 마스크
     is_in_cooldown = (cooldown_state != -1) & ((current_day_idx - cooldown_state) < cooldown_period_days)
 
     sort_indices = cp.argsort(candidate_atrs_for_day)[::-1]
     sorted_candidate_indices = candidate_tickers_for_day[sort_indices]
     investment_per_order = portfolio_state[:, 1]
-    current_capital = portfolio_state[:, 0]
 
     for ticker_idx_cupy in sorted_candidate_indices:
         ticker_idx = int(ticker_idx_cupy)
@@ -371,22 +347,24 @@ def _process_new_entry_signals_gpu(
 
         safe_investment = cp.where(buy_price > 0, investment_per_order, 0)
         quantity_to_buy_f = cp.floor(safe_investment / buy_price)
-        total_cost_per_sim = (buy_price * quantity_to_buy_f) * (1 + buy_commission_rate)
-        has_capital = current_capital >= total_cost_per_sim
-        is_not_holding = ~has_any_position[:, ticker_idx]
         
-        # 쿨다운 조건 확인 추가
+        cost = buy_price * quantity_to_buy_f
+        commission = cp.floor(cost * buy_commission_rate)
+        total_cost_per_sim = cost + commission
+        
+        has_capital = portfolio_state[:, 0] >= total_cost_per_sim
+        is_not_holding = ~has_any_position[:, ticker_idx]
         is_not_in_cooldown = ~is_in_cooldown[:, ticker_idx]
 
         initial_buy_mask = (available_slots > 0) & is_not_holding & has_capital & is_not_in_cooldown
 
         if cp.any(initial_buy_mask):
             buy_sim_indices = cp.where(initial_buy_mask)[0]
-            buy_price = adjust_price_up_gpu(stock_price)
-            quantity_to_buy = cp.floor(investment_per_order[buy_sim_indices] / buy_price).astype(cp.int32)
-            total_cost = (buy_price * quantity_to_buy) * (1 + buy_commission_rate)
+            quantity_to_buy = quantity_to_buy_f[buy_sim_indices].astype(cp.int32)
             
-            portfolio_state[buy_sim_indices, 0] -= total_cost
+            final_cost = total_cost_per_sim[buy_sim_indices]
+            
+            portfolio_state[buy_sim_indices, 0] -= final_cost
             positions_state[buy_sim_indices, ticker_idx, 0, 0] = quantity_to_buy
             positions_state[buy_sim_indices, ticker_idx, 0, 1] = buy_price
             available_slots[buy_sim_indices] -= 1

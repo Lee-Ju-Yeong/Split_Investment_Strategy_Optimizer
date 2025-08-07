@@ -100,6 +100,21 @@ class DataHandler:
         except (KeyError, IndexError):
             return None
 
+    def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
+        stock_data = self.load_stock_data(ticker, start_date, end_date)
+        if stock_data is None or stock_data.empty:
+            return None
+        
+        try:
+            target_date = pd.to_datetime(date)
+            # asof를 사용하여 해당 날짜 또는 그 이전의 가장 가까운 데이터를 Series로 반환
+            data_row = stock_data.asof(target_date)
+            if data_row is None or pd.isna(data_row.name):
+                return None
+            return data_row
+        except (KeyError, IndexError):
+            return None
+
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
