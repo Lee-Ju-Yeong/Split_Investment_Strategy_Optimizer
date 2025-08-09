@@ -48,64 +48,99 @@ def _process_sell_signals_gpu(
     sell_commission_rate: float,
     sell_tax_rate: float,
 ):
-    """ Vectorized sell signal processing including stop-loss and max holding period. """
+    """
+    [수정된 로직]
+    벡터화된 매도 신호 처리 함수.
+    1. 전체 청산(손절매, 최대 보유기간) 조건을 먼저 처리합니다.
+    2. 그 다음, 청산되지 않은 종목에 한해 부분 수익실현을 처리합니다.
+    """
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
     entry_dates = positions_state[..., 2]
-    
+
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
         return portfolio_state, positions_state, cooldown_state
 
-    # --- Paramerters --- 
+    # --- 파라미터 로드 ---
     sell_profit_rates = param_combinations[:, 3:4, cp.newaxis]
-    stop_loss_rates = param_combinations[:, 5:6, cp.newaxis] 
+    stop_loss_rates = param_combinations[:, 5:6, cp.newaxis]
     max_holding_periods = param_combinations[:, 7:8, cp.newaxis]
 
     broadcasted_prices = cp.broadcast_to(current_prices.reshape(1, -1, 1), buy_prices.shape)
+    
+    # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
+    sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
-    # --- 1. Generate Sell Masks based on conditions ---
-    # Profit-taking
-    target_sell_prices = buy_prices * (1 + sell_profit_rates)
-    actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
-    profit_taking_mask = (broadcasted_prices >= actual_sell_prices) & valid_positions
-
-    # Stop-loss
-    stop_loss_prices = buy_prices * (1 + stop_loss_rates) # stop_loss_rate is negative
+    # --- 시나리오 1: 전체 청산 (손절매 또는 최대 보유 기간) ---
+    stop_loss_prices = buy_prices * (1 + stop_loss_rates)
     stop_loss_mask = (broadcasted_prices <= stop_loss_prices) & valid_positions
 
-    # Max holding period
     days_held = current_day_idx - entry_dates
     max_hold_mask = (days_held > max_holding_periods) & valid_positions
-
-    # Combine sell masks (any sell condition triggers a sell)
-    combined_sell_mask = profit_taking_mask | stop_loss_mask | max_hold_mask
-
-    if not cp.any(combined_sell_mask):
-        return portfolio_state, positions_state, cooldown_state
-
-    # --- 2. Process Sells ---
-    # In this strategy, any sell signal liquidates all positions for that stock
-    stock_sell_mask = cp.any(combined_sell_mask, axis=2)
     
-    # Calculate proceeds only for stocks that will be sold
-    revenue_matrix = quantities * broadcasted_prices
-    total_revenue_per_stock = cp.sum(revenue_matrix, axis=2)
+    # 전체 청산 조건에 해당하는 '차수' 마스크
+    liquidation_position_mask = stop_loss_mask | max_hold_mask
     
-    sell_revenue = cp.sum(total_revenue_per_stock * stock_sell_mask, axis=1)
+    # 전체 청산 조건에 해당하는 '종목' 마스크 (차수 축에 대해 .any() 사용)
+    stock_liquidation_mask = cp.any(liquidation_position_mask, axis=2)
 
-    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
-    net_proceeds = cp.floor(sell_revenue * cost_factor)
+    if cp.any(stock_liquidation_mask):
+        # 청산 대상 종목의 모든 포지션에 대한 수익 계산
+        revenue_matrix = quantities * broadcasted_prices
+        # 청산 대상 종목(stock_liquidation_mask)만 필터링하여 수익 계산
+        liquidation_revenue = cp.sum(revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis], axis=(1, 2))
+
+        cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
+        net_proceeds = cp.floor(liquidation_revenue * cost_factor)
+        
+        # 자본 업데이트
+        portfolio_state[:, 0] += net_proceeds
+        
+        # 포지션 리셋 (청산된 종목의 모든 차수)
+        reset_mask = stock_liquidation_mask[:, :, cp.newaxis, cp.newaxis]
+        positions_state[reset_mask.broadcast_to(positions_state.shape)] = 0
+        
+        # 쿨다운용 마스크 업데이트
+        sell_occurred_stock_mask |= stock_liquidation_mask
+        
+        # 전체 청산된 포지션은 이후의 수익실현 대상에서 제외해야 함
+        # 현재 positions_state가 0으로 리셋되었으므로, valid_positions를 다시 계산
+        valid_positions = positions_state[..., 0] > 0
+
+
+    # --- 시나리오 2: 부분 매도 (수익 실현) ---
+    # 전체 청산되지 않은 유효한 포지션에 대해서만 수익실현 검사
+    target_sell_prices = buy_prices * (1 + sell_profit_rates)
+    # 호가 단위는 실제 매도가에서 조정되어야 하므로, 여기서는 논리적 트리거 가격만 사용
+    profit_taking_mask = (broadcasted_prices >= target_sell_prices) & valid_positions
     
-    portfolio_state[:, 0] += net_proceeds
+    if cp.any(profit_taking_mask):
+        # 실제 매도가는 지정가 주문을 반영하여 호가 단위에 맞게 올림 처리
+        actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
+        
+        # 수익 실현으로 인한 수익 계산
+        # profit_taking_mask가 True인 차수들의 수익만 계산
+        profit_taking_revenue_matrix = quantities * actual_sell_prices
+        total_profit_revenue = cp.sum(profit_taking_revenue_matrix * profit_taking_mask, axis=(1, 2))
 
-    # Reset sold positions
-    reset_mask = cp.broadcast_to(stock_sell_mask[..., cp.newaxis, cp.newaxis], positions_state.shape)
-    positions_state[reset_mask] = 0
+        cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
+        net_proceeds = cp.floor(total_profit_revenue * cost_factor)
+        
+        # 자본 업데이트
+        portfolio_state[:, 0] += net_proceeds
 
-    # Update cooldown
-    if cp.any(stock_sell_mask):
-        sim_indices, stock_indices = cp.where(stock_sell_mask)
+        # 포지션 리셋 (수익 실현된 '차수'만)
+        positions_state[profit_taking_mask] = 0
+
+        # 쿨다운용 마스크 업데이트
+        profit_occurred_stock_mask = cp.any(profit_taking_mask, axis=2)
+        sell_occurred_stock_mask |= profit_occurred_stock_mask
+
+
+    # --- 최종 쿨다운 처리 ---
+    if cp.any(sell_occurred_stock_mask):
+        sim_indices, stock_indices = cp.where(sell_occurred_stock_mask)
         cooldown_state[sim_indices, stock_indices] = current_day_idx
 
     return portfolio_state, positions_state, cooldown_state
@@ -161,8 +196,9 @@ def _process_additional_buy_signals_gpu(
     quantities_to_buy = cp.floor(investment_per_order / buy_prices_adjusted)
     
     valid_buy = quantities_to_buy > 0
-    sim_indices, stock_indices, quantities_to_buy, buy_prices_adjusted = 
+    sim_indices, stock_indices, quantities_to_buy, buy_prices_adjusted = (
         sim_indices[valid_buy], stock_indices[valid_buy], quantities_to_buy[valid_buy], buy_prices_adjusted[valid_buy]
+    )
 
     if len(sim_indices) == 0:
         return portfolio_state, positions_state
@@ -172,9 +208,9 @@ def _process_additional_buy_signals_gpu(
     total_cost = cost + commission
 
     can_afford = current_capital[sim_indices] >= total_cost
-    sim_indices, stock_indices, quantities_to_buy, buy_prices_adjusted, total_cost = 
+    sim_indices, stock_indices, quantities_to_buy, buy_prices_adjusted, total_cost = (
         sim_indices[can_afford], stock_indices[can_afford], quantities_to_buy[can_afford], buy_prices_adjusted[can_afford], total_cost[can_afford]
-
+    )
     if len(sim_indices) == 0:
         return portfolio_state, positions_state
 
