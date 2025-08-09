@@ -7,11 +7,12 @@ This module contains the functions for generating the signals for the Magic Spli
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
+import uuid
 
 class Position:
     """ 포지션 정보를 저장하는 데이터 클래스 """
-    def __init__(self, entry_date, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
-        self.entry_date = entry_date
+    def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
+        self.position_id = str(uuid.uuid4())
         self.buy_price = buy_price
         self.quantity = quantity
         self.order = order
@@ -37,7 +38,7 @@ class MagicSplitStrategy(Strategy):
         # --- [New] Advanced Risk Management Parameters ---
         stop_loss_rate=-0.15,
         max_splits_limit=10,
-        max_holding_period=90,
+        max_inactivity_period=90,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -49,7 +50,7 @@ class MagicSplitStrategy(Strategy):
         self.cooldown_period_days = cooldown_period_days
         self.stop_loss_rate = stop_loss_rate
         self.max_splits_limit = max_splits_limit
-        self.max_holding_period = max_holding_period
+        self.max_inactivity_period = max_inactivity_period
         
         self.investment_per_order = 0
         self.previous_month = -1
@@ -98,37 +99,45 @@ class MagicSplitStrategy(Strategy):
 
             positions = portfolio.positions[ticker]
             avg_buy_price = sum(p.quantity * p.buy_price for p in positions) / sum(p.quantity for p in positions)
-            
-            # --- 1. 손절매 및 최대 보유 기간 청산 신호 생성 (모든 분할매수 포지션에 대해 개별적으로) ---
-            for p in positions[:]: # 복사본으로 순회하여 순회 중 리스트 변경 문제 방지
-                # 손절매 조건
-                if current_price <= p.buy_price * (1.0 + self.stop_loss_rate):
-                    signals.append(self._create_sell_signal(current_date, ticker, p, "손절매", p.buy_price * (1.0 + self.stop_loss_rate)))
-                    self.cooldown_tracker[ticker] = current_date
-                    continue # 손절매된 포지션은 다른 조건 검사 안함
-                
-                # 최대 보유 기간 조건
-                days_held = np.busday_count(pd.to_datetime(p.entry_date).date(), current_date.date())
-                if days_held > self.max_holding_period:
-                    signals.append(self._create_sell_signal(current_date, ticker, p, "최대 보유 기간 초과", current_price))
-                    self.cooldown_tracker[ticker] = current_date
-                    continue
 
-            # --- 2. 수익 실현 신호 생성 (가장 오래된 포지션부터) ---
-            # 이미 매도 신호가 생성된 종목은 수익 실현 검사 안함
-            if any(s["ticker"] == ticker for s in signals):
-                continue
+            # --- 1. 리스크 관리 조건 확인 (종목 전체 청산) ---
+            liquidate = False
+            reason = ""
+            trigger_price = current_price
 
-            for p in positions:
+            # 조건 1: 평균 매수가 대비 손절률 도달
+            if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
+                liquidate = True
+                reason = "손절매 (평균가 기준)"
+                trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
+
+            # 조건 2: 최대 매매 미발생 기간 초과
+            if not liquidate:
+                last_trade_date = portfolio.last_trade_dates.get(ticker)
+                if last_trade_date:
+                    days_inactive = np.busday_count(pd.to_datetime(last_trade_date).date(), current_date.date())
+                    if days_inactive > self.max_inactivity_period:
+                        liquidate = True
+                        reason = "매매 미발생 기간 초과"
+
+            if liquidate:
+                for p in positions:
+                    signals.append(self._create_sell_signal(current_date, ticker, p, reason, trigger_price))
+                self.cooldown_tracker[ticker] = current_date
+                continue # 청산 신호 발생 시, 다른 신호(수익실현, 추가매수) 생성 안함
+
+            # --- 2. 수익 실현 신호 생성 (가장 나중에 매수한 포지션부터) ---
+            # reversed()를 사용하여 LIFO(후입선출) 방식으로 수익 실현
+            for p in reversed(positions):
                 sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
                 if current_price >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
                     self.cooldown_tracker[ticker] = current_date
-                    break # 한 종목에 하루 하나의 수익실현만 허용
+                    # break 문을 제거하여 하루에 여러 포지션 동시 수익 실현 가능하게 함
 
             # --- 3. 추가 매수 신호 생성 ---
-            # 이미 매도 신호가 생성된 종목은 추가 매수 안함
-            if any(s["ticker"] == ticker for s in signals):
+            # 당일 매도 신호(수익실현 포함)가 생성된 종목은 추가 매수 안함
+            if any(s["ticker"] == ticker and s["type"] == "SELL" for s in signals):
                 continue
 
             # 최대 분할매수 횟수 제한
@@ -141,7 +150,7 @@ class MagicSplitStrategy(Strategy):
                 if current_price <= buy_trigger_price:
                     quantity = int(self.investment_per_order / current_price)
                     if quantity > 0:
-                        new_pos = Position(current_date, current_price, quantity, len(positions) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                        new_pos = Position(current_price, quantity, len(positions) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
                         sort_metric = len(positions) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_price) / last_pos.buy_price)
                         signals.append(self._create_buy_signal(current_date, ticker, quantity, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
         return signals
@@ -179,7 +188,7 @@ class MagicSplitStrategy(Strategy):
             if current_price > 0:
                 quantity = int(self.investment_per_order / current_price)
                 if quantity > 0:
-                    new_pos = Position(current_date, current_price, quantity, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    new_pos = Position(current_price, quantity, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
                     signals.append(self._create_buy_signal(current_date, ticker, quantity, new_pos, 1, -candidate["atr_14_ratio"], "신규 진입", current_price))
         return signals
 

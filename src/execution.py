@@ -70,7 +70,7 @@ class BasicExecutionHandler:
         
         position_to_add = order_event["position"]
         position_to_add.buy_price = execution_price 
-        portfolio.add_position(ticker, position_to_add)
+        portfolio.add_position(ticker, position_to_add, order_event["date"])
 
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])
@@ -122,7 +122,7 @@ class BasicExecutionHandler:
         net_revenue = revenue - commission - tax
 
         portfolio.update_cash(net_revenue)
-        portfolio.remove_position(ticker, position_to_sell)
+        portfolio.remove_position(ticker, position_to_sell, order_event["date"])
 
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])

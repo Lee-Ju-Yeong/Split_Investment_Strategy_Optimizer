@@ -13,7 +13,7 @@ database:
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
   start_date: '2015-01-01'
-  end_date: '2025-01-01'
+  end_date: '2016-01-01'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
@@ -21,15 +21,15 @@ backtest_settings:
 strategy_params:
   max_stocks: 20
   order_investment_ratio: 0.04
-  additional_buy_drop_rate: 0.07
-  sell_profit_rate: 0.07
+  additional_buy_drop_rate: 0.03
+  sell_profit_rate: 0.03
   additional_buy_priority: 'lowest_order'
   cooldown_period_days: 5 # 매도 후 재매수 방지 기간 (영업일 기준)
 
   # --- [New] Advanced Risk Management Parameters ---
-  stop_loss_rate: -0.15 # 포지션 진입가 대비 최대 손실률 (-15%)
+  stop_loss_rate: -0.40 # 포지션 진입가 대비 최대 손실률 (-15%)
   max_splits_limit: 10 # 최대 분할매수 차수 (10차까지)
-  max_holding_period: 90 # 최대 보유 기간 (영업일 기준, 약 4.5개월)
+  max_inactivity_period: 90      # (정적) 최대 매매 미발생 기간 (일)
 
 # --- 4. Execution Handler Parameters ---
 execution_params:
