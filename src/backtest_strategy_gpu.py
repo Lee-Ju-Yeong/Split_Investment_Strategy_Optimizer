@@ -42,6 +42,7 @@ def _process_sell_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
     cooldown_state: cp.ndarray,
+    last_trade_day_idx_state: cp.ndarray,
     current_day_idx: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
@@ -49,42 +50,41 @@ def _process_sell_signals_gpu(
     sell_tax_rate: float,
 ):
     """
-    [수정된 로직]
-    벡터화된 매도 신호 처리 함수.
-    1. 전체 청산(손절매, 최대 보유기간) 조건을 먼저 처리합니다.
+    [수정된 로직 v2]
+    1. 전체 청산(손절매, 최대 '매매 미발생' 기간) 조건을 먼저 처리합니다.
     2. 그 다음, 청산되지 않은 종목에 한해 부분 수익실현을 처리합니다.
     """
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
-    entry_dates = positions_state[..., 2]
 
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
-        return portfolio_state, positions_state, cooldown_state
+        return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state
 
     # --- 파라미터 로드 ---
     sell_profit_rates = param_combinations[:, 3:4, cp.newaxis]
     stop_loss_rates = param_combinations[:, 5:6, cp.newaxis]
-    max_holding_periods = param_combinations[:, 7:8, cp.newaxis]
+    max_inactivity_periods = param_combinations[:, 7:8] # 최대 매매 미발생 기간
 
     broadcasted_prices = cp.broadcast_to(current_prices.reshape(1, -1, 1), buy_prices.shape)
     
     # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
     sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
-    # --- 시나리오 1: 전체 청산 (손절매 또는 최대 보유 기간) ---
+    # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
     stop_loss_prices = buy_prices * (1 + stop_loss_rates)
-    stop_loss_mask = (broadcasted_prices <= stop_loss_prices) & valid_positions
+    stop_loss_position_mask = (broadcasted_prices <= stop_loss_prices) & valid_positions
+    stock_stop_loss_mask = cp.any(stop_loss_position_mask, axis=2)
 
-    days_held = current_day_idx - entry_dates
-    max_hold_mask = (days_held > max_holding_periods) & valid_positions
+    # [수정 1] '최대 매매 미발생 기간' 계산 로직
+    # 마지막 거래가 없었던 종목(-1)은 제외
+    has_traded_before = last_trade_day_idx_state != -1
+    days_inactive = current_day_idx - last_trade_day_idx_state
+    stock_inactivity_mask = (days_inactive > max_inactivity_periods) & has_traded_before
     
-    # 전체 청산 조건에 해당하는 '차수' 마스크
-    liquidation_position_mask = stop_loss_mask | max_hold_mask
+    # [수정 2] 종목 단위 청산 마스크 통합
+    stock_liquidation_mask = stock_stop_loss_mask | stock_inactivity_mask
     
-    # 전체 청산 조건에 해당하는 '종목' 마스크 (차수 축에 대해 .any() 사용)
-    stock_liquidation_mask = cp.any(liquidation_position_mask, axis=2)
-
     if cp.any(stock_liquidation_mask):
         # 청산 대상 종목의 모든 포지션에 대한 수익 계산
         revenue_matrix = quantities * broadcasted_prices
@@ -138,16 +138,20 @@ def _process_sell_signals_gpu(
         sell_occurred_stock_mask |= profit_occurred_stock_mask
 
 
-    # --- 최종 쿨다운 처리 ---
+    # --- 최종 상태 업데이트 (쿨다운 및 마지막 거래일) ---
     if cp.any(sell_occurred_stock_mask):
         sim_indices, stock_indices = cp.where(sell_occurred_stock_mask)
         cooldown_state[sim_indices, stock_indices] = current_day_idx
+        # [추가] 매도 발생 시, 마지막 거래일 업데이트
+        last_trade_day_idx_state[sim_indices, stock_indices] = current_day_idx
 
-    return portfolio_state, positions_state, cooldown_state
+    # [수정] last_trade_day_idx_state 반환
+    return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state
 
 def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
+    last_trade_day_idx_state: cp.ndarray, # [추가] 파라미터
     current_day_idx: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
@@ -226,12 +230,18 @@ def _process_additional_buy_signals_gpu(
     positions_state[sim_indices, stock_indices, next_split_idx, 1] = buy_prices_adjusted
     positions_state[sim_indices, stock_indices, next_split_idx, 2] = current_day_idx
 
-    return portfolio_state, positions_state
+    # [추가] 함수 반환 직전에 마지막 거래일 업데이트 로직 추가
+    if len(sim_indices) > 0:
+        # 이전에 성공적으로 매수한 sim_indices, stock_indices 사용
+        last_trade_day_idx_state[sim_indices, stock_indices] = current_day_idx
+
+    return portfolio_state, positions_state, last_trade_day_idx_state # [수정] 반환값 추가
 
 def _process_new_entry_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
     cooldown_state: cp.ndarray,
+    last_trade_day_idx_state: cp.ndarray,
     current_day_idx: int,
     cooldown_period_days: int,
     param_combinations: cp.ndarray,
@@ -240,7 +250,6 @@ def _process_new_entry_signals_gpu(
     candidate_atrs_for_day: cp.ndarray,
     buy_commission_rate: float,
 ):
-    num_combinations, _, _, _ = positions_state.shape
     has_any_position = cp.any(positions_state[..., 0] > 0, axis=2)
     current_num_stocks = cp.sum(has_any_position, axis=1)
     max_stocks_per_sim = param_combinations[:, 0]
@@ -287,8 +296,11 @@ def _process_new_entry_signals_gpu(
             positions_state[buy_sim_indices, ticker_idx, 0, 2] = current_day_idx # Record entry date
             available_slots[buy_sim_indices] -= 1
             has_any_position[buy_sim_indices, ticker_idx] = True
+            last_trade_day_idx_state[buy_sim_indices, ticker_idx] = current_day_idx
 
-    return portfolio_state, positions_state
+    return portfolio_state, positions_state, last_trade_day_idx_state
+
+# backtest_strategy_gpu.py 파일의 run_magic_split_strategy_on_gpu 함수를 아래 코드로 교체합니다.
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -300,56 +312,116 @@ def run_magic_split_strategy_on_gpu(
     all_tickers: list,
     execution_params: dict,
     max_splits_limit: int = 20, # This will be overridden by param_combinations
+    debug_mode: bool = False
 ):
+    """
+    [전면 수정된 최종 버전]
+    GPU 가속화를 사용하여 Magic Split 전략의 전체 백테스팅을 실행합니다.
+    - 매도, 추가매수, 신규진입 로직을 모두 포함합니다.
+    - '마지막 거래일' 기준의 비활성 기간 규칙을 적용합니다.
+    - '현재가'를 사용하여 포트폴리오 가치를 정확히 계산합니다.
+    """
+    # --- 1. 상태 배열 초기화 ---
     num_combinations = param_combinations.shape[0]
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
 
-    # --- State Arrays Initialization ---
     # Portfolio state: [capital, investment_per_order]
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
     portfolio_state[:, 0] = initial_cash
     
     # Position state: [quantity, buy_price, entry_date_idx]
-    # max_splits_limit from params will define the actual dimension
     max_splits_from_params = int(cp.max(param_combinations[:, 6]).get()) if param_combinations.shape[1] > 6 else max_splits_limit
     positions_state = cp.zeros((num_combinations, num_tickers, max_splits_from_params, 3), dtype=cp.float32)
     
     # Cooldown state: [last_sell_day_idx]
     cooldown_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32)
     
+    # Last trade day state: [last_trade_day_idx]
+    last_trade_day_idx_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32)
+    
     daily_portfolio_values = cp.zeros((num_combinations, num_trading_days), dtype=cp.float32)
+    
+    # Helper Dictionaries & Variables
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
+    all_tickers_gpu = cp.array(list(ticker_to_idx.values()), dtype=cp.int32)
     previous_month = -1
 
-    # --- Main Backtesting Loop ---
+    # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
-        current_day_prices = all_data_gpu.loc[current_date]['close_price'].reindex(all_tickers).fillna(0)
-        current_prices_gpu = cp.asarray(current_day_prices.values, dtype=cp.float32)
+        
+        if debug_mode and (i % 20 == 0 or i == num_trading_days -1): # 디버그 모드에서 진행상황 로깅
+            print(f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---")
 
+        # 2-1. 현재 날짜의 데이터 준비 (종가, 후보 종목 등)
+        # 현재일의 모든 종목 종가
+        current_prices_gpu = cp.asarray(all_data_gpu.loc[current_date]['close_price'].reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+        
+        # 현재일에 적용할 주간 필터링된 종목 리스트 (가장 최근 필터링 날짜 기준)
+        try:
+            latest_filter_date = weekly_filtered_gpu.index.asof(current_date)
+            if pd.notna(latest_filter_date):
+                candidate_tickers_series = weekly_filtered_gpu.loc[latest_filter_date]['ticker']
+                candidate_tickers_list = candidate_tickers_series.to_list() if isinstance(candidate_tickers_series, cudf.Series) else [candidate_tickers_series]
+                
+                # 종목 코드를 인덱스로 변환
+                candidate_indices = cp.array([ticker_to_idx.get(t, -1) for t in candidate_tickers_list if t in ticker_to_idx], dtype=cp.int32)
+                candidate_tickers_for_day = candidate_indices[candidate_indices != -1]
+                
+                # 후보 종목의 ATR 값 준비
+                candidate_atrs_for_day = cp.asarray(all_data_gpu.loc[(candidate_tickers_list, current_date)]['atr_14_ratio'].fillna(0).values, dtype=cp.float32)
+            else:
+                candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+        except (KeyError, IndexError):
+            candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+            candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+
+        # 2-2. 월별 투자금 재계산
         if current_date.month != previous_month:
             portfolio_state = _calculate_monthly_investment_gpu(
                 portfolio_state, positions_state, param_combinations, current_prices_gpu
             )
             previous_month = current_date.month
 
-        # --- Signal Processing --- 
-        portfolio_state, positions_state, cooldown_state = _process_sell_signals_gpu(
-            portfolio_state, positions_state, cooldown_state, i,
-            param_combinations, current_prices_gpu, 
+        # 2-3. 신호 처리 (매도 -> 추가 매수 -> 신규 진입 순)
+        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state = _process_sell_signals_gpu(
+            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
+            param_combinations, current_prices_gpu,
             execution_params["sell_commission_rate"], execution_params["sell_tax_rate"]
         )
 
-        # In this version, new entries and additional buys are simplified.
-        # A full implementation would require more complex candidate sorting.
+        portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
+            portfolio_state, positions_state, last_trade_day_idx_state, i,
+            param_combinations, current_prices_gpu,
+            execution_params["buy_commission_rate"]
+        )
+        
+        portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
+            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
+            cooldown_period_days, param_combinations, current_prices_gpu,
+            candidate_tickers_for_day, candidate_atrs_for_day,
+            execution_params["buy_commission_rate"]
+        )
 
-        # --- Update Daily Portfolio Value ---
-        quantities = positions_state[..., 0]
-        buy_prices = positions_state[..., 1]
-        stock_values = cp.sum(quantities * buy_prices, axis=2)
-        total_stock_value = cp.sum(stock_values, axis=1)
+        # 2-4. 일일 포트폴리오 가치 업데이트
+        # [수정] '현재가'를 사용하여 주식 평가 가치를 정확히 계산
+        stock_quantities = cp.sum(positions_state[..., 0], axis=2)  # shape: (num_sims, num_tickers)
+        stock_market_values = stock_quantities * current_prices_gpu   # current_prices_gpu는 브로드캐스팅됨
+        total_stock_value = cp.sum(stock_market_values, axis=1)    # shape: (num_sims,)
+        
         daily_portfolio_values[:, i] = portfolio_state[:, 0] + total_stock_value
 
+        if debug_mode and (i % 20 == 0 or i == num_trading_days -1):
+            capital_snapshot = portfolio_state[0, 0].get()
+            stock_val_snapshot = total_stock_value[0].get()
+            total_val_snapshot = daily_portfolio_values[0, i].get()
+            num_pos_snapshot = cp.sum(cp.any(positions_state[0, :, :, 0] > 0, axis=1)).get()
+            print(f" [GPU_HOLDINGS] {cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get().tolist()}")
+            print(f"[END]   Capital: {capital_snapshot:,.0f} | Stock Val: {stock_val_snapshot:,.0f} | Total Val: {total_val_snapshot:,.0f} | Stocks Held: {num_pos_snapshot}")
+
+
+    # --- 3. 결과 반환 ---
     return daily_portfolio_values
