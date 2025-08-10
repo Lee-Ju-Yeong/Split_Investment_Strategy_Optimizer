@@ -184,10 +184,31 @@ if __name__ == "__main__":
     # 1. 데이터 로드 및 준비
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
     weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
-    trading_dates_pd = pd.bdate_range(start=backtest_start_date, end=backtest_end_date)
+    
+    # [수정] CPU와 동일하게 DB에서 실제 거래일만 가져오도록 변경합니다.
+    print("Fetching actual trading dates from DB...")
+    sql_engine = create_engine(db_connection_str)
+    trading_dates_query = f"""
+        SELECT DISTINCT date 
+        FROM DailyStockPrice 
+        WHERE date BETWEEN '{backtest_start_date}' AND '{backtest_end_date}'
+        ORDER BY date
+    """
+    trading_dates_pd = pd.read_sql(trading_dates_query, sql_engine, parse_dates=['date'])['date']
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
     all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
+    
+    
+    # [추가] GPU가 매수한 종목 인덱스가 실제 어떤 종목 코드인지 확인하는 로그
+    print("\n--- [DEBUG] Ticker to Index Mapping Check ---")
+    try:
+        print(f"Index  82 -> Ticker: {all_tickers[82]}")
+        print(f"Index  86 -> Ticker: {all_tickers[86]}")
+        print(f"Index 263 -> Ticker: {all_tickers[263]}")
+    except IndexError:
+        print("Error: One of the indices is out of bounds for the `all_tickers` list.")
+    print("-------------------------------------------\n")
     
     print(f"📊 로드된 종목 수: {len(all_tickers)}")
     print(f"📊 실제 거래일 수: {len(trading_date_indices_gpu)}")
