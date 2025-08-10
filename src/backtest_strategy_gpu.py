@@ -83,6 +83,7 @@ def _process_sell_signals_gpu(
     current_prices: cp.ndarray,
     sell_commission_rate: float,
     sell_tax_rate: float,
+    debug_mode: bool = False
 ):
     """
     [수정된 로직 v2]
@@ -107,21 +108,34 @@ def _process_sell_signals_gpu(
     sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
-    quantities_sum = cp.sum(quantities, axis=2)
-    # 0으로 나누는 것을 방지하기 위해 0인 경우 1로 설정
-    quantities_sum_safe = cp.where(quantities_sum == 0, 1, quantities_sum)
-    avg_buy_prices = cp.sum(buy_prices * quantities, axis=2) / quantities_sum_safe
+    # (sim, stock) 형태로 현재가를 브로드캐스팅 준비
+    current_prices_2d = cp.broadcast_to(current_prices, (positions_state.shape[0], positions_state.shape[1]))
     
-    stock_stop_loss_mask = (current_prices <= avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))) & (cp.sum(quantities, axis=2) > 0)
+    # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생 기간) ---
+    total_quantities = cp.sum(quantities, axis=2)
+    has_any_position = total_quantities > 0
     
-    # [수정 1] '최대 매매 미발생 기간' 계산 로직
-    # 마지막 거래가 없었던 종목(-1)은 제외
+    # 평균 매수가 계산 (0으로 나누기 방지)
+    safe_total_quantities = cp.where(has_any_position, total_quantities, 1)
+    avg_buy_prices = cp.sum(buy_prices * quantities, axis=2) / safe_total_quantities
+     # 손절매 조건
+    stock_stop_loss_mask = (current_prices_2d <= avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))) & has_any_position
+    
+    # 비활성 기간 조건
     has_traded_before = last_trade_day_idx_state != -1
     days_inactive = current_day_idx - last_trade_day_idx_state
     stock_inactivity_mask = (days_inactive > max_inactivity_periods) & has_traded_before
     
-    # [수정 2] 종목 단위 청산 마스크 통합
     stock_liquidation_mask = stock_stop_loss_mask | stock_inactivity_mask
+    
+    if debug_mode and cp.any(stock_liquidation_mask):
+        sim0_stop_loss = cp.where(stock_stop_loss_mask[0])[0].get()
+        sim0_inactivity = cp.where(stock_inactivity_mask[0])[0].get()
+        if sim0_stop_loss.size > 0:
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Stop-Loss triggered for Stocks {sim0_stop_loss.tolist()}")
+        if sim0_inactivity.size > 0:
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Inactivity triggered for Stocks {sim0_inactivity.tolist()}")
+            
     
     if cp.any(stock_liquidation_mask):
         # 청산 대상 종목의 모든 포지션에 대한 수익 계산
@@ -149,11 +163,22 @@ def _process_sell_signals_gpu(
 
 
     # --- 시나리오 2: 부분 매도 (수익 실현) ---
-    # 전체 청산되지 않은 유효한 포지션에 대해서만 수익실현 검사
     target_sell_prices = buy_prices * (1 + sell_profit_rates)
-    # 호가 단위는 실제 매도가에서 조정되어야 하므로, 여기서는 논리적 트리거 가격만 사용
-    profit_taking_mask = (broadcasted_prices >= target_sell_prices) & valid_positions
+
+    # [수정] CPU와 동일하게 호가단위 적용 전 가격으로 비교
+    # 1. (num_stocks,) 형태의 current_prices를 (num_sims, num_stocks)로 확장
+    current_prices_2d = cp.broadcast_to(current_prices, (positions_state.shape[0], positions_state.shape[1]))
+    # 2. (num_sims, num_stocks)를 (num_sims, num_stocks, 1)로 차원 추가
+    # 3. (num_sims, num_stocks, 1)을 (num_sims, num_stocks, num_splits)로 브로드캐스팅하여 최종 비교
+    broadcasted_prices_3d = cp.broadcast_to(current_prices_2d[:, :, cp.newaxis], buy_prices.shape)
     
+    profit_taking_mask = (broadcasted_prices_3d >= target_sell_prices) & valid_positions
+
+    if debug_mode and cp.any(profit_taking_mask):
+        sim0_profit_taking_stocks = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
+        if sim0_profit_taking_stocks.size > 0:
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Profit-Taking triggered for Stocks {sim0_profit_taking_stocks.tolist()}")
+
     if cp.any(profit_taking_mask):
         # 실제 매도가는 지정가 주문을 반영하여 호가 단위에 맞게 올림 처리
         actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
@@ -614,7 +639,8 @@ def run_magic_split_strategy_on_gpu(
         portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state = _process_sell_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
             param_combinations, current_prices_gpu,
-            execution_params["sell_commission_rate"], execution_params["sell_tax_rate"]
+            execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
+            debug_mode = debug_mode,
         )
 
         # 2-4. 일일 포트폴리오 가치 업데이트
