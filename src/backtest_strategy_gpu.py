@@ -80,7 +80,8 @@ def _process_sell_signals_gpu(
     last_trade_day_idx_state: cp.ndarray,
     current_day_idx: int,
     param_combinations: cp.ndarray,
-    current_prices: cp.ndarray,
+    current_close_prices: cp.ndarray,   # 종가(기존 용도 유지)
+    current_high_prices: cp.ndarray,    # intraday high (익절 비교용)
     sell_commission_rate: float,
     sell_tax_rate: float,
     debug_mode: bool = False
@@ -101,15 +102,14 @@ def _process_sell_signals_gpu(
     sell_profit_rates = param_combinations[:, 3:4, cp.newaxis]
     stop_loss_rates = param_combinations[:, 5:6, cp.newaxis]
     max_inactivity_periods = param_combinations[:, 7:8] # 최대 매매 미발생 기간
-
-    broadcasted_prices = cp.broadcast_to(current_prices.reshape(1, -1, 1), buy_prices.shape)
+    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
     
     # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
     sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
     # (sim, stock) 형태로 현재가를 브로드캐스팅 준비
-    current_prices_2d = cp.broadcast_to(current_prices, (positions_state.shape[0], positions_state.shape[1]))
+    current_prices_2d = cp.broadcast_to(current_close_prices, (positions_state.shape[0], positions_state.shape[1]))
     
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생 기간) ---
     total_quantities = cp.sum(quantities, axis=2)
@@ -138,12 +138,15 @@ def _process_sell_signals_gpu(
             
     
     if cp.any(stock_liquidation_mask):
+        broadcasted_close_prices = cp.broadcast_to(current_close_prices.reshape(1, -1, 1), buy_prices.shape)
+        adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_close_prices)
+
         # 청산 대상 종목의 모든 포지션에 대한 수익 계산
-        revenue_matrix = quantities * broadcasted_prices
+        revenue_matrix = quantities * adjusted_liquidation_prices
         # 청산 대상 종목(stock_liquidation_mask)만 필터링하여 수익 계산
         liquidation_revenue = cp.sum(revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis], axis=(1, 2))
+        
 
-        cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
         net_proceeds = cp.floor(liquidation_revenue * cost_factor)
         
         # 자본 업데이트
@@ -163,44 +166,58 @@ def _process_sell_signals_gpu(
 
 
     # --- 시나리오 2: 부분 매도 (수익 실현) ---
+    # [변경] 목표가 계산을 CPU와 동일하게 변경 (세금/수수료 역산 제거)
     target_sell_prices = buy_prices * (1 + sell_profit_rates)
+    # [변경] 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리
+    execution_sell_prices = adjust_price_up_gpu(target_sell_prices)
 
-    # [수정] CPU와 동일하게 호가단위 적용 전 가격으로 비교
-    # 1. (num_stocks,) 형태의 current_prices를 (num_sims, num_stocks)로 확장
-    current_prices_2d = cp.broadcast_to(current_prices, (positions_state.shape[0], positions_state.shape[1]))
-    # 2. (num_sims, num_stocks)를 (num_sims, num_stocks, 1)로 차원 추가
-    # 3. (num_sims, num_stocks, 1)을 (num_sims, num_stocks, num_splits)로 브로드캐스팅하여 최종 비교
-    broadcasted_prices_3d = cp.broadcast_to(current_prices_2d[:, :, cp.newaxis], buy_prices.shape)
+    # [변경] 체결 조건: 당일 고가(high)가 계산된 체결가(execution_sell_prices)에 도달했는지 확인
+    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape)
     
-    profit_taking_mask = (broadcasted_prices_3d >= target_sell_prices) & valid_positions
+    # [추가] CPU에는 없지만, 현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
+    open_day_idx = positions_state[..., 2]
+    sellable_time_mask = open_day_idx < current_day_idx
+
+    profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
         sim0_profit_taking_stocks = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
         if sim0_profit_taking_stocks.size > 0:
             print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Profit-Taking triggered for Stocks {sim0_profit_taking_stocks.tolist()}")
 
-    if cp.any(profit_taking_mask):
-        # 실제 매도가는 지정가 주문을 반영하여 호가 단위에 맞게 올림 처리
-        actual_sell_prices = adjust_price_up_gpu(target_sell_prices)
-        
-        # 수익 실현으로 인한 수익 계산
-        # profit_taking_mask가 True인 차수들의 수익만 계산
-        profit_taking_revenue_matrix = quantities * actual_sell_prices
-        total_profit_revenue = cp.sum(profit_taking_revenue_matrix * profit_taking_mask, axis=(1, 2))
 
-        cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
+    if cp.any(profit_taking_mask):
+        # 수익 실현 금액은 'exec_prices'로 계산
+        revenue_matrix = quantities * execution_sell_prices
+
+        # profit_taking_mask가 True인 차수들의 수익만 합산
+        total_profit_revenue = cp.sum(revenue_matrix * profit_taking_mask, axis=(1, 2))
+
+        # 비용은 매출액에 일괄 곱(벡터화) — CPU와 동일 효과
         net_proceeds = cp.floor(total_profit_revenue * cost_factor)
-        
+
         # 자본 업데이트
         portfolio_state[:, 0] += net_proceeds
 
         # 포지션 리셋 (수익 실현된 '차수'만)
         positions_state[profit_taking_mask] = 0
 
+        # [선택] CPU의 "1차익절=전량청산"까지 맞출 경우:
+        # first_split_filled_and_sold = profit_taking_mask[:, :, 0]  # (sim, stock)
+        # if cp.any(first_split_filled_and_sold):
+        #     full_liq_mask = first_split_filled_and_sold[:, :, cp.newaxis, cp.newaxis]
+        #     positions_state[cp.broadcast_to(full_liq_mask, positions_state.shape)] = 0
+        #     # 쿨다운/마지막 거래일도 업데이트 필요 시 동일하게 처리
+
         # 쿨다운용 마스크 업데이트
         profit_occurred_stock_mask = cp.any(profit_taking_mask, axis=2)
         sell_occurred_stock_mask |= profit_occurred_stock_mask
-
+        # [추가] CPU의 '1차 익절 시 전량 청산' 룰을 GPU에 구현
+        first_split_sold_mask = profit_taking_mask[:, :, 0] # 1차 매수분이 팔렸는지 확인
+        if cp.any(first_split_sold_mask):
+            # 1차 매수분이 팔린 (시뮬레이션, 종목)에 대해 모든 포지션을 0으로 리셋
+            # (이미 위에서 팔린 포지션은 0이 되었지만, 나머지 포지션을 청산하기 위함)
+            positions_state[first_split_sold_mask] = 0
 
     # --- 최종 상태 업데이트 (쿨다운 및 마지막 거래일) ---
     if cp.any(sell_occurred_stock_mask):
@@ -576,9 +593,17 @@ def run_magic_split_strategy_on_gpu(
             print(f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---")
 
         # 2-1. 현재 날짜의 가격 및 후보 종목 데이터 준비
-        daily_prices_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['close_price']
-        current_prices_gpu = cp.asarray(daily_prices_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+        # daily_prices_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['close_price']
+        # current_prices_gpu = cp.asarray(daily_prices_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+        # [추가] high도 함께 로드
+        daily_df = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')
+        daily_close_series = daily_df['close_price']
+        daily_high_series  = daily_df['high_price']
 
+        current_prices_gpu = cp.asarray(daily_close_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+        current_highs_gpu  = cp.asarray(daily_high_series .reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+
+    
         past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
         if not past_or_equal_data.empty:
             latest_filter_date = past_or_equal_data['date'].max()
@@ -620,7 +645,18 @@ def run_magic_split_strategy_on_gpu(
             )
             previous_month = current_date.month
 
-        # 2-3. [수정] 신호 처리 순서를 '신규 -> 추가 -> 매도'로 변경
+         # 매도를 먼저 처리하여 현금과 포트폴리오 슬롯을 확보합니다.
+        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state = _process_sell_signals_gpu(
+            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
+            param_combinations, 
+            current_prices_gpu,                       # current_close_prices 역할
+            current_highs_gpu,                        # current_high_prices 역할
+            execution_params["sell_commission_rate"], 
+            execution_params["sell_tax_rate"],
+            debug_mode=debug_mode,
+        )
+        
+        # 확보된 자원으로 신규 종목 진입을 시도합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
             cooldown_period_days, param_combinations, current_prices_gpu,
@@ -629,20 +665,14 @@ def run_magic_split_strategy_on_gpu(
             log_buffer, log_counter, debug_mode
         )
         
+        # 마지막으로 기존 보유 종목의 추가 매수를 처리합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
             portfolio_state, positions_state, last_trade_day_idx_state, i,
             param_combinations, current_prices_gpu,
             execution_params["buy_commission_rate"],
             log_buffer, log_counter, debug_mode
         )
-
-        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state = _process_sell_signals_gpu(
-            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
-            param_combinations, current_prices_gpu,
-            execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
-            debug_mode = debug_mode,
-        )
-
+        
         # 2-4. 일일 포트폴리오 가치 업데이트
         stock_quantities = cp.sum(positions_state[..., 0], axis=2)
         stock_market_values = stock_quantities * current_prices_gpu

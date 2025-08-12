@@ -108,60 +108,94 @@ class BasicExecutionHandler:
     def _execute_sell(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before):
         ticker = order_event["ticker"]
         position_to_sell = order_event["position"]
-        trigger_price = order_event.get("trigger_price", float('inf'))
 
-        execution_price = self._adjust_price_up(trigger_price)
+        # [수정] trigger_price 기본값 None (없으면 우리가 역산해서 만듦)
+        trigger_price = order_event.get("trigger_price", None)
 
-        if ohlc_data['high_price'] < execution_price:
+        # === 세후 목표가 역산 & 호가보정 (CPU 표준) ===
+        buy = position_to_sell.buy_price
+        pr  = position_to_sell.sell_profit_rate
+        cost_factor = (1 - self.sell_commission_rate - self.sell_tax_rate)  # e.g. 1 - 0.00015 - 0.0018
+        target_raw = buy * (1 + pr)
+        target_after_cost = target_raw / cost_factor
+
+        # [추가] 외부에서 trigger가 안 오면 우리가 계산한 값을 사용
+        if trigger_price is None:
+            effective_trigger = target_after_cost
+        else:
+            # 보수적으로 더 높은 쪽을 쓰고 싶으면 아래 주석 해제
+            # effective_trigger = max(trigger_price, target_after_cost)
+            effective_trigger = trigger_price
+
+        execution_price = self._adjust_price_up(effective_trigger)
+
+        # [수정] 체결 가능: 당일 high가 execution_price 이상
+        if ohlc_data["high_price"] < execution_price:
             return
 
+        # [수정] 먼저 계산 → 그 다음 로그 (선언 전 참조 방지)
         quantity = position_to_sell.quantity
         revenue = execution_price * quantity
         commission = math.floor(revenue * self.sell_commission_rate)
         tax = math.floor(revenue * self.sell_tax_rate)
         net_revenue = revenue - commission - tax
 
+        # [추가] 디버그 로그 (GPU와 라인 매칭용)
+        print(
+            f"[CPU_SELL_DEBUG] {order_event['date']} {ticker} "
+            f"buy={buy} raw_target={target_raw:.4f} cost_factor={cost_factor:.6f} "
+            f"target_after_cost={target_after_cost:.4f} current_close={ohlc_data['close_price']}"
+        )
+        print(
+            f"[CPU_SELL_PRICE] {order_event['date']} {ticker} "
+            f"sell_price(adjusted_tick)={execution_price} "
+            f"qty={quantity} revenue_gross={revenue} revenue_net={net_revenue} "
+            f"open={ohlc_data['open_price']} high={ohlc_data['high_price']}"
+        )
+
+        # 정산
         portfolio.update_cash(net_revenue)
         portfolio.remove_position(ticker, position_to_sell, order_event["date"])
 
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])
         quantity_after = sum(p.quantity for p in positions_after)
-        
+
         avg_buy_price_after = 0
         if quantity_after > 0:
             total_invested_cost_after = sum(p.quantity * p.buy_price for p in positions_after)
             avg_buy_price_after = total_invested_cost_after / quantity_after
 
-        buy_cost = position_to_sell.buy_price * quantity
+        buy_cost = buy * quantity
         realized_pnl = net_revenue - buy_cost
 
         trade = Trade(
             date=order_event["date"],
             code=ticker,
             name=data_handler.get_name_from_ticker(ticker),
-            trade_type='SELL',
+            trade_type="SELL",
             order=position_to_sell.order,
             reason_for_trade=order_event.get("reason_for_trade", "N/A"),
-            trigger_price=trigger_price,
-            open_price=ohlc_data['open_price'],
-            high_price=ohlc_data['high_price'],
-            low_price=ohlc_data['low_price'],
-            close_price=ohlc_data['close_price'],
+            trigger_price=effective_trigger,  # [수정] 실제 사용값 기록
+            open_price=ohlc_data["open_price"],
+            high_price=ohlc_data["high_price"],
+            low_price=ohlc_data["low_price"],
+            close_price=ohlc_data["close_price"],
             quantity=quantity,
-            buy_price=position_to_sell.buy_price, # SELL-일때는 원본 매수가를 기록
-            sell_price=execution_price,          # SELL-일때는 sell_price에 기록
+            buy_price=buy,
+            sell_price=execution_price,
             commission=commission,
-            tax=tax,                             # SELL-일때는 tax 기록
+            tax=tax,
             trade_value=net_revenue,
             quantity_before=quantity_before,
             quantity_after=quantity_after,
             avg_buy_price_after=avg_buy_price_after,
             realized_pnl=realized_pnl,
             cash_before=cash_before,
-            cash_after=cash_after
+            cash_after=cash_after,
         )
         portfolio.record_trade(trade)
 
+        # 1차 매수 익절 시 전량 청산 규칙 유지
         if position_to_sell.order == 1:
             portfolio.liquidate_ticker(ticker)
