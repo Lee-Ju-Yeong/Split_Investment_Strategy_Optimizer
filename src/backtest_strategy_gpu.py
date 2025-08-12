@@ -96,7 +96,9 @@ def _process_sell_signals_gpu(
 
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
-        return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state
+        # [추가] 당일 매도가 없으므로 False 마스크를 반환
+        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
+        return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     # --- 파라미터 로드 ---
     sell_profit_rates = param_combinations[:, 3:4, cp.newaxis]
@@ -172,13 +174,13 @@ def _process_sell_signals_gpu(
     execution_sell_prices = adjust_price_up_gpu(target_sell_prices)
 
     # [변경] 체결 조건: 당일 고가(high)가 계산된 체결가(execution_sell_prices)에 도달했는지 확인
-    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape)
+    close_prices_3d = cp.broadcast_to(current_close_prices.reshape(1, -1, 1), buy_prices.shape)    
     
     # [추가] CPU에는 없지만, 현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
+    profit_taking_mask = (close_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
         sim0_profit_taking_stocks = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
@@ -227,7 +229,7 @@ def _process_sell_signals_gpu(
         last_trade_day_idx_state[sim_indices, stock_indices] = current_day_idx
 
     # [수정] last_trade_day_idx_state 반환
-    return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state
+    return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
 def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
@@ -646,7 +648,7 @@ def run_magic_split_strategy_on_gpu(
             previous_month = current_date.month
 
          # 매도를 먼저 처리하여 현금과 포트폴리오 슬롯을 확보합니다.
-        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state = _process_sell_signals_gpu(
+        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask = _process_sell_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
             param_combinations, 
             current_prices_gpu,                       # current_close_prices 역할
