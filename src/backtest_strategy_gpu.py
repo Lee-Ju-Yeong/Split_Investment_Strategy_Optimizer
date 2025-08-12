@@ -235,6 +235,7 @@ def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
     last_trade_day_idx_state: cp.ndarray,
+    sell_occurred_today_mask: cp.ndarray, # [추가]
     current_day_idx: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
@@ -265,7 +266,11 @@ def _process_additional_buy_signals_gpu(
     # 2. 추가 매수 조건 확인
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
-    additional_buy_mask = (current_prices <= trigger_prices) & has_any_position & under_max_splits
+    # [추가] CPU의 "당일 매도 종목 추가매수 금지" 룰을 적용
+    can_add_buy = ~sell_occurred_today_mask
+    
+    # [변경] 마스크를 조건에 추가
+    additional_buy_mask = (current_prices <= trigger_prices) & has_any_position & under_max_splits & can_add_buy
     
     if not cp.any(additional_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
@@ -648,7 +653,7 @@ def run_magic_split_strategy_on_gpu(
             previous_month = current_date.month
 
          # 매도를 먼저 처리하여 현금과 포트폴리오 슬롯을 확보합니다.
-        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask = _process_sell_signals_gpu(
+        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_today_mask = _process_sell_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
             param_combinations, 
             current_prices_gpu,                       # current_close_prices 역할
@@ -669,7 +674,7 @@ def run_magic_split_strategy_on_gpu(
         
         # 마지막으로 기존 보유 종목의 추가 매수를 처리합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
-            portfolio_state, positions_state, last_trade_day_idx_state, i,
+            portfolio_state, positions_state, last_trade_day_idx_state,sell_occurred_today_mask, i,
             param_combinations, current_prices_gpu,
             execution_params["buy_commission_rate"],
             log_buffer, log_counter, debug_mode
