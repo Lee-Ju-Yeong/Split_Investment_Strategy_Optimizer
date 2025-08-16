@@ -18,6 +18,7 @@ class Position:
         self.order = order
         self.additional_buy_drop_rate = additional_buy_drop_rate
         self.sell_profit_rate = sell_profit_rate
+        self.open_date = None 
 
 class Strategy(ABC):
     @abstractmethod
@@ -79,14 +80,17 @@ class MagicSplitStrategy(Strategy):
             # 당일 매도된 종목은 추가 매수 안 함 (cooldown_tracker에 오늘 날짜가 기록되었는지 확인)
             if self.cooldown_tracker.get(ticker) == current_date:
                 continue
-            
-            if len(portfolio.positions[ticker]) >= self.max_splits_limit:
-                continue
 
             stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
             if stock_data is None or stock_data.empty or current_date not in stock_data.index:
                 continue
-                
+            # [추가] "1차 포지션 존재" 규칙: 1차 포지션이 없으면 추가 매수 불가
+            positions = portfolio.positions[ticker]
+            if not any(p.order == 1 for p in positions):
+                continue
+
+            if len(positions) >= self.max_splits_limit:
+                continue    
             current_close = stock_data.loc[current_date, "close_price"]
             current_low = stock_data.loc[current_date, "low_price"]
             if current_close <= 0: continue
@@ -194,12 +198,16 @@ class MagicSplitStrategy(Strategy):
                 self.cooldown_tracker[ticker] = current_date
                 continue 
 
-            # --- 2. 수익 실현 신호 생성 ---
+            # [수정] reversed()를 사용하여 가장 최근 매수 포지션부터 순회
             for p in reversed(positions):
+                # [규칙] 당일 매수한 포지션은 익절 대상에서 제외
+                if p.open_date is not None and p.open_date >= current_date:
+                    continue
+                
                 sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
-                # [수정] 신호 생성 기준을 종가(current_price)가 아닌 고가(current_high)로 변경합니다.
                 if current_high >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
+                    # [수정] 1차 매도 여부와 상관없이 개별 익절이므로 cooldown만 설정
                     self.cooldown_tracker[ticker] = current_date
         
         for signal in signals:

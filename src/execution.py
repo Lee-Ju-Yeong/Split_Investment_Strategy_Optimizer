@@ -58,6 +58,7 @@ class BasicExecutionHandler:
         ticker = order_event["ticker"]
         quantity = order_event["quantity"]
         
+
         reason = order_event.get("reason_for_trade", "")
         if "추가 매수" in reason:
             trigger_price = order_event["trigger_price"]
@@ -83,9 +84,9 @@ class BasicExecutionHandler:
             return
 
         portfolio.update_cash(-total_cost)
-        
         position_to_add = order_event["position"]
         position_to_add.buy_price = execution_price 
+        position_to_add.open_date = order_event["date"] # [추가]
         portfolio.add_position(ticker, position_to_add, order_event["date"])
 
         cash_after = portfolio.cash
@@ -206,7 +207,3 @@ class BasicExecutionHandler:
             cash_after=cash_after,
         )
         portfolio.record_trade(trade)
-
-        # 1차 매수 익절 시 전량 청산 규칙 유지
-        if position_to_sell.order == 1:
-            portfolio.liquidate_ticker(ticker)

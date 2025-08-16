@@ -205,22 +205,10 @@ def _process_sell_signals_gpu(
         # 포지션 리셋 (수익 실현된 '차수'만)
         positions_state[profit_taking_mask] = 0
 
-        # [선택] CPU의 "1차익절=전량청산"까지 맞출 경우:
-        # first_split_filled_and_sold = profit_taking_mask[:, :, 0]  # (sim, stock)
-        # if cp.any(first_split_filled_and_sold):
-        #     full_liq_mask = first_split_filled_and_sold[:, :, cp.newaxis, cp.newaxis]
-        #     positions_state[cp.broadcast_to(full_liq_mask, positions_state.shape)] = 0
-        #     # 쿨다운/마지막 거래일도 업데이트 필요 시 동일하게 처리
-
         # 쿨다운용 마스크 업데이트
         profit_occurred_stock_mask = cp.any(profit_taking_mask, axis=2)
         sell_occurred_stock_mask |= profit_occurred_stock_mask
-        # [추가] CPU의 '1차 익절 시 전량 청산' 룰을 GPU에 구현
-        first_split_sold_mask = profit_taking_mask[:, :, 0] # 1차 매수분이 팔렸는지 확인
-        if cp.any(first_split_sold_mask):
-            # 1차 매수분이 팔린 (시뮬레이션, 종목)에 대해 모든 포지션을 0으로 리셋
-            # (이미 위에서 팔린 포지션은 0이 되었지만, 나머지 포지션을 청산하기 위함)
-            positions_state[first_split_sold_mask] = 0
+
 
     # --- 최종 상태 업데이트 (쿨다운 및 마지막 거래일) ---
     if cp.any(sell_occurred_stock_mask):
@@ -270,6 +258,9 @@ def _process_additional_buy_signals_gpu(
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
+    
+    # [추가] "1차 포지션 존재" 규칙: 1차 매수 수량이 0보다 커야 함
+    has_first_split = positions_state[..., 0, 0] > 0
 
     # [추가] 오늘 신규 진입한 종목은 추가 매수 대상에서 제외 (CPU 로직과 동기화)
     # 1차 매수일이 오늘보다 이전이어야 함.
@@ -279,8 +270,9 @@ def _process_additional_buy_signals_gpu(
     first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
     is_not_new_today = (first_open_day_idx < current_day_idx)
     
+    
     # [수정] is_not_new_today 조건을 최종 마스크에 추가합니다.
-    additional_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today
+    additional_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today & has_first_split
     if not cp.any(additional_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
         
