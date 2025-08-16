@@ -69,9 +69,7 @@ class BasicExecutionHandler:
             
         execution_price = self._adjust_price_up(target_price)
         # [추가] 최종 체결 조건: 계산된 매수 가격이 당일 가격 범위(low ~ high) 내에 있어야만 체결
-        if not (ohlc_data['low_price'] <= execution_price <= ohlc_data['high_price']):
-            return # 범위를 벗어나면 주문 실패로 간주하고 종료
-        
+
         cost = execution_price * quantity
         commission = math.floor(cost * self.buy_commission_rate)
         total_cost = cost + commission

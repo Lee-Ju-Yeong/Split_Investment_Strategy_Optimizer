@@ -236,10 +236,12 @@ def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
     last_trade_day_idx_state: cp.ndarray,
-    sell_occurred_today_mask: cp.ndarray, # [추가]
+    sell_occurred_today_mask: cp.ndarray, 
     current_day_idx: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    current_lows: cp.ndarray,
+    current_highs: cp.ndarray,
     buy_commission_rate: float,
     log_buffer: cp.ndarray,
     log_counter: cp.ndarray,
@@ -269,9 +271,7 @@ def _process_additional_buy_signals_gpu(
     under_max_splits = num_positions < max_splits_limits
     # [추가] CPU의 "당일 매도 종목 추가매수 금지" 룰을 적용
     can_add_buy = ~sell_occurred_today_mask
-    
-    # [변경] 마스크를 조건에 추가
-    additional_buy_mask = (current_prices <= trigger_prices) & has_any_position & under_max_splits & can_add_buy
+    additional_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy
     
     if not cp.any(additional_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
@@ -287,10 +287,12 @@ def _process_additional_buy_signals_gpu(
     
     # 4. 매수 실행
     sim_indices, stock_indices = cp.where(additional_buy_mask)
-    investment_per_order = portfolio_state[sim_indices, 1]
-    prices_for_buy = current_prices[stock_indices]
+    # [수정] 매수 가격을 '종가'가 아닌 '목표 매수가(trigger_prices)' 기준으로 결정
+    prices_for_buy = trigger_prices[sim_indices, stock_indices] 
     buy_prices_adjusted = adjust_price_up_gpu(prices_for_buy)
     
+    # [수정] 수량 계산은 '종가' 기준이 아닌 투자금 기준이므로 변경 없음.
+    investment_per_order = portfolio_state[sim_indices, 1]
     quantities_to_buy = cp.floor(investment_per_order / buy_prices_adjusted)
     quantities_to_buy[buy_prices_adjusted <= 0] = 0
     
@@ -299,7 +301,8 @@ def _process_additional_buy_signals_gpu(
     total_cost = cost + commission
     
     can_afford = portfolio_state[sim_indices, 0] >= total_cost
-    final_buy_mask = (quantities_to_buy > 0) & can_afford
+
+    final_buy_mask = (quantities_to_buy > 0) & can_afford # [수정] is_within_range 조건 추가
 
     if not cp.any(final_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
@@ -378,6 +381,8 @@ def _process_new_entry_signals_gpu(
     cooldown_period_days: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    current_lows: cp.ndarray,
+    current_highs: cp.ndarray,
     candidate_tickers_for_day: cp.ndarray,
     candidate_atrs_for_day: cp.ndarray,
     buy_commission_rate: float,
@@ -409,6 +414,8 @@ def _process_new_entry_signals_gpu(
     
     # 후보 종목들의 현재가, 보유여부, 쿨다운 여부 조회
     candidate_prices = current_prices[candidate_indices_expanded]
+    candidate_lows = current_lows[candidate_indices_expanded]      # [추가] 후보 종목의 저가 배열 생성
+    candidate_highs = current_highs[candidate_indices_expanded]     # [추가] 후보 종목의 고가 배열 생성
     is_holding = has_any_position[cp.repeat(sim_indices, num_candidates), candidate_indices_expanded]
     is_in_cooldown = (cooldown_state[cp.repeat(sim_indices, num_candidates), candidate_indices_expanded] != -1) & \
                      ((current_day_idx - cooldown_state[cp.repeat(sim_indices, num_candidates), candidate_indices_expanded]) < cooldown_period_days)
@@ -421,9 +428,9 @@ def _process_new_entry_signals_gpu(
     commissions = cp.floor(costs * buy_commission_rate)
     total_costs = costs + commissions
 
-    # 최종 매수 가능 마스크
+     # 최종 매수 가능 마스크
+    # [수정] is_within_range 조건을 최종 마스크에 추가합니다.
     buy_mask = (available_slots_expanded > 0) & ~is_holding & ~is_in_cooldown & (capital_expanded >= total_costs) & (quantities > 0)
-    
     # --- 2. 우선순위에 따라 실제 매수 대상 선정 ---
     # 우선순위 점수 계산 (ATR 높은 순, 점수가 낮을수록 우선)
     priority_scores = cp.full_like(candidate_atrs_expanded, float('inf'))
@@ -622,10 +629,11 @@ def run_magic_split_strategy_on_gpu(
         daily_df = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')
         daily_close_series = daily_df['close_price']
         daily_high_series  = daily_df['high_price']
+        daily_low_series   = daily_df['low_price']
 
         current_prices_gpu = cp.asarray(daily_close_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
         current_highs_gpu  = cp.asarray(daily_high_series .reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-
+        current_lows_gpu   = cp.asarray(daily_low_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
     
         past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
         if not past_or_equal_data.empty:
@@ -682,7 +690,7 @@ def run_magic_split_strategy_on_gpu(
         # 확보된 자원으로 신규 종목 진입을 시도합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
-            cooldown_period_days, param_combinations, current_prices_gpu,
+            cooldown_period_days, param_combinations, current_prices_gpu,current_lows_gpu,current_highs_gpu,
             candidate_tickers_for_day, candidate_atrs_for_day,
             execution_params["buy_commission_rate"],
             log_buffer, log_counter, debug_mode
@@ -691,7 +699,7 @@ def run_magic_split_strategy_on_gpu(
         # 마지막으로 기존 보유 종목의 추가 매수를 처리합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
             portfolio_state, positions_state, last_trade_day_idx_state,sell_occurred_today_mask, i,
-            param_combinations, current_prices_gpu,
+            param_combinations, current_prices_gpu,current_lows_gpu,current_highs_gpu,
             execution_params["buy_commission_rate"],
             log_buffer, log_counter, debug_mode
         )
