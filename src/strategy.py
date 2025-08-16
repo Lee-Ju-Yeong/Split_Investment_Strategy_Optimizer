@@ -87,16 +87,19 @@ class MagicSplitStrategy(Strategy):
             if stock_data is None or stock_data.empty or current_date not in stock_data.index:
                 continue
                 
-            current_price = stock_data.loc[current_date, "close_price"]
-            if current_price <= 0: continue
+            current_close = stock_data.loc[current_date, "close_price"]
+            current_low = stock_data.loc[current_date, "low_price"]
+            if current_close <= 0: continue
 
             last_pos = portfolio.positions[ticker][-1]
             buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
-            if current_price <= buy_trigger_price:
-                quantity = int(self.investment_per_order / current_price)
+            # [수정] 매수 조건 판단을 '종가'가 아닌 '저가' 기준으로 변경합니다.
+            if current_low <= buy_trigger_price:
+                # [유지] 매수 수량 계산은 보수적으로 '종가' 기준을 유지합니다.
+                quantity = int(self.investment_per_order / current_close)
                 if quantity > 0:
-                    new_pos = Position(current_price, quantity, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_price) / last_pos.buy_price)
+                    new_pos = Position(current_close, quantity, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_close) / last_pos.buy_price)
                     buy_signals.append(self._create_buy_signal(current_date, ticker, quantity, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
 
         # 2. 신규 매수 신호 생성
@@ -161,6 +164,7 @@ class MagicSplitStrategy(Strategy):
 
             row = stock_data.loc[current_date]
             current_price = row["close_price"]
+            current_high = row["high_price"]
             if current_price <= 0: continue
 
             positions = portfolio.positions[ticker]
@@ -193,7 +197,8 @@ class MagicSplitStrategy(Strategy):
             # --- 2. 수익 실현 신호 생성 ---
             for p in reversed(positions):
                 sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
-                if current_price >= sell_trigger_price:
+                # [수정] 신호 생성 기준을 종가(current_price)가 아닌 고가(current_high)로 변경합니다.
+                if current_high >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
                     self.cooldown_tracker[ticker] = current_date
         

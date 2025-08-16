@@ -168,19 +168,20 @@ def _process_sell_signals_gpu(
 
 
     # --- 시나리오 2: 부분 매도 (수익 실현) ---
-    # [변경] 목표가 계산을 CPU와 동일하게 변경 (세금/수수료 역산 제거)
+    # [유지] 목표가 계산은 이미 단순 계산 방식으로 구현되어 있습니다.
     target_sell_prices = buy_prices * (1 + sell_profit_rates)
-    # [변경] 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리
+    # [유지] 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리합니다.
     execution_sell_prices = adjust_price_up_gpu(target_sell_prices)
 
-    # [변경] 체결 조건: 당일 고가(high)가 계산된 체결가(execution_sell_prices)에 도달했는지 확인
-    close_prices_3d = cp.broadcast_to(current_close_prices.reshape(1, -1, 1), buy_prices.shape)    
+    # [수정] 체결 조건: 당일 '고가(high)'가 계산된 체결가에 도달했는지 확인하도록 변경
+    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape) # [수정] close_prices 대신 high_prices 사용
     
-    # [추가] CPU에는 없지만, 현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
+    # [유지] 현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    profit_taking_mask = (close_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
+    # [수정] 체결 마스크 생성 시 high_prices_3d를 사용합니다.
+    profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
         sim0_profit_taking_stocks = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()

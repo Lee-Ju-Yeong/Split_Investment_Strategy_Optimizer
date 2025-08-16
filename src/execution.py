@@ -58,7 +58,20 @@ class BasicExecutionHandler:
         ticker = order_event["ticker"]
         quantity = order_event["quantity"]
         
-        execution_price = self._adjust_price_up(ohlc_data['close_price'])
+        # [추가] 하이브리드 매수 가격 결정 로직
+        reason = order_event.get("reason_for_trade", "")
+        if "추가 매수" in reason:
+            # 추가 매수는 '목표 매수가(trigger_price)'를 기준으로 가격 결정
+            target_price = order_event["trigger_price"]
+        else: # 신규 진입
+            # 신규 매수는 '종가'를 기준으로 가격 결정
+            target_price = ohlc_data['close_price']
+            
+        execution_price = self._adjust_price_up(target_price)
+        # [추가] 최종 체결 조건: 계산된 매수 가격이 당일 가격 범위(low ~ high) 내에 있어야만 체결
+        if not (ohlc_data['low_price'] <= execution_price <= ohlc_data['high_price']):
+            return # 범위를 벗어나면 주문 실패로 간주하고 종료
+        
         cost = execution_price * quantity
         commission = math.floor(cost * self.buy_commission_rate)
         total_cost = cost + commission
