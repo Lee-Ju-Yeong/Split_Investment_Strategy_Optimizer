@@ -595,7 +595,22 @@ def run_magic_split_strategy_on_gpu(
     # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
-        
+        # --- [추가] 데이터 비교를 위한 디버깅 로그 ---
+        debug_ticker = '013570'
+        if debug_ticker in ticker_to_idx:
+            debug_ticker_idx = ticker_to_idx[debug_ticker]
+            daily_df = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
+            
+            # 해당 날짜에 해당 티커 데이터가 있는지 확인
+            ticker_data = daily_df[daily_df['ticker'] == debug_ticker]
+            if not ticker_data.empty:
+                # cudf.Series에서 스칼라 값을 안전하게 추출
+                o_price = ticker_data['open_price'].iloc[0]
+                h_price = ticker_data['high_price'].iloc[0]
+                l_price = ticker_data['low_price'].iloc[0]
+                c_price = ticker_data['close_price'].iloc[0]
+                print(f"[GPU_DATA_DEBUG] {current_date.strftime('%Y-%m-%d')} | {debug_ticker} | "
+                      f"Open={o_price}, High={h_price}, Low={l_price}, Close={c_price}")
         if debug_mode and (i % 20 == 0 or i == num_trading_days - 1):
             print(f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---")
 

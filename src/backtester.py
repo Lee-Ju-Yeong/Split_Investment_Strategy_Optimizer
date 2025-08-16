@@ -22,15 +22,36 @@ class BacktestEngine:
         
         # tqdm의 mininterval을 늘려 로그 출력이 밀리지 않게 함
         for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress", mininterval=1.0)):
+            debug_ticker = '013570'
+            try:
+                stock_data = self.data_handler.load_stock_data(debug_ticker, self.start_date, self.end_date)
+                # 데이터프레임이 유효하고, 현재 날짜의 데이터가 존재하는지 확인
+                if stock_data is not None and not stock_data.empty and current_date in stock_data.index:
+                    ohlc = stock_data.loc[current_date]
+                    # tqdm 진행률 바와 출력이 겹치지 않도록 tqdm.write() 사용
+                    tqdm.write(
+                        f"[CPU_DATA_DEBUG] {current_date.strftime('%Y-%m-%d')} | {debug_ticker} | "
+                        f"Open={ohlc['open_price']}, High={ohlc['high_price']}, "
+                        f"Low={ohlc['low_price']}, Close={ohlc['close_price']}"
+                    )
+            except Exception:
+                # 디버깅 중 에러가 발생해도 백테스트가 멈추지 않도록 pass 처리
+                pass
+            # --- 1. [변경] 신호 생성 및 실행 로직 분리 ---
             
-            # --- 1. 신호 생성 및 주문 실행 ---
-            signal_events = self.strategy.generate_signals(current_date, self.portfolio, self.data_handler)
-            
-            # 오늘 거래가 기록되기 전의 거래 내역 개수를 저장
+            # [추가] 오늘 거래가 실행되기 전의 거래 내역 개수를 기록
             num_trades_before = len(self.portfolio.trade_history)
 
-            if signal_events:
-                for signal in signal_events:
+            # 단계 1-1: 매도 신호 생성 및 즉시 실행
+            sell_signals = self.strategy.generate_sell_signals(current_date, self.portfolio, self.data_handler)
+            if sell_signals:
+                for signal in sell_signals:
+                    self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)
+
+            # 단계 1-2: 매수 신호 생성 및 즉시 실행 (매도가 반영된 최신 포트폴리오 기준)
+            buy_signals = self.strategy.generate_buy_signals(current_date, self.portfolio, self.data_handler)
+            if buy_signals:
+                for signal in buy_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)
 
             # --- 2. 일별 포트폴리오 가치 및 상태 기록 ---
