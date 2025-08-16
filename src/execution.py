@@ -109,50 +109,45 @@ class BasicExecutionHandler:
         ticker = order_event["ticker"]
         position_to_sell = order_event["position"]
 
-        # [수정] trigger_price 기본값 None (없으면 우리가 역산해서 만듦)
-        trigger_price = order_event.get("trigger_price", None)
+        # [수정] GPU와 로직 동기화: 세금/수수료 역산 로직을 제거하고, 순수 목표가로 체결가를 계산합니다.
+        buy_price = position_to_sell.buy_price
+        sell_profit_rate = position_to_sell.sell_profit_rate
+        
+        # [수정] trigger_price는 손절, 기간만료 등 외부에서 명시적으로 지정될 때만 사용합니다.
+        # 수익 실현의 경우, 항상 buy_price를 기준으로 계산합니다.
+        is_profit_taking = "수익 실현" in order_event.get("reason_for_trade", "")
+        
+        if is_profit_taking:
+            # [수정] GPU와 동일하게 순수 목표가 계산
+            target_price = buy_price * (1 + sell_profit_rate)
+        else: # 손절 또는 기간만료 청산
+            # 신호 생성 시점의 종가를 trigger_price로 사용
+            target_price = order_event.get("trigger_price")
+        
+        execution_price = self._adjust_price_up(target_price)
 
-        # === 세후 목표가 역산 & 호가보정 (CPU 표준) ===
-        buy = position_to_sell.buy_price
-        pr  = position_to_sell.sell_profit_rate
-        cost_factor = (1 - self.sell_commission_rate - self.sell_tax_rate)  # e.g. 1 - 0.00015 - 0.0018
-        target_raw = buy * (1 + pr)
-        target_after_cost = target_raw / cost_factor
-
-        # [추가] 외부에서 trigger가 안 오면 우리가 계산한 값을 사용
-        if trigger_price is None:
-            effective_trigger = target_after_cost
-        else:
-            # 보수적으로 더 높은 쪽을 쓰고 싶으면 아래 주석 해제
-            # effective_trigger = max(trigger_price, target_after_cost)
-            effective_trigger = trigger_price
-
-        execution_price = self._adjust_price_up(effective_trigger)
-
-        # [수정] 체결 가능: 당일 high가 execution_price 이상
+        # [유지] 체결 조건: 당일 high가 execution_price 이상
         if ohlc_data["high_price"] < execution_price:
             return
 
-        # [수정] 먼저 계산 → 그 다음 로그 (선언 전 참조 방지)
+        # [수정] 계산 로직은 변경 없음
         quantity = position_to_sell.quantity
         revenue = execution_price * quantity
         commission = math.floor(revenue * self.sell_commission_rate)
         tax = math.floor(revenue * self.sell_tax_rate)
         net_revenue = revenue - commission - tax
-
-        # [추가] 디버그 로그 (GPU와 라인 매칭용)
+        
+        # [삭제] 불필요해진 복잡한 디버그 로그를 제거합니다.
+        # [수정] 디버그 로그를 새로운 변수 기준으로 단순화합니다.
         print(
-            f"[CPU_SELL_DEBUG] {order_event['date']} {ticker} "
-            f"buy={buy} raw_target={target_raw:.4f} cost_factor={cost_factor:.6f} "
-            f"target_after_cost={target_after_cost:.4f} current_close={ohlc_data['close_price']}"
-        )
-        print(
-            f"[CPU_SELL_PRICE] {order_event['date']} {ticker} "
-            f"sell_price(adjusted_tick)={execution_price} "
-            f"qty={quantity} revenue_gross={revenue} revenue_net={net_revenue} "
-            f"open={ohlc_data['open_price']} high={ohlc_data['high_price']}"
+            f"[CPU_SELL_PRICE] {order_event['date'].strftime('%Y-%m-%d')} {ticker} "
+            f"Reason: {order_event.get('reason_for_trade', 'N/A')} | "
+            f"Target: {target_price:.2f} -> Exec: {execution_price} | "
+            f"High: {ohlc_data['high_price']}"
         )
 
+        
+        
         # 정산
         portfolio.update_cash(net_revenue)
         portfolio.remove_position(ticker, position_to_sell, order_event["date"])
@@ -166,7 +161,7 @@ class BasicExecutionHandler:
             total_invested_cost_after = sum(p.quantity * p.buy_price for p in positions_after)
             avg_buy_price_after = total_invested_cost_after / quantity_after
 
-        buy_cost = buy * quantity
+        buy_cost = buy_price * quantity
         realized_pnl = net_revenue - buy_cost
 
         trade = Trade(
@@ -176,13 +171,13 @@ class BasicExecutionHandler:
             trade_type="SELL",
             order=position_to_sell.order,
             reason_for_trade=order_event.get("reason_for_trade", "N/A"),
-            trigger_price=effective_trigger,  # [수정] 실제 사용값 기록
+            trigger_price=target_price,  # [수정] 실제 사용값 기록
             open_price=ohlc_data["open_price"],
             high_price=ohlc_data["high_price"],
             low_price=ohlc_data["low_price"],
             close_price=ohlc_data["close_price"],
             quantity=quantity,
-            buy_price=buy,
+            buy_price=buy_price,
             sell_price=execution_price,
             commission=commission,
             tax=tax,
