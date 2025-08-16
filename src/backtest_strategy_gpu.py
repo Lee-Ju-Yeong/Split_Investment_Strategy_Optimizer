@@ -287,8 +287,16 @@ def _process_additional_buy_signals_gpu(
     
     # 4. 매수 실행
     sim_indices, stock_indices = cp.where(additional_buy_mask)
-    # [수정] 매수 가격을 '종가'가 아닌 '목표 매수가(trigger_prices)' 기준으로 결정
-    prices_for_buy = trigger_prices[sim_indices, stock_indices] 
+    
+    # [수정] 더욱 정교해진 하이브리드 매수 가격 결정 로직 (벡터화)
+    targets_for_buy = trigger_prices[sim_indices, stock_indices]
+    highs_for_buy = current_highs[stock_indices]
+    closes_for_buy = current_prices[stock_indices] # '종가'는 current_prices_gpu 입니다.
+    
+    # [추가] 조건부 가격 선택: 당일 고가가 목표 매수가보다 낮으면(True) 종가를, 아니면(False) 목표 매수가를 사용
+    use_close_price_mask = highs_for_buy < targets_for_buy
+    prices_for_buy = cp.where(use_close_price_mask, closes_for_buy, targets_for_buy)
+    
     buy_prices_adjusted = adjust_price_up_gpu(prices_for_buy)
     
     # [수정] 수량 계산은 '종가' 기준이 아닌 투자금 기준이므로 변경 없음.
@@ -318,7 +326,34 @@ def _process_additional_buy_signals_gpu(
     capital_before_buy = portfolio_state[buy_sim_indices, 0].copy()
     # [수정] if/else 구조로 변경하여 debug_mode에 따른 로깅을 명확히 함
     if debug_mode:
-        # debug_gpu_single_run에서는 sim_idx가 항상 0이므로, 0번 시뮬레이션만 출력
+        # [추가] 상세 디버깅 로그를 위한 데이터 추출
+        # prices_for_buy는 GPU 메모리에만 존재하므로, final_buy_mask를 이용해 다시 계산
+        sim0_buy_mask = (sim_indices == 0) & final_buy_mask
+        if cp.any(sim0_buy_mask):
+            sim0_stock_indices = stock_indices[sim0_buy_mask]
+            
+            # 상세 로그 출력
+            print("  [GPU_ADD_BUY_DEBUG] ---------- Additional Buy Details (Sim 0) ----------")
+            # CuPy 배열을 순회하면 성능 저하가 있지만, 디버그 모드에서 소량의 데이터에만 적용되므로 허용 가능
+            for stock_idx in sim0_stock_indices:
+                idx = stock_idx.item()
+                trigger = trigger_prices[0, idx].item()
+                high = current_highs[idx].item()
+                close = current_prices[idx].item()
+                
+                # 시나리오 B (갭 하락) 조건
+                if high < trigger:
+                    price_basis = close
+                    scenario = "B (Gap Down)"
+                else: # 시나리오 A (스침)
+                    price_basis = trigger
+                    scenario = "A (Touch)"
+
+                exec_price = adjust_price_up_gpu(cp.array(price_basis)).item()
+
+                print(f"    - Stock {idx}: Trigger={trigger:,.0f}, High={high:,.0f}, Close={close:,.0f} | Scenario: {scenario} -> Basis={price_basis:,.0f} -> Exec Price={exec_price:,.0f}")
+            print("  --------------------------------------------------------------------")
+            
         sim0_mask = buy_sim_indices == 0
         if cp.any(sim0_mask):
             costs_sim0 = buy_total_cost[sim0_mask]

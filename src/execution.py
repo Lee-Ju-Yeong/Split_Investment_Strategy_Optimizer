@@ -58,13 +58,18 @@ class BasicExecutionHandler:
         ticker = order_event["ticker"]
         quantity = order_event["quantity"]
         
-        # [추가] 하이브리드 매수 가격 결정 로직
         reason = order_event.get("reason_for_trade", "")
         if "추가 매수" in reason:
-            # 추가 매수는 '목표 매수가(trigger_price)'를 기준으로 가격 결정
-            target_price = order_event["trigger_price"]
+            trigger_price = order_event["trigger_price"]
+            # [추가] 당일 고가가 목표 매수가보다도 낮은 '갭 하락' 시나리오인지 확인
+            if ohlc_data['high_price'] < trigger_price:
+                # 시나리오 B: 시장이 더 유리한 가격을 제시 -> '종가'를 체결 기준으로 사용
+                target_price = ohlc_data['close_price']
+            else:
+                # 시나리오 A: 가격이 목표가를 스쳐 지나감 -> '목표 매수가'를 체결 기준으로 사용 (지정가)
+                target_price = trigger_price
         else: # 신규 진입
-            # 신규 매수는 '종가'를 기준으로 가격 결정
+            # 신규 매수는 '종가'를 기준으로 가격 결정 (기존과 동일)
             target_price = ohlc_data['close_price']
             
         execution_price = self._adjust_price_up(target_price)
