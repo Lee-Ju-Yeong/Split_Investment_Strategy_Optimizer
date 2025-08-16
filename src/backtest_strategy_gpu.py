@@ -269,10 +269,18 @@ def _process_additional_buy_signals_gpu(
     # 2. 추가 매수 조건 확인
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
-    # [추가] CPU의 "당일 매도 종목 추가매수 금지" 룰을 적용
     can_add_buy = ~sell_occurred_today_mask
-    additional_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy
+
+    # [추가] 오늘 신규 진입한 종목은 추가 매수 대상에서 제외 (CPU 로직과 동기화)
+    # 1차 매수일이 오늘보다 이전이어야 함.
+    open_day_indices = positions_state[..., 2]
+    # 각 종목의 첫 번째 포지션(1차 매수)의 개설일 (포지션이 없으면 0)
+    # 포지션이 있는 곳은 개설일, 없는 곳은 무한대(inf)로 채워 최소값 계산 시 영향을 주지 않도록 함
+    first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
+    is_not_new_today = (first_open_day_idx < current_day_idx)
     
+    # [수정] is_not_new_today 조건을 최종 마스크에 추가합니다.
+    additional_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today
     if not cp.any(additional_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
         
