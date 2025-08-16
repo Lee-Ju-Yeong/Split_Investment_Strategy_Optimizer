@@ -56,26 +56,28 @@ class BasicExecutionHandler:
 
     def _execute_buy(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before):
         ticker = order_event["ticker"]
-        quantity = order_event["quantity"]
+        investment_amount = order_event["investment_amount"]
         
-
         reason = order_event.get("reason_for_trade", "")
         if "추가 매수" in reason:
             trigger_price = order_event["trigger_price"]
-            # [추가] 당일 고가가 목표 매수가보다도 낮은 '갭 하락' 시나리오인지 확인
+            # [추가] GPU와 동일한 가격 결정 로직 (시나리오 A/B)
             if ohlc_data['high_price'] < trigger_price:
-                # 시나리오 B: 시장이 더 유리한 가격을 제시 -> '종가'를 체결 기준으로 사용
-                target_price = ohlc_data['close_price']
+                # 시나리오 B: 갭 하락. 시장이 더 유리한 '종가'를 체결 기준으로 사용
+                price_basis = ohlc_data['close_price']
             else:
-                # 시나리오 A: 가격이 목표가를 스쳐 지나감 -> '목표 매수가'를 체결 기준으로 사용 (지정가)
-                target_price = trigger_price
+                # 시나리오 A: 스침. 지정가인 '목표 매수가'를 체결 기준으로 사용
+                price_basis = trigger_price
         else: # 신규 진입
-            # 신규 매수는 '종가'를 기준으로 가격 결정 (기존과 동일)
-            target_price = ohlc_data['close_price']
+            # 신규 진입은 '종가'를 기준으로 가격 결정 (기존과 동일)
+            price_basis = ohlc_data['close_price']
             
-        execution_price = self._adjust_price_up(target_price)
-        # [추가] 최종 체결 조건: 계산된 매수 가격이 당일 가격 범위(low ~ high) 내에 있어야만 체결
-
+        execution_price = self._adjust_price_up(price_basis)
+        # [추가] 최종 체결가를 기준으로 수량 계산 (핵심 변경)
+        if execution_price <= 0: return
+        quantity = math.floor(investment_amount / execution_price)
+        if quantity <= 0: return
+        
         cost = execution_price * quantity
         commission = math.floor(cost * self.buy_commission_rate)
         total_cost = cost + commission
@@ -86,7 +88,8 @@ class BasicExecutionHandler:
         portfolio.update_cash(-total_cost)
         position_to_add = order_event["position"]
         position_to_add.buy_price = execution_price 
-        position_to_add.open_date = order_event["date"] # [추가]
+        position_to_add.open_date = order_event["date"]
+        position_to_add.quantity = quantity
         portfolio.add_position(ticker, position_to_add, order_event["date"])
 
         cash_after = portfolio.cash

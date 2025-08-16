@@ -97,14 +97,11 @@ class MagicSplitStrategy(Strategy):
 
             last_pos = portfolio.positions[ticker][-1]
             buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
-            # [수정] 매수 조건 판단을 '종가'가 아닌 '저가' 기준으로 변경합니다.
             if current_low <= buy_trigger_price:
-                # [유지] 매수 수량 계산은 보수적으로 '종가' 기준을 유지합니다.
-                quantity = int(self.investment_per_order / current_close)
-                if quantity > 0:
-                    new_pos = Position(current_close, quantity, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                if self.investment_per_order > 0:
+                    new_pos = Position(current_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
                     sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_close) / last_pos.buy_price)
-                    buy_signals.append(self._create_buy_signal(current_date, ticker, quantity, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
+                    buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
 
         # 2. 신규 매수 신호 생성
         available_slots = self.max_stocks - len(portfolio.positions)
@@ -131,15 +128,16 @@ class MagicSplitStrategy(Strategy):
             num_new_entries = 0
             for candidate in sorted_candidates:
                 if num_new_entries >= available_slots: break
-                # ... (신호 생성 로직은 기존과 동일) ...
                 ticker = candidate["ticker"]
                 stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
                 current_price = stock_data.loc[current_date, "close_price"]
                 if current_price > 0:
-                    quantity = int(self.investment_per_order / current_price)
-                    if quantity > 0:
-                        new_pos = Position(current_price, quantity, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                        buy_signals.append(self._create_buy_signal(current_date, ticker, quantity, new_pos, 1, -candidate["atr_14_ratio"], "신규 진입", current_price))
+                    # [수정] 수량을 미리 계산하지 않고, 투자금을 직접 전달
+                    if self.investment_per_order > 0:
+                        # [수정] Position 객체 생성 시 quantity를 0으로 초기화
+                        new_pos = Position(current_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                        # [수정] quantity 대신 investment_per_order를 전달
+                        buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 1, -candidate["atr_14_ratio"], "신규 진입", current_price))
                         num_new_entries += 1
 
         # 모든 매수 신호를 우선순위에 따라 정렬
@@ -155,8 +153,8 @@ class MagicSplitStrategy(Strategy):
     def _create_sell_signal(self, date, ticker, position, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "SELL", "quantity": position.quantity, "position": position, "reason_for_trade": reason, "trigger_price": trigger_price}
 
-    def _create_buy_signal(self, date, ticker, quantity, position, priority, sort_metric, reason, trigger_price):
-        return {"date": date, "ticker": ticker, "type": "BUY", "quantity": quantity, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
+    def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
+        return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
     def generate_sell_signals(self, current_date, portfolio, data_handler):
         self._calculate_monthly_investment(current_date, portfolio, data_handler)
         signals = []
