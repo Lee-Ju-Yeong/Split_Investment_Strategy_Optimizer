@@ -200,6 +200,18 @@ if __name__ == "__main__":
     all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
     
     # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
+    print("\n--- [와일드카드 선수 식별] ---")
+    try:
+        wildcard_indices = [234, 267] # GPU가 2020-03-17에 매수한 종목 인덱스
+        print("GPU가 매수한 '유형 B' 와일드카드 종목의 실제 코드는 다음과 같습니다:")
+        for idx in wildcard_indices:
+            ticker_code = all_tickers[idx]
+            print(f"  - Index {idx} -> Ticker: {ticker_code}")
+    except IndexError:
+        print("오류: 인덱스가 all_tickers 리스트의 범위를 벗어났습니다.")
+    print("--------------------------------\n")
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
     print("\n--- [검증] GPU 매수 종목 vs CPU 매수 종목 직접 비교 ---")
     try:
         gpu_bought_indices = [85, 134, 167]

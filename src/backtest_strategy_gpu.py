@@ -84,7 +84,8 @@ def _process_sell_signals_gpu(
     current_high_prices: cp.ndarray,    # intraday high (익절 비교용)
     sell_commission_rate: float,
     sell_tax_rate: float,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    all_tickers: list = None
 ):
     """
     [수정된 로직 v2]
@@ -131,14 +132,15 @@ def _process_sell_signals_gpu(
     stock_liquidation_mask = stock_stop_loss_mask | stock_inactivity_mask
     
     if debug_mode and cp.any(stock_liquidation_mask):
-        sim0_stop_loss = cp.where(stock_stop_loss_mask[0])[0].get()
-        sim0_inactivity = cp.where(stock_inactivity_mask[0])[0].get()
-        if sim0_stop_loss.size > 0:
-            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Stop-Loss triggered for Stocks {sim0_stop_loss.tolist()}")
-        if sim0_inactivity.size > 0:
-            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Inactivity triggered for Stocks {sim0_inactivity.tolist()}")
-            
-    
+        sim0_stop_loss_indices = cp.where(stock_stop_loss_mask[0])[0].get()
+        sim0_inactivity_indices = cp.where(stock_inactivity_mask[0])[0].get()
+        # [수정] 인덱스를 티커로 변환하여 로그 출력
+        if sim0_stop_loss_indices.size > 0:
+            tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_stop_loss_indices])
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Stop-Loss triggered for Stocks [{tickers_str}]")
+        if sim0_inactivity_indices.size > 0:
+            tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_inactivity_indices])
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Inactivity triggered for Stocks [{tickers_str}]")
     if cp.any(stock_liquidation_mask):
         broadcasted_close_prices = cp.broadcast_to(current_close_prices.reshape(1, -1, 1), buy_prices.shape)
         adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_close_prices)
@@ -184,11 +186,11 @@ def _process_sell_signals_gpu(
     profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
-        sim0_profit_taking_stocks = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
-        if sim0_profit_taking_stocks.size > 0:
-            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Profit-Taking triggered for Stocks {sim0_profit_taking_stocks.tolist()}")
-
-
+        sim0_profit_taking_indices = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
+        # [수정] 인덱스를 티커로 변환하여 로그 출력
+        if sim0_profit_taking_indices.size > 0:
+            tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_profit_taking_indices])
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Profit-Taking triggered for Stocks [{tickers_str}]")
     if cp.any(profit_taking_mask):
         # 수익 실현 금액은 'exec_prices'로 계산
         revenue_matrix = quantities * execution_sell_prices
@@ -233,7 +235,8 @@ def _process_additional_buy_signals_gpu(
     buy_commission_rate: float,
     log_buffer: cp.ndarray,
     log_counter: cp.ndarray,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    all_tickers: list = None
 ):
     """ [완전 벡터화된 최종 로직] 루프를 제거하고 순수 CuPy 연산으로 추가 매수를 처리합니다. """
     add_buy_drop_rates = param_combinations[:, 2:3]
@@ -337,6 +340,7 @@ def _process_additional_buy_signals_gpu(
             # CuPy 배열을 순회하면 성능 저하가 있지만, 디버그 모드에서 소량의 데이터에만 적용되므로 허용 가능
             for stock_idx in sim0_stock_indices:
                 idx = stock_idx.item()
+                ticker_code = all_tickers[idx] # [추가] 티커 코드 조회
                 trigger = trigger_prices[0, idx].item()
                 high = current_highs[idx].item()
                 close = current_prices[idx].item()
@@ -350,10 +354,11 @@ def _process_additional_buy_signals_gpu(
                     scenario = "A (Touch)"
 
                 exec_price = adjust_price_up_gpu(cp.array(price_basis)).item()
-
-                print(f"    - Stock {idx}: Trigger={trigger:,.0f}, High={high:,.0f}, Close={close:,.0f} | Scenario: {scenario} -> Basis={price_basis:,.0f} -> Exec Price={exec_price:,.0f}")
+                
+                
+                print(f"    - Stock {idx}({ticker_code}): Trigger={trigger:,.0f}, High={high:,.0f}, Close={close:,.0f} | Scenario: {scenario} -> Basis={price_basis:,.0f} -> Exec Price={exec_price:,.0f}")
             print("  --------------------------------------------------------------------")
-            
+
         sim0_mask = buy_sim_indices == 0
         if cp.any(sim0_mask):
             costs_sim0 = buy_total_cost[sim0_mask]
@@ -364,9 +369,11 @@ def _process_additional_buy_signals_gpu(
             temp_cap = portfolio_state[0, 0].item()
             for i in range(costs_sim0.size):
                 cost_item = costs_sim0[i].item()
+                idx = stock_indices_sim0[i].item()
+                ticker_code = all_tickers[idx]   
                 # 로그 출력 시점에서만 임시로 자본 계산
                 temp_cap_after = temp_cap - cost_item
-                print(f"[GPU_ADD_BUY] Day {current_day_idx}, Sim 0, Stock {stock_indices_sim0[i].item()} | "
+                print(f"[GPU_ADD_BUY] Day {current_day_idx}, Sim 0, Stock {idx}({ticker_code}) | "
                       f"Cost: {cost_item:,.0f} | "
                       f"Cap Before: {temp_cap:,.0f} -> Cap After: {temp_cap_after:,.0f}")
                 # 다음 로그를 위해 임시 자본 업데이트
@@ -423,7 +430,8 @@ def _process_new_entry_signals_gpu(
     buy_commission_rate: float,
     log_buffer: cp.ndarray,
     log_counter: cp.ndarray,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    all_tickers: list = None
 ):
     has_any_position = cp.any(positions_state[..., 0] > 0, axis=2)
     current_num_stocks = cp.sum(has_any_position, axis=1)
@@ -534,7 +542,9 @@ def _process_new_entry_signals_gpu(
                 
                 # 하루에 여러 종목 매수가 가능하므로 루프를 사용해 출력
                 for i in range(costs_sim0.size):
-                    print(f"[GPU_NEW_BUY] Day {current_day_idx}, Sim 0, Stock {stock_indices_sim0[i].item()} | "
+                    idx = stock_indices_sim0[i].item() # [추가]
+                    ticker_code = all_tickers[idx]    # [추가]
+                    print(f"[GPU_NEW_BUY] Day {current_day_idx}, Sim 0, Stock {idx}({ticker_code}) | "
                           f"Cost: {costs_sim0[i].item():,.0f} | "
                           f"Cap Before: {cap_before_sim0[i].item():,.0f} -> Cap After: {cap_after_sim0[i].item():,.0f}")
         else: # 에러 버퍼링 모드
@@ -752,6 +762,7 @@ def run_magic_split_strategy_on_gpu(
             execution_params["sell_commission_rate"], 
             execution_params["sell_tax_rate"],
             debug_mode=debug_mode,
+            all_tickers=all_tickers
         )
         
         # 확보된 자원으로 신규 종목 진입을 시도합니다.
@@ -760,7 +771,7 @@ def run_magic_split_strategy_on_gpu(
             cooldown_period_days, param_combinations, current_prices_gpu,current_lows_gpu,current_highs_gpu,
             candidate_tickers_for_day, candidate_atrs_for_day,
             execution_params["buy_commission_rate"],
-            log_buffer, log_counter, debug_mode
+            log_buffer, log_counter, debug_mode, all_tickers=all_tickers
         )
         
         # 마지막으로 기존 보유 종목의 추가 매수를 처리합니다.
@@ -768,7 +779,7 @@ def run_magic_split_strategy_on_gpu(
             portfolio_state, positions_state, last_trade_day_idx_state,sell_occurred_today_mask, i,
             param_combinations, current_prices_gpu,current_lows_gpu,current_highs_gpu,
             execution_params["buy_commission_rate"],
-            log_buffer, log_counter, debug_mode
+            log_buffer, log_counter, debug_mode, all_tickers=all_tickers
         )
         
         # 2-4. 일일 포트폴리오 가치 업데이트
@@ -779,12 +790,16 @@ def run_magic_split_strategy_on_gpu(
         daily_portfolio_values[:, i] = portfolio_state[:, 0] + total_stock_value
 
         if debug_mode and (i % 20 == 0 or i == num_trading_days - 1):
+            
             capital_snapshot = portfolio_state[0, 0].get()
             stock_val_snapshot = total_stock_value[0].get()
             total_val_snapshot = daily_portfolio_values[0, i].get()
             num_pos_snapshot = cp.sum(cp.any(positions_state[0, :, :, 0] > 0, axis=1)).get()
-            print(f" [GPU_HOLDINGS] {cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get().tolist()}")
+            holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
+            holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
+            print(f" [GPU_HOLDINGS] [{holdings_str}]")
             print(f"[END]   Capital: {capital_snapshot:,.0f} | Stock Val: {stock_val_snapshot:,.0f} | Total Val: {total_val_snapshot:,.0f} | Stocks Held: {num_pos_snapshot}")
+            
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
     if not debug_mode and log_counter[0] > 0:
         print("\n" + "="*60)
