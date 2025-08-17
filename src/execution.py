@@ -61,16 +61,18 @@ class BasicExecutionHandler:
         
         reason = order_event.get("reason_for_trade", "")
         if "추가 매수" in reason:
+            # [수정] GPU와 로직 동기화: epsilon을 이용한 절충안 적용
             trigger_price = np.float32(order_event["trigger_price"])
-            # [추가] GPU와 동일한 가격 결정 로직 (시나리오 A/B)
-            if ohlc_data['high_price'] < trigger_price:
-                # 시나리오 B: 갭 하락. 시장이 더 유리한 '종가'를 체결 기준으로 사용
-                price_basis = np.float32(ohlc_data['close_price'])
+            high_price = np.float32(ohlc_data['high_price'])
+            epsilon = np.float32(1.0) # 최소 가격 단위(1원)를 안전 마진으로 사용
+            
+            # 조건: 고가가 (목표가 - 1원)보다 작거나 같으면 (확실한 갭하락), 기준가는 고가.
+            # 그렇지 않으면 (장중 터치 또는 근접), 기준가는 목표가.
+            if high_price <= trigger_price - epsilon:
+                price_basis = high_price
             else:
-                # 시나리오 A: 스침. 지정가인 '목표 매수가'를 체결 기준으로 사용
                 price_basis = trigger_price
         else: # 신규 진입
-            # 신규 진입은 '종가'를 기준으로 가격 결정 (기존과 동일)
             price_basis = np.float32(ohlc_data['close_price'])
             
         execution_price = self._adjust_price_up(price_basis)

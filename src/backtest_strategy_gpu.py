@@ -378,22 +378,18 @@ def _process_additional_buy_signals_gpu(
         # 매수가 결정 (기존 로직과 동일)
         target_price = trigger_prices[sim_idx, stock_idx]
         high_price = current_highs[stock_idx]
-        close_price = current_prices[stock_idx]
-        price_basis = cp.where(high_price < target_price, close_price, target_price)
+        epsilon = cp.float32(1.0) # 최소 가격 단위(1원)를 안전 마진으로 사용
+        price_basis = cp.where(high_price <= target_price - epsilon, high_price, target_price)
         
         # [추가] price_basis 검증을 위한 상세 로그
         if debug_mode and sim_idx == 0:
-            # .item()으로 값을 가져와야 정확한 소수점 확인 가능
-            target_price_val = target_price.item()
-            high_price_val = high_price.item()
-            price_basis_val = price_basis.item()
+            ticker = all_tickers[stock_idx.item()]
+            scenario = "B (Clear Gap Down)" if high_price.item() <= target_price.item() - epsilon.item() else "A (Touch or Close)"
+            print(f"  └─ [ADD_BUY_DEBUG] Stock {stock_idx.item()}({ticker}) | Scenario: {scenario} | "
+                  f"High: {high_price.item():.2f} vs Target: {target_price.item():.2f} "
+                  f"-> Basis: {price_basis.item():.2f}")
             
-            # Scenario A (스침) / B (갭하락) 판별
-            scenario = "A (Touch)" if high_price_val >= target_price_val else "B (Gap Down)"
-
-            print(f"  └─ [ADD_BUY_DEBUG] Stock {stock_idx.item()}({all_tickers[stock_idx.item()]}) | "
-                  f"Scenario: {scenario} | High: {high_price_val:.4f} vs Target: {target_price_val:.4f} "
-                  f"-> Basis: {price_basis_val:.4f}")
+            
         exec_price = adjust_price_up_gpu(price_basis)
         
         if exec_price <= 0: continue
