@@ -774,17 +774,38 @@ def run_magic_split_strategy_on_gpu(
         
         daily_portfolio_values[:, i] = portfolio_state[:, 0] + total_stock_value
 
-        if debug_mode and (i % 20 == 0 or i == num_trading_days - 1):
-            
+        if debug_mode:
             capital_snapshot = portfolio_state[0, 0].get()
             stock_val_snapshot = total_stock_value[0].get()
             total_val_snapshot = daily_portfolio_values[0, i].get()
             num_pos_snapshot = cp.sum(cp.any(positions_state[0, :, :, 0] > 0, axis=1)).get()
-            holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
-            holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
-            print(f" [GPU_HOLDINGS] [{holdings_str}]")
-            print(f"[END]   Capital: {capital_snapshot:,.0f} | Stock Val: {stock_val_snapshot:,.0f} | Total Val: {total_val_snapshot:,.0f} | Stocks Held: {num_pos_snapshot}")
             
+            # [추가] CPU 로그와 유사한 포맷으로 출력하여 비교 용이성 증대
+            header = f"\n{'='*120}\n"
+            footer = f"\n{'='*120}"
+            date_str = current_date.strftime('%Y-%m-%d')
+            
+            cash_ratio = (capital_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
+            stock_ratio = (stock_val_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
+
+            summary_str = (
+                f"GPU STATE | Date: {date_str} | Day {i+1}/{num_trading_days}\n"
+                f"{'-'*120}\n"
+                f"Total Value: {total_val_snapshot:,.0f} | "
+                f"Cash: {capital_snapshot:,.0f} ({cash_ratio:.1f}%) | "
+                f"Stocks: {stock_val_snapshot:,.0f} ({stock_ratio:.1f}%)\n"
+                f"Holdings Count: {num_pos_snapshot} Stocks"
+            )
+            
+            log_message = header + summary_str
+            
+            holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
+            if holding_indices.size > 0:
+                holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
+                log_message += f"\n[Current Holdings]\n{holdings_str}"
+
+            log_message += footer
+            print(log_message)
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
     if not debug_mode and log_counter[0] > 0:
         print("\n" + "="*60)
