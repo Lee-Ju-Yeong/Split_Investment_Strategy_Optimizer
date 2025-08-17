@@ -82,7 +82,10 @@ class BasicExecutionHandler:
         cost = np.float32(execution_price) * np.float32(quantity)
         commission = np.floor(cost * np.float32(self.buy_commission_rate))
         total_cost = cost + commission
-
+        print(
+        f"[CPU_BUY_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
+        f"Invest: {investment_amount:,.0f} / ExecPrice: {execution_price:,.0f} = Qty: {quantity}"
+        )
         if portfolio.cash < total_cost:
             return
 
@@ -157,17 +160,16 @@ class BasicExecutionHandler:
         commission = np.floor(revenue * np.float32(self.sell_commission_rate))
         tax = np.floor(revenue * np.float32(self.sell_tax_rate))
         net_revenue = revenue - commission - tax
-        
-        # [삭제] 불필요해진 복잡한 디버그 로그를 제거합니다.
-        # [수정] 디버그 로그를 새로운 변수 기준으로 단순화합니다.
+        print(
+        f"[CPU_SELL_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
+        f"Qty: {quantity} * ExecPrice: {execution_price:,.0f} = Revenue: {revenue:,.0f}"
+    )
         print(
             f"[CPU_SELL_PRICE] {order_event['date'].strftime('%Y-%m-%d')} {ticker} "
             f"Reason: {order_event.get('reason_for_trade', 'N/A')} | "
             f"Target: {target_price:.2f} -> Exec: {execution_price} | "
             f"High: {ohlc_data['high_price']}"
         )
-
-        
         
         # 정산
         portfolio.update_cash(net_revenue)

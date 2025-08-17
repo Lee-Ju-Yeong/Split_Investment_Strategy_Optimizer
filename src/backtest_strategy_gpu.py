@@ -30,7 +30,12 @@ def get_tick_size_gpu(price_array):
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
     tick_size = get_tick_size_gpu(price_array)
-    return cp.ceil(price_array / tick_size) * tick_size
+    # [수정] float32 나눗셈에서 발생할 수 있는 미세한 오차를 보정하기 위해
+    # 소수점 5자리에서 반올림(round)한 후 올림(ceil)을 적용합니다.
+    # 예: 18430 / 10 = 1843.0000001 -> round -> 1843.0 -> ceil -> 1843.0
+    divided = price_array / tick_size
+    rounded = cp.round(divided, 5) 
+    return cp.ceil(rounded) * tick_size
 
 def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, current_prices,current_date,debug_mode):
     """ Vectorized calculation of monthly investment amounts based on current market value. """
@@ -155,6 +160,11 @@ def _process_sell_signals_gpu(
                     exec_price = adjust_price_up_gpu(current_close_prices[idx]).item()
                     high_price = current_high_prices[idx].item()
                     reason = "Stop-Loss" if stock_stop_loss_mask[0, idx] else "Inactivity"
+                    net_proceeds_sim0 = (quantities[0, idx, 0] * exec_price).get() # 간단한 계산
+                    print(
+                        f"[GPU_SELL_CALC] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} | "
+                        f"Qty: {quantities[0, idx, 0].item():,.0f} * ExecPrice: {exec_price:,.0f} = Revenue: {net_proceeds_sim0:,.0f}"
+                    )
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
                         f"Reason: {reason} | "
@@ -342,6 +352,20 @@ def _process_additional_buy_signals_gpu(
         high_price = current_highs[stock_idx]
         close_price = current_prices[stock_idx]
         price_basis = cp.where(high_price < target_price, close_price, target_price)
+        
+        # [추가] price_basis 검증을 위한 상세 로그
+        if debug_mode and sim_idx == 0:
+            # .item()으로 값을 가져와야 정확한 소수점 확인 가능
+            target_price_val = target_price.item()
+            high_price_val = high_price.item()
+            price_basis_val = price_basis.item()
+            
+            # Scenario A (스침) / B (갭하락) 판별
+            scenario = "A (Touch)" if high_price_val >= target_price_val else "B (Gap Down)"
+
+            print(f"  └─ [ADD_BUY_DEBUG] Stock {stock_idx.item()}({all_tickers[stock_idx.item()]}) | "
+                  f"Scenario: {scenario} | High: {high_price_val:.4f} vs Target: {target_price_val:.4f} "
+                  f"-> Basis: {price_basis_val:.4f}")
         exec_price = adjust_price_up_gpu(price_basis)
         
         if exec_price <= 0: continue
@@ -373,10 +397,11 @@ def _process_additional_buy_signals_gpu(
             # 디버깅 로그
             if debug_mode and sim_idx == 0:
                 ticker_code = all_tickers[stock_idx.item()]
-                print(f"[GPU_ADD_BUY] Day {current_day_idx}, Sim 0, Stock {stock_idx.item()}({ticker_code}) | "
-                      f"Cost: {total_cost.item():,.0f} | "
-                      f"Cap Before: {capital_before_buy.item():,.0f} -> Cap After: {temp_capital[sim_idx].item():,.0f}")
-                print(f"  └─ Executed Buy Price Saved to State: {exec_price.item():,.0f}")
+                print(f"[GPU_ADD_BUY_CALC] {current_day_idx}, Sim 0, Stock {stock_idx.item()}({ticker_code}) | "
+              f"Invest: {investment.item():,.0f} / ExecPrice: {exec_price.item():,.0f} = Qty: {quantity.item():,.0f}")
+                # print(f"[GPU_ADD_BUY] Day {current_day_idx}, Sim 0, Stock {stock_idx.item()}({ticker_code}) | "
+                #       f"Cost: {total_cost.item():,.0f} | "
+                #       f"Cap Before: {capital_before_buy.item():,.0f} -> Cap After: {temp_capital[sim_idx].item():,.0f}")
 
     # --- 5. [유지] 최종 자본 상태 반영 ---
     portfolio_state[:, 0] = temp_capital
@@ -520,15 +545,17 @@ def _process_new_entry_signals_gpu(
                     
                     cap_before_log = temp_cap_log
                     cap_after_log = temp_cap_log - cost_item
-
-                    print(f"[GPU_NEW_BUY] Day {current_day_idx}, Sim 0, Stock {idx}({ticker_code}) | "
-                          f"Cost: {cost_item:,.0f} | "
-                          f"Cap Before: {cap_before_log:,.0f} -> Cap After: {cap_after_log:,.0f}")
-                    print(f"  └─ Executed Buy Price Saved to State: {buy_price_val:,.0f}")
+                    
                     
                     expected_quantity = quantities_sim0[i].item()
                     actual_quantity = recorded_quantities[i]
                     
+                    print(f"[GPU_NEW_BUY_CALC] {current_day_idx}, Sim 0, Stock {idx}({ticker_code}) | "
+          f"Invest: {investment_per_order[active_flat_indices[sim0_mask]][i].item():,.0f} / ExecPrice: {buy_price_val:,.0f} = Qty: {expected_quantity:,.0f}")
+                    # print(f"[GPU_NEW_BUY] Day {current_day_idx}, Sim 0, Stock {idx}({ticker_code}) | "
+                    #       f"Cost: {cost_item:,.0f} | "
+                    #       f"Cap Before: {cap_before_log:,.0f} -> Cap After: {cap_after_log:,.0f}")
+                    print(f"  └─ Executed Buy Price Saved to State: {buy_price_val:,.0f}")
                     if abs(expected_quantity - actual_quantity) > 1e-5:
                         print(f"  └─ 🚨 [VERIFICATION FAILED] Expected Quantity: {expected_quantity:,.0f}, "
                               f"Actual Quantity in State: {actual_quantity:,.0f}")
