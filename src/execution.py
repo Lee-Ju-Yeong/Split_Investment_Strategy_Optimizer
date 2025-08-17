@@ -76,11 +76,11 @@ class BasicExecutionHandler:
         execution_price = self._adjust_price_up(price_basis)
         # [추가] 최종 체결가를 기준으로 수량 계산 (핵심 변경)
         if execution_price <= 0: return
-        quantity = np.int32(math.floor(investment_amount / execution_price))
+        quantity = np.int32(math.floor(round(investment_amount / execution_price, 5)))
         if quantity <= 0: return
         
         cost = np.float32(execution_price) * np.float32(quantity)
-        commission = np.floor(cost * np.float32(self.buy_commission_rate))
+        commission = np.floor(round(cost * np.float32(self.buy_commission_rate), 5))
         total_cost = cost + commission
         print(
         f"[CPU_BUY_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
@@ -157,8 +157,8 @@ class BasicExecutionHandler:
         # [수정] 계산 로직은 변경 없음
         quantity = position_to_sell.quantity
         revenue = np.float32(execution_price) * np.float32(quantity)
-        commission = np.floor(revenue * np.float32(self.sell_commission_rate))
-        tax = np.floor(revenue * np.float32(self.sell_tax_rate))
+        commission = np.floor(round(revenue * np.float32(self.sell_commission_rate), 5))
+        tax = np.floor(round(revenue * np.float32(self.sell_tax_rate), 5))
         net_revenue = revenue - commission - tax
         print(
         f"[CPU_SELL_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
