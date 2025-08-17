@@ -5,6 +5,7 @@ This module contains the functions for executing the orders for the Magic Split 
 """
 
 import math
+import numpy as np
 from .portfolio import Trade, Position
 
 # --- 타입 힌트를 위한 임포트 ---
@@ -56,30 +57,30 @@ class BasicExecutionHandler:
 
     def _execute_buy(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before):
         ticker = order_event["ticker"]
-        investment_amount = order_event["investment_amount"]
+        investment_amount = np.float32(order_event["investment_amount"])
         
         reason = order_event.get("reason_for_trade", "")
         if "추가 매수" in reason:
-            trigger_price = order_event["trigger_price"]
+            trigger_price = np.float32(order_event["trigger_price"])
             # [추가] GPU와 동일한 가격 결정 로직 (시나리오 A/B)
             if ohlc_data['high_price'] < trigger_price:
                 # 시나리오 B: 갭 하락. 시장이 더 유리한 '종가'를 체결 기준으로 사용
-                price_basis = ohlc_data['close_price']
+                price_basis = np.float32(ohlc_data['close_price'])
             else:
                 # 시나리오 A: 스침. 지정가인 '목표 매수가'를 체결 기준으로 사용
                 price_basis = trigger_price
         else: # 신규 진입
             # 신규 진입은 '종가'를 기준으로 가격 결정 (기존과 동일)
-            price_basis = ohlc_data['close_price']
+            price_basis = np.float32(ohlc_data['close_price'])
             
         execution_price = self._adjust_price_up(price_basis)
         # [추가] 최종 체결가를 기준으로 수량 계산 (핵심 변경)
         if execution_price <= 0: return
-        quantity = math.floor(investment_amount / execution_price)
+        quantity = np.int32(math.floor(investment_amount / execution_price))
         if quantity <= 0: return
         
-        cost = execution_price * quantity
-        commission = math.floor(cost * self.buy_commission_rate)
+        cost = np.float32(execution_price) * np.float32(quantity)
+        commission = np.floor(cost * np.float32(self.buy_commission_rate))
         total_cost = cost + commission
 
         if portfolio.cash < total_cost:
@@ -130,8 +131,8 @@ class BasicExecutionHandler:
         position_to_sell = order_event["position"]
 
         # [수정] GPU와 로직 동기화: 세금/수수료 역산 로직을 제거하고, 순수 목표가로 체결가를 계산합니다.
-        buy_price = position_to_sell.buy_price
-        sell_profit_rate = position_to_sell.sell_profit_rate
+        buy_price = np.float32(position_to_sell.buy_price)
+        sell_profit_rate = np.float32(position_to_sell.sell_profit_rate)
         
         # [수정] trigger_price는 손절, 기간만료 등 외부에서 명시적으로 지정될 때만 사용합니다.
         # 수익 실현의 경우, 항상 buy_price를 기준으로 계산합니다.
@@ -139,10 +140,10 @@ class BasicExecutionHandler:
         
         if is_profit_taking:
             # [수정] GPU와 동일하게 순수 목표가 계산
-            target_price = buy_price * (1 + sell_profit_rate)
+            target_price = buy_price * (np.float32(1.0) + sell_profit_rate)
         else: # 손절 또는 기간만료 청산
             # 신호 생성 시점의 종가를 trigger_price로 사용
-            target_price = order_event.get("trigger_price")
+            target_price = np.float32(order_event.get("trigger_price"))
         
         execution_price = self._adjust_price_up(target_price)
 
@@ -152,9 +153,9 @@ class BasicExecutionHandler:
 
         # [수정] 계산 로직은 변경 없음
         quantity = position_to_sell.quantity
-        revenue = execution_price * quantity
-        commission = math.floor(revenue * self.sell_commission_rate)
-        tax = math.floor(revenue * self.sell_tax_rate)
+        revenue = np.float32(execution_price) * np.float32(quantity)
+        commission = np.floor(revenue * np.float32(self.sell_commission_rate))
+        tax = np.floor(revenue * np.float32(self.sell_tax_rate))
         net_revenue = revenue - commission - tax
         
         # [삭제] 불필요해진 복잡한 디버그 로그를 제거합니다.

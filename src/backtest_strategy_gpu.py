@@ -629,7 +629,39 @@ def run_magic_split_strategy_on_gpu(
     all_data_filled = cudf.concat([key_cols, filled_values], axis=1)
     
     all_data_reset_idx = all_data_filled.dropna().copy()
+    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
+    print("\n" + "="*80)
+    print(f"[GPU DATA-PROBE] 2020-03-17 분기점 분석: ffill 완료 후 데이터 상태")
+    print("="*80)
+    # CPU/GPU가 서로 다르게 선택했던 종목들을 모두 포함하여 비교
+    # GPU가 매수한 종목(234, 267)과 CPU가 매수한 종목(오디텍:080520, 비상교육:100220)을 확인
+    try:
+        # 이 인덱스는 실제 실행 시 all_tickers 리스트에 따라 달라질 수 있으므로, 방어적으로 코딩
+        tickers_to_probe = []
+        gpu_bought_indices = [234, 267]
+        for idx in gpu_bought_indices:
+            if idx < len(all_tickers):
+                tickers_to_probe.append(all_tickers[idx])
+        
+        cpu_bought_tickers = ['080520', '100220']
+        tickers_to_probe.extend(cpu_bought_tickers)
+        
+        # 중복 제거
+        tickers_to_probe = sorted(list(set(tickers_to_probe)))
+        
+        # ffill이 완료된 데이터셋에서 해당 종목들의 2020-03-17 데이터를 조회
+        probe_df = all_data_filled[
+            (all_data_filled['date'] == '2020-03-17') &
+            (all_data_filled['ticker'].isin(tickers_to_probe))
+        ]
+        
+        print("ffill된 데이터셋 조회 결과:")
+        print(probe_df.to_pandas().to_string(index=False))
 
+    except Exception as e:
+        print(f"GPU 데이터 프로브 중 오류 발생: {e}")
+    print("="*80 + "\n")
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
     print("Full timeseries grid created and filled.")
 

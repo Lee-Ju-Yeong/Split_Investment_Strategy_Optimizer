@@ -98,14 +98,15 @@ class Portfolio:
                 self.last_trade_dates[ticker] = trade_date # 마지막 거래일 갱신
 
     def get_total_value(self, current_date, data_handler: 'DataHandler'):
-        total_market_value = 0
+        total_market_value = np.float32(0.0)
         for ticker, positions_list in self.positions.items():
             current_price = data_handler.get_latest_price(current_date, ticker, self.start_date, self.end_date)
             if current_price is not None and not np.isnan(current_price):
+                current_price_f32 = np.float32(current_price)
                 for position in positions_list:
-                    total_market_value += position.quantity * current_price
+                    total_market_value += np.float32(position.quantity) * current_price_f32
         
-        return self.cash + total_market_value
+        return np.float32(self.cash) + total_market_value
 
     def record_trade(self, trade: Trade):
         self.trade_history.append(trade)

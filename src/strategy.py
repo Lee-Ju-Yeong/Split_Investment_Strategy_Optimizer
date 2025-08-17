@@ -67,7 +67,7 @@ class MagicSplitStrategy(Strategy):
         current_month = current_date.month
         if current_month != self.previous_month:
             total_portfolio_value = portfolio.get_total_value(current_date, data_handler)
-            self.investment_per_order = total_portfolio_value * self.order_investment_ratio
+            self.investment_per_order = np.float32(total_portfolio_value) * np.float32(self.order_investment_ratio)
             self.previous_month = current_month
 
     # [변경] 매수 신호만 생성하는 함수
@@ -113,7 +113,30 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or (self.cooldown_tracker.get(code) and (np.busday_count(self.cooldown_tracker[code].date(), current_date.date()) < self.cooldown_period_days)):
                     continue
                 active_candidates.append(code)
-
+            # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
+            # '2020-03-17' 단 하루 동안만 후보군 데이터 조회 과정을 상세히 로깅
+            if current_date.strftime('%Y-%m-%d') == '2020-03-17':
+                from tqdm import tqdm # 로그 출력을 위해 임시 임포트
+                tqdm.write("\n" + "="*80)
+                tqdm.write(f"[CPU DATA-PROBE] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 데이터 가용성 검사")
+                tqdm.write("="*80)
+                for ticker_to_check in active_candidates:
+                    # get_ohlc_data_on_date가 내부적으로 load_stock_data를 호출하고 asof를 적용
+                    data_row = data_handler.get_ohlc_data_on_date(current_date, ticker_to_check, self.backtest_start_date, self.backtest_end_date)
+                    
+                    if data_row is None:
+                        log_msg = f"  - Ticker: {ticker_to_check} | 결과: [실패] | 원인: {current_date.strftime('%Y-%m-%d')} 또는 그 이전 데이터 없음"
+                    else:
+                        atr_value = data_row.get('atr_14_ratio', 'N/A')
+                        # asof로 가져온 데이터가 실제 '오늘' 데이터인지 확인
+                        actual_date = data_row.name.strftime('%Y-%m-%d')
+                        if actual_date != current_date.strftime('%Y-%m-%d'):
+                            log_msg = f"  - Ticker: {ticker_to_check} | 결과: [성공] | ATR: {atr_value:.4f} (주의: {actual_date}자 데이터 asof로 사용)"
+                        else:
+                            log_msg = f"  - Ticker: {ticker_to_check} | 결과: [성공] | ATR: {atr_value:.4f} ({actual_date}자 데이터)"
+                    tqdm.write(log_msg)
+                tqdm.write("="*80 + "\n")
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             candidate_atrs = []
             for ticker in active_candidates:
                 stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)

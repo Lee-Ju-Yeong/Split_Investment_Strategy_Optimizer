@@ -199,6 +199,27 @@ if __name__ == "__main__":
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
     all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
     
+    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
+    print("\n--- [검증] GPU 매수 종목 vs CPU 매수 종목 직접 비교 ---")
+    try:
+        gpu_bought_indices = [85, 134, 167]
+        cpu_bought_tickers = ['033830', '045060', '014570']
+
+        print("\n[1] GPU가 매수한 인덱스의 실제 종목 코드:")
+        for index in gpu_bought_indices:
+            print(f"  - Index {index} -> Ticker: {all_tickers[index]}")
+
+        print("\n[2] CPU가 매수한 종목 코드의 GPU 내부 인덱스:")
+        for ticker in cpu_bought_tickers:
+            # list.index()를 사용하여 해당 ticker가 리스트의 몇 번째에 있는지 확인
+            gpu_internal_index = all_tickers.index(ticker)
+            print(f"  - Ticker {ticker} -> Index: {gpu_internal_index}")
+            
+    except (ValueError, IndexError) as e:
+        print(f"검증 중 오류 발생: {e}")
+    print("----------------------------------------------------\n")
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
     
     # [추가] GPU가 매수한 종목 인덱스가 실제 어떤 종목 코드인지 확인하는 로그
     print("\n--- [DEBUG] Ticker to Index Mapping Check ---")
