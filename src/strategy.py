@@ -164,7 +164,7 @@ class MagicSplitStrategy(Strategy):
                         num_new_entries += 1
 
         # 모든 매수 신호를 우선순위에 따라 정렬
-        buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"]))
+        buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))
         
         for signal in buy_signals:
             signal["start_date"] = self.backtest_start_date

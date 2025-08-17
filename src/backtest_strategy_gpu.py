@@ -321,12 +321,40 @@ def _process_additional_buy_signals_gpu(
     # --- 3. [핵심 수정] 후보들을 우선순위에 따라 정렬 ---
     sim_indices, stock_indices = cp.where(initial_buy_mask)
     
-    # CPU의 'highest_drop' 우선순위와 동일하게 구현 (하락률이 클수록 우선)
-    # (last_buy_price - trigger_price) / last_buy_price 와 동일
-    priority_scores = add_buy_drop_rates[sim_indices].flatten()
+    # 각 후보가 속한 시뮬레이션의 'additional_buy_priority' 파라미터 값을 가져옵니다.
+    # 0: lowest_order, 1: highest_drop
+    add_buy_priorities = param_combinations[:, 4:5]
+    priorities_for_candidates = add_buy_priorities[sim_indices].flatten()
+
+    # 'lowest_order' 점수 계산: 현재 보유한 분할매수 차수 (오름차순 정렬 대상)
+    scores_lowest_order = num_positions[sim_indices, stock_indices]
+
+    # 'highest_drop' 점수 계산: 실제 하락률 (내림차순 정렬 대상)
+    candidate_last_buy_prices = last_buy_prices[sim_indices, stock_indices]
+    candidate_current_prices = current_prices[stock_indices]
+    epsilon = 1e-9 # 0으로 나누기 방지
+    scores_highest_drop = (candidate_last_buy_prices - candidate_current_prices) / (candidate_last_buy_prices + epsilon)
     
-    # 우선순위에 따라 후보들의 인덱스를 정렬
-    sorted_indices = cp.argsort(-priority_scores)
+    # 파라미터 값에 따라 최종 우선순위 점수를 선택합니다.
+    # lowest_order(0)는 오름차순 정렬해야 하므로 점수를 그대로 사용합니다.
+    # highest_drop(1)은 내림차순 정렬해야 하므로, 점수에 음수를 취한 뒤 오름차순 정렬합니다.
+    priority_scores = cp.where(priorities_for_candidates == 0,
+                               scores_lowest_order,
+                               -scores_highest_drop) # 내림차순 정렬을 위해 음수화
+
+     # 1. 2차 정렬 기준: 후보들의 stock_idx (오름차순)
+    candidate_stock_indices = stock_indices
+    key2_stock_indices = candidate_stock_indices.astype(cp.float32)
+
+    # 2. 1차 정렬 기준: 계산된 우선순위 점수 (오름차순)
+    key1_priority_scores = priority_scores
+
+    # [추가] 두 개의 1D 키 배열을 vstack을 사용해 (2, N) 형태의 단일 2D 배열로 쌓습니다.
+    # lexsort는 마지막 행부터 정렬하므로, 우선순위가 낮은 키(key2)를 먼저, 높은 키(key1)를 나중에 넣습니다.
+    sort_keys_array = cp.vstack((key2_stock_indices, key1_priority_scores))
+
+    # [수정] 단일 2D 배열을 lexsort에 전달합니다.
+    sorted_indices = cp.lexsort(sort_keys_array)
     
     # 정렬된 순서대로 후보 정보 재배열
     sorted_sim_indices = sim_indices[sorted_indices]
