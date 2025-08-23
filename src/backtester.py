@@ -43,13 +43,13 @@ class BacktestEngine:
             num_trades_before = len(self.portfolio.trade_history)
 
             # 단계 1-1: 매도 신호 생성 및 즉시 실행
-            sell_signals = self.strategy.generate_sell_signals(current_date, self.portfolio, self.data_handler)
+            sell_signals = self.strategy.generate_sell_signals(current_date, self.portfolio, self.data_handler,current_day_idx=i)
             if sell_signals:
                 for signal in sell_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)
 
             # 단계 1-2: 매수 신호 생성 및 즉시 실행 (매도가 반영된 최신 포트폴리오 기준)
-            buy_signals = self.strategy.generate_buy_signals(current_date, self.portfolio, self.data_handler)
+            buy_signals = self.strategy.generate_buy_signals(current_date, self.portfolio, self.data_handler,current_day_idx=i)
             if buy_signals:
                 for signal in buy_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler)

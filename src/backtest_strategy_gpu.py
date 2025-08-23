@@ -457,7 +457,19 @@ def _process_new_entry_signals_gpu(
     current_num_stocks = cp.sum(has_any_position, axis=1)
     max_stocks_per_sim = param_combinations[:, 0]
     available_slots = cp.maximum(0, max_stocks_per_sim - current_num_stocks).astype(cp.int32)
-
+    # 백테스트 시작 후 10 거래일 동안만 슬롯 상태를 로깅 (sim 0 기준)
+    if debug_mode and current_day_idx < 10:
+        # trading_dates_pd_cpu를 가져오기 위해 함수 인자에 추가해야 하지만,
+        # 디버깅 편의를 위해 전역에서 접근 가능한 변수를 임시로 사용하거나,
+        # 여기서는 날짜 없이 Day Index만 출력합니다.
+        log_msg = (
+            f"[GPU_SLOT_DEBUG] Day {current_day_idx} | "
+            f"MaxStocks: {max_stocks_per_sim[0].item()}, "
+            f"CurrentHoldings: {current_num_stocks[0].item()}, "
+            f"AvailableSlots: {available_slots[0].item()}"
+        )
+        print(log_msg)
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     if not cp.any(available_slots > 0) or candidate_tickers_for_day.size == 0:
         return portfolio_state, positions_state, last_trade_day_idx_state
 
@@ -716,6 +728,34 @@ def run_magic_split_strategy_on_gpu(
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
         # --- [추가] 데이터 비교를 위한 디버깅 로그 ---
+        if current_date.strftime('%Y-%m-%d') == '2015-03-05':
+            print("\n" + "="*80)
+            print(f"[GPU_ATR_DEBUG] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 ATR 데이터 검사")
+            print("="*80)
+            
+            # CPU와 동일한 로직으로 그날의 후보군 리스트를 가져옴
+            past_or_equal_data_for_log = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
+            if not past_or_equal_data_for_log.empty:
+                latest_filter_date_for_log = past_or_equal_data_for_log['date'].max()
+                candidates_of_the_week_for_log = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date_for_log]
+                
+                # 주간 필터링된 모든 종목 리스트
+                candidate_tickers_list_for_log = candidates_of_the_week_for_log['ticker'].to_arrow().to_pylist()
+                
+                # 생성된 전체 데이터셋에서 오늘 날짜의 ATR 데이터만 추출
+                daily_atr_series_for_log = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['atr_14_ratio']
+                
+                # 후보군을 티커 순으로 정렬하여 CPU와 비교
+                for ticker in sorted(candidate_tickers_list_for_log):
+                    if ticker in daily_atr_series_for_log.index:
+                        # cudf 시리즈에서 스칼라 값을 안전하게 추출
+                        atr_value = daily_atr_series_for_log.loc[ticker]
+                        # .item()은 cupy/numpy에서, .iloc[0]은 cudf에서 스칼라 값을 가져오는 일반적인 방법
+                        atr_value_scalar = atr_value.iloc[0] if hasattr(atr_value, 'iloc') and not atr_value.empty else atr_value
+                        print(f"  - Ticker: {ticker} | ATR: {atr_value_scalar:.4f}")
+                    else:
+                        print(f"  - Ticker: {ticker} | 결과: [데이터 없음]")
+            print("="*80 + "\n")
         debug_ticker = '013570'
         if debug_ticker in ticker_to_idx:
             debug_ticker_idx = ticker_to_idx[debug_ticker]

@@ -71,14 +71,14 @@ class MagicSplitStrategy(Strategy):
             self.previous_month = current_month
 
     # [변경] 매수 신호만 생성하는 함수
-    def generate_buy_signals(self, current_date, portfolio, data_handler):
+    def generate_buy_signals(self, current_date, portfolio, data_handler,current_day_idx=None):
         self._calculate_monthly_investment(current_date, portfolio, data_handler)
         buy_signals = []
 
         # 1. 추가 매수 신호 생성
         for ticker in list(portfolio.positions.keys()):
             # 당일 매도된 종목은 추가 매수 안 함 (cooldown_tracker에 오늘 날짜가 기록되었는지 확인)
-            if self.cooldown_tracker.get(ticker) == current_date:
+            if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
 
             stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
@@ -105,35 +105,55 @@ class MagicSplitStrategy(Strategy):
 
         # 2. 신규 매수 신호 생성
         available_slots = self.max_stocks - len(portfolio.positions)
+        # 백테스트 시작 후 15일 동안만 슬롯 상태를 로깅
+        if (current_date - self.backtest_start_date).days < 15:
+            from tqdm import tqdm
+            log_msg = (
+                f"[CPU_SLOT_DEBUG] {current_date.strftime('%Y-%m-%d')} | "
+                f"MaxStocks: {self.max_stocks}, "
+                f"CurrentHoldings: {len(portfolio.positions)}, "
+                f"AvailableSlots: {available_slots}"
+            )
+            tqdm.write(log_msg)
+        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         if available_slots > 0:
             candidate_codes = data_handler.get_filtered_stock_codes(current_date)
             
             active_candidates = []
             for code in candidate_codes:
-                if code in portfolio.positions or (self.cooldown_tracker.get(code) and (np.busday_count(self.cooldown_tracker[code].date(), current_date.date()) < self.cooldown_period_days)):
+                # [수정] 쿨다운 체크 로직을 GPU와 동일하게 거래일 인덱스 차이로 변경
+                is_in_cooldown = False
+                if self.cooldown_tracker.get(code) is not None:
+                    if (current_day_idx - self.cooldown_tracker.get(code)) < self.cooldown_period_days:
+                        is_in_cooldown = True
+
+                if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
             # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
             # '2020-03-17' 단 하루 동안만 후보군 데이터 조회 과정을 상세히 로깅
-            if current_date.strftime('%Y-%m-%d') == '2020-03-17':
-                from tqdm import tqdm # 로그 출력을 위해 임시 임포트
+            if current_date.strftime('%Y-%m-%d') == '2015-03-05': # [수정] 날짜 변경
+                from tqdm import tqdm 
                 tqdm.write("\n" + "="*80)
-                tqdm.write(f"[CPU DATA-PROBE] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 데이터 가용성 검사")
+                # [수정] 로그 메시지 명확화
+                tqdm.write(f"[CPU_ATR_DEBUG] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 ATR 데이터 검사")
                 tqdm.write("="*80)
-                for ticker_to_check in active_candidates:
-                    # get_ohlc_data_on_date가 내부적으로 load_stock_data를 호출하고 asof를 적용
+                # [추가] 후보군을 티커 순으로 정렬하여 GPU와 비교 용이하게 만듦
+                for ticker_to_check in sorted(active_candidates):
                     data_row = data_handler.get_ohlc_data_on_date(current_date, ticker_to_check, self.backtest_start_date, self.backtest_end_date)
                     
                     if data_row is None:
-                        log_msg = f"  - Ticker: {ticker_to_check} | 결과: [실패] | 원인: {current_date.strftime('%Y-%m-%d')} 또는 그 이전 데이터 없음"
+                        # [수정] 로그 메시지 포맷 통일
+                        log_msg = f"  - Ticker: {ticker_to_check} | 결과: [데이터 없음]"
                     else:
                         atr_value = data_row.get('atr_14_ratio', 'N/A')
-                        # asof로 가져온 데이터가 실제 '오늘' 데이터인지 확인
-                        actual_date = data_row.name.strftime('%Y-%m-%d')
-                        if actual_date != current_date.strftime('%Y-%m-%d'):
-                            log_msg = f"  - Ticker: {ticker_to_check} | 결과: [성공] | ATR: {atr_value:.4f} (주의: {actual_date}자 데이터 asof로 사용)"
+                        actual_date_str = data_row.name.strftime('%Y-%m-%d')
+                        if actual_date_str != current_date.strftime('%Y-%m-%d'):
+                            # [수정] 로그 메시지 포맷 통일
+                            log_msg = f"  - Ticker: {ticker_to_check} | ATR: {atr_value:.4f} (주의: {actual_date_str}자 데이터 사용)"
                         else:
-                            log_msg = f"  - Ticker: {ticker_to_check} | 결과: [성공] | ATR: {atr_value:.4f} ({actual_date}자 데이터)"
+                            # [수정] 로그 메시지 포맷 통일
+                            log_msg = f"  - Ticker: {ticker_to_check} | ATR: {atr_value:.4f}"
                     tqdm.write(log_msg)
                 tqdm.write("="*80 + "\n")
             # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -178,7 +198,7 @@ class MagicSplitStrategy(Strategy):
 
     def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
-    def generate_sell_signals(self, current_date, portfolio, data_handler):
+    def generate_sell_signals(self, current_date, portfolio, data_handler,current_day_idx=None):
         self._calculate_monthly_investment(current_date, portfolio, data_handler)
         signals = []
 
@@ -216,10 +236,10 @@ class MagicSplitStrategy(Strategy):
             if liquidate:
                 for p in positions:
                     signals.append(self._create_sell_signal(current_date, ticker, p, reason, trigger_price))
-                self.cooldown_tracker[ticker] = current_date
+                self.cooldown_tracker[ticker] = current_day_idx
                 continue 
 
-            # [수정] reversed()를 사용하여 가장 최근 매수 포지션부터 순회
+            # reversed()를 사용하여 가장 최근 매수 포지션부터 순회
             for p in reversed(positions):
                 # [규칙] 당일 매수한 포지션은 익절 대상에서 제외
                 if p.open_date is not None and p.open_date >= current_date:
@@ -228,8 +248,8 @@ class MagicSplitStrategy(Strategy):
                 sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
                 if current_high >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
-                    # [수정] 1차 매도 여부와 상관없이 개별 익절이므로 cooldown만 설정
-                    self.cooldown_tracker[ticker] = current_date
+                    # 1차 매도 여부와 상관없이 개별 익절이므로 cooldown만 설정
+                    self.cooldown_tracker[ticker] = current_day_idx
         
         for signal in signals:
             signal["start_date"] = self.backtest_start_date
