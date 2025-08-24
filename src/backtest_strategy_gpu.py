@@ -37,7 +37,7 @@ def adjust_price_up_gpu(price_array):
     rounded = cp.round(divided, 5) 
     return cp.ceil(rounded) * tick_size
 
-def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, current_prices,current_date,debug_mode):
+def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, evaluation_prices,current_date,debug_mode):
     """ Vectorized calculation of monthly investment amounts based on current market value. """
     if debug_mode:
         print("\n" + "-"*25)
@@ -46,9 +46,10 @@ def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_co
 
     quantities = positions_state[..., 0]
     
-    # [수정] 총 자산 계산 시 매수 평단이 아닌 '현재가'를 사용해야 합니다.
+    #  총 자산 계산 시 매수 평단이 아닌 '평가 기준가(전일 종가)'를 사용해야 합니다.
     total_quantities_per_stock = cp.sum(quantities, axis=2)
-    stock_market_values = total_quantities_per_stock * current_prices
+    # current_prices 대신 evaluation_prices(전일 종가)를 사용
+    stock_market_values = total_quantities_per_stock * evaluation_prices
     total_stock_values = cp.sum(stock_market_values, axis=1, keepdims=True)
 
     capital_array = portfolio_state[:, 0:1]
@@ -65,7 +66,7 @@ def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_co
         # 보유 종목의 가격이 0인지 확인하는 핵심 로그
         holding_mask = total_quantities_per_stock[0] > 0
         sim0_holding_quantities = total_quantities_per_stock[0, holding_mask].get()
-        sim0_holding_prices = current_prices[holding_mask].get() # current_prices는 1D 배열
+        sim0_holding_prices = evaluation_prices[holding_mask].get() # evaluation_prices는 1D 배열
 
         print(f"  Capital (Sim 0)        : {sim0_capital:,.0f}")
         if sim0_holding_quantities.size > 0:
@@ -675,75 +676,11 @@ def run_magic_split_strategy_on_gpu(
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
     weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
-    # [수정] CPU의 asof() 동작을 GPU에서 정확히 구현하는 3단계 로직
-    print("Creating full timeseries grid to simulate CPU's asof logic...")
-    
-    # 1. 모든 종목과 모든 영업일을 조합하여 전체 그리드 생성
-    full_grid = cudf.MultiIndex.from_product(
-        [trading_dates_pd_cpu, all_tickers], names=['date', 'ticker']
-    ).to_frame(index=False)
-    
-    # 2. 전체 그리드에 실제 데이터를 left-merge
-    #    (실제 데이터가 없는 날짜는 NaN 값을 갖는 행이 생성됨)
-    #    'ticker' 컬럼 타입을 통일하여 merge 오류 방지
-    all_data_reset_idx['ticker'] = all_data_reset_idx['ticker'].astype('str')
-    full_grid['ticker'] = full_grid['ticker'].astype('str')
-    merged_data = cudf.merge(full_grid, all_data_reset_idx, on=['date', 'ticker'], how='left')
-
-    # 3. 종목별로 그룹화하여 forward-fill 적용
-    merged_data = merged_data.sort_values(by=['ticker', 'date'])
-    
-    # [수정] 키 컬럼('date', 'ticker')과 값 컬럼을 분리하여 처리 후 재결합
-    
-    # 3-1. 키 컬럼과 인덱스 보존
-    key_cols = merged_data[['date', 'ticker']]
-    
-    # 3-2. 값 컬럼만 선택하여 ffill 및 bfill 수행
-    value_cols = merged_data.drop(columns=['date', 'ticker'])
-    filled_values = value_cols.groupby(merged_data['ticker']).ffill()
-    
-    # 3-3. 보존했던 키 컬럼과 채워진 값 컬럼을 다시 결합
-    all_data_filled = cudf.concat([key_cols, filled_values], axis=1)
-    
-    all_data_reset_idx = all_data_filled.dropna().copy()
-    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
-    print("\n" + "="*80)
-    print(f"[GPU DATA-PROBE] 2020-03-17 분기점 분석: ffill 완료 후 데이터 상태")
-    print("="*80)
-    # CPU/GPU가 서로 다르게 선택했던 종목들을 모두 포함하여 비교
-    # GPU가 매수한 종목(234, 267)과 CPU가 매수한 종목(오디텍:080520, 비상교육:100220)을 확인
-    try:
-        # 이 인덱스는 실제 실행 시 all_tickers 리스트에 따라 달라질 수 있으므로, 방어적으로 코딩
-        tickers_to_probe = []
-        gpu_bought_indices = [234, 267]
-        for idx in gpu_bought_indices:
-            if idx < len(all_tickers):
-                tickers_to_probe.append(all_tickers[idx])
-        
-        cpu_bought_tickers = ['080520', '100220']
-        tickers_to_probe.extend(cpu_bought_tickers)
-        
-        # 중복 제거
-        tickers_to_probe = sorted(list(set(tickers_to_probe)))
-        
-        # ffill이 완료된 데이터셋에서 해당 종목들의 2020-03-17 데이터를 조회
-        probe_df = all_data_filled[
-            (all_data_filled['date'] == '2020-03-17') &
-            (all_data_filled['ticker'].isin(tickers_to_probe))
-        ]
-        
-        print("ffill된 데이터셋 조회 결과:")
-        print(probe_df.to_pandas().to_string(index=False))
-
-    except Exception as e:
-        print(f"GPU 데이터 프로브 중 오류 발생: {e}")
-    print("="*80 + "\n")
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-    print("Full timeseries grid created and filled.")
+    print("Data prepared for GPU backtest. (asof logic will be applied in main loop)")
 
     previous_month = -1
-
+    previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+    
     # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
@@ -802,38 +739,42 @@ def run_magic_split_strategy_on_gpu(
         daily_close_series = daily_df['close_price']
         daily_high_series  = daily_df['high_price']
         daily_low_series   = daily_df['low_price']
-
         current_prices_gpu = cp.asarray(daily_close_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
         current_highs_gpu  = cp.asarray(daily_high_series .reindex(all_tickers).fillna(0).values, dtype=cp.float32)
         current_lows_gpu   = cp.asarray(daily_low_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-    
+        # CPU의 asof 동작을 GPU에서 완벽하게 모방하는 신규 후보군 선정 로직
         past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
         if not past_or_equal_data.empty:
+            # 1. 해당 주간의 필터링된 종목 리스트를 가져옴
             latest_filter_date = past_or_equal_data['date'].max()
             candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
             candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
-            
-            daily_atr_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['atr_14_ratio']
-            valid_candidate_atr_series = daily_atr_series.reindex(candidate_tickers_list).dropna()
-            if not valid_candidate_atr_series.empty:
-                # 2. 유효한 종목 코드와 ATR 값을 각각 추출
-                valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
-                valid_atrs = valid_candidate_atr_series.values
-                
-                # 3. 유효한 종목 코드를 ticker_idx로 변환하여 최종 후보 배열 생성
-                candidate_indices = cp.array([ticker_to_idx.get(t, -1) for t in valid_tickers if t in ticker_to_idx], dtype=cp.int32)
-                
-                # 4. 최종 후보 종목과 순서가 동일한 ATR 배열 생성
-                candidate_tickers_for_day = candidate_indices[candidate_indices != -1]
-                candidate_atrs_for_day = cp.asarray(valid_atrs, dtype=cp.float32)
 
-                # [방어 코드] 만약의 경우를 대비해 두 배열의 길이가 같은지 확인
-                if len(candidate_tickers_for_day) != len(candidate_atrs_for_day):
-                    # 이 경우는 거의 발생하지 않지만, 발생 시 디버깅을 위해 경고 추가
-                    print(f"Warning: Day {i}, Mismatch in candidate arrays length after filtering.")
-                    min_len = min(len(candidate_tickers_for_day), len(candidate_atrs_for_day))
-                    candidate_tickers_for_day = candidate_tickers_for_day[:min_len]
-                    candidate_atrs_for_day = candidate_atrs_for_day[:min_len]
+            # 2. 전체 데이터에서 현재 날짜 '이하'의 모든 데이터를 가져옴
+            data_up_to_current = all_data_reset_idx[all_data_reset_idx['date'] <= current_date]
+            
+            # 3. 이 중에서 주간 후보군에 해당하는 종목 데이터만 필터링
+            candidate_data_all_dates = data_up_to_current[data_up_to_current['ticker'].isin(candidate_tickers_list)]
+            if not candidate_data_all_dates.empty:
+                # 4. 각 종목(ticker)별로 가장 최신 날짜의 데이터만 남김 (asof 효과)
+                candidate_data_all_dates = candidate_data_all_dates.sort_values(by='date', ascending=False)
+                latest_candidate_data = candidate_data_all_dates.drop_duplicates(subset=['ticker'], keep='first')
+                
+                # 5. 최종 후보 종목의 ATR 값을 추출 (NaN 값은 dropna로 제거)
+                latest_candidate_data = latest_candidate_data.set_index('ticker')
+                valid_candidate_atr_series = latest_candidate_data['atr_14_ratio'].dropna()
+
+                if not valid_candidate_atr_series.empty:
+                    # 6. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
+                    valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
+                    valid_atrs = valid_candidate_atr_series.values
+                    
+                    candidate_indices = cp.array([ticker_to_idx.get(t, -1) for t in valid_tickers if t in ticker_to_idx], dtype=cp.int32)
+                    candidate_tickers_for_day = candidate_indices[candidate_indices != -1]
+                    candidate_atrs_for_day = cp.asarray(valid_atrs, dtype=cp.float32)
+                else:
+                    candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                    candidate_atrs_for_day = cp.array([], dtype=cp.float32)
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
@@ -844,7 +785,7 @@ def run_magic_split_strategy_on_gpu(
         # 2-2. 월별 투자금 재계산
         if current_date.month != previous_month:
             portfolio_state = _calculate_monthly_investment_gpu(
-                portfolio_state, positions_state, param_combinations, current_prices_gpu,current_date,debug_mode
+                portfolio_state, positions_state, param_combinations, previous_prices_gpu, current_date, debug_mode
             )
             previous_month = current_date.month
 
@@ -917,6 +858,7 @@ def run_magic_split_strategy_on_gpu(
 
             log_message += footer
             print(log_message)
+        previous_prices_gpu = current_prices_gpu.copy()
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
     if not debug_mode and log_counter[0] > 0:
         print("\n" + "="*60)

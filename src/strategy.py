@@ -63,16 +63,24 @@ class MagicSplitStrategy(Strategy):
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
 
-    def _calculate_monthly_investment(self, current_date, portfolio, data_handler):
+    def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
+        # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
         current_month = current_date.month
         if current_month != self.previous_month:
-            total_portfolio_value = portfolio.get_total_value(current_date, data_handler)
+            # 첫 거래일에는 전일이 없으므로, 초기 자본을 기준으로 투자금을 계산
+            if current_day_idx == 0:
+                total_portfolio_value = portfolio.initial_cash
+            else:
+                # 전일 날짜를 가져옴
+                previous_day_date = trading_dates[current_day_idx - 1]
+                total_portfolio_value = portfolio.get_total_value(previous_day_date, data_handler)
+            
             self.investment_per_order = np.float32(total_portfolio_value) * np.float32(self.order_investment_ratio)
             self.previous_month = current_month
 
     # [변경] 매수 신호만 생성하는 함수
-    def generate_buy_signals(self, current_date, portfolio, data_handler,current_day_idx=None):
-        self._calculate_monthly_investment(current_date, portfolio, data_handler)
+    def generate_buy_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
+        self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
 
         # 1. 추가 매수 신호 생성
@@ -198,8 +206,8 @@ class MagicSplitStrategy(Strategy):
 
     def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
-    def generate_sell_signals(self, current_date, portfolio, data_handler,current_day_idx=None):
-        self._calculate_monthly_investment(current_date, portfolio, data_handler)
+    def generate_sell_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
+        self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         signals = []
 
         for ticker in list(portfolio.positions.keys()):
