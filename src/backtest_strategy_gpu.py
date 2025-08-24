@@ -133,14 +133,34 @@ def _process_sell_signals_gpu(
     # 비활성 기간 조건
     has_traded_before = last_trade_day_idx_state != -1
     days_inactive = current_day_idx - last_trade_day_idx_state
-    stock_inactivity_mask = (days_inactive > max_inactivity_periods) & has_traded_before
-    
-    stock_liquidation_mask = stock_stop_loss_mask | stock_inactivity_mask
-    
+    stock_inactivity_mask = (days_inactive >= max_inactivity_periods - 1) & has_traded_before
+    stock_liquidation_mask_base = stock_stop_loss_mask | stock_inactivity_mask
+    stock_liquidation_mask = stock_liquidation_mask_base
+    #  현실적인 손절매 체결 로직을 적용하여 최종 청산 마스크를 결정
+    if cp.any(stock_liquidation_mask_base):
+        # 현실적인 손절매 체결가(price_basis) 계산
+        stop_loss_prices = avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))
+        high_prices_2d = cp.broadcast_to(current_high_prices, stop_loss_prices.shape)
+
+        # 시나리오 1(A): 장중 손절가 도달 시, Target Price를 기준가로 사용
+        # 시나리오 2(B): 갭하락으로 미도달 시, 당일 종가(current_prices_2d)를 기준가로 사용
+        stop_loss_basis = cp.where(high_prices_2d >= stop_loss_prices, stop_loss_prices, current_prices_2d)
+
+        # 최종 청산 기준가(liquidation_price_basis) 결정:
+        # - 손절매의 경우: 위에서 계산한 stop_loss_basis 사용
+        # - 비활성 청산의 경우: 기존처럼 당일 종가(current_prices_2d) 사용
+        liquidation_price_basis = cp.where(stock_stop_loss_mask, stop_loss_basis, current_prices_2d)
+
+        # [핵심] 가격 결정 로직이 체결 가능성을 이미 포함하므로, 최종 마스크는 base 마스크와 동일
+        stock_liquidation_mask = stock_liquidation_mask_base
+    else:
+        # 청산 후보가 없으면 빈 마스크로 초기화
+        stock_liquidation_mask = stock_liquidation_mask_base
+        
     if debug_mode and cp.any(stock_liquidation_mask):
         sim0_stop_loss_indices = cp.where(stock_stop_loss_mask[0])[0].get()
         sim0_inactivity_indices = cp.where(stock_inactivity_mask[0])[0].get()
-        # [수정] 인덱스를 티커로 변환하여 로그 출력
+        # 인덱스를 티커로 변환하여 로그 출력
         if sim0_stop_loss_indices.size > 0:
             tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_stop_loss_indices])
             print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Stop-Loss triggered for Stocks [{tickers_str}]")
@@ -156,14 +176,16 @@ def _process_sell_signals_gpu(
                     idx = idx_cupy.item()
                     ticker = all_tickers[idx]
                     # 청산 기준가는 '당일 종가'
-                    target_price = current_close_prices[idx].item()
-                    exec_price = adjust_price_up_gpu(current_close_prices[idx]).item()
+                    target_price = liquidation_price_basis[0, idx].item()
+                    exec_price = adjust_price_up_gpu(liquidation_price_basis[0, idx]).item()
                     high_price = current_high_prices[idx].item()
                     reason = "Stop-Loss" if stock_stop_loss_mask[0, idx] else "Inactivity"
-                    net_proceeds_sim0 = (quantities[0, idx, 0] * exec_price).get() # 간단한 계산
+                    # 실제 계산에 사용할 수량을 가져와 정확한 예상 수익 계산
+                    qty_to_log = cp.sum(quantities[0, idx, :]).item()
+                    net_proceeds_sim0 = qty_to_log * exec_price
                     print(
                         f"[GPU_SELL_CALC] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} | "
-                        f"Qty: {quantities[0, idx, 0].item():,.0f} * ExecPrice: {exec_price:,.0f} = Revenue: {net_proceeds_sim0:,.0f}"
+                        f"Qty: {qty_to_log:,.0f} * ExecPrice: {exec_price:,.0f} = Revenue: {net_proceeds_sim0:,.0f}"
                     )
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
@@ -172,8 +194,8 @@ def _process_sell_signals_gpu(
                         f"High: {high_price}"
                     )
 
-        broadcasted_close_prices = cp.broadcast_to(current_close_prices.reshape(1, -1, 1), buy_prices.shape)
-        adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_close_prices)
+        broadcasted_liquidation_prices = cp.broadcast_to(liquidation_price_basis.reshape(positions_state.shape[0], -1, 1), buy_prices.shape)
+        adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_liquidation_prices)
 
         # 청산 대상 종목의 모든 포지션에 대한 수익 계산
         revenue_matrix = quantities * adjusted_liquidation_prices
@@ -200,24 +222,24 @@ def _process_sell_signals_gpu(
 
 
     # --- 시나리오 2: 부분 매도 (수익 실현) ---
-    # [유지] 목표가 계산은 이미 단순 계산 방식으로 구현되어 있습니다.
+    #  목표가 계산은 이미 단순 계산 방식으로 구현되어 있습니다.
     target_sell_prices = buy_prices * (1 + sell_profit_rates)
-    # [유지] 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리합니다.
+    # 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리합니다.
     execution_sell_prices = adjust_price_up_gpu(target_sell_prices)
 
-    # [수정] 체결 조건: 당일 '고가(high)'가 계산된 체결가에 도달했는지 확인하도록 변경
-    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape) # [수정] close_prices 대신 high_prices 사용
+    # 체결 조건: 당일 '고가(high)'가 계산된 체결가에 도달했는지 확인하도록 변경
+    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape) # close_prices 대신 high_prices 사용
     
-    # [유지] 현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
+    #  현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    # [수정] 체결 마스크 생성 시 high_prices_3d를 사용합니다.
+    # 체결 마스크 생성 시 high_prices_3d를 사용합니다.
     profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
         sim0_profit_taking_indices = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
-        # [수정] 인덱스를 티커로 변환하여 로그 출력
+        # 인덱스를 티커로 변환하여 로그 출력
         if sim0_profit_taking_indices.size > 0:
             tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_profit_taking_indices])
             print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Profit-Taking triggered for Stocks [{tickers_str}]")
@@ -271,8 +293,6 @@ def _process_sell_signals_gpu(
 
     # [수정] last_trade_day_idx_state 반환
     return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
-
-# 기존 _process_additional_buy_signals_gpu 함수를 아래 코드로 전체 교체하십시오.
 
 def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,

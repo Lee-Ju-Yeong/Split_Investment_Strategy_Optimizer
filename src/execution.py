@@ -135,28 +135,40 @@ class BasicExecutionHandler:
         ticker = order_event["ticker"]
         position_to_sell = order_event["position"]
 
-        # [수정] GPU와 로직 동기화: 세금/수수료 역산 로직을 제거하고, 순수 목표가로 체결가를 계산합니다.
+        # GPU와 로직 동기화: 세금/수수료 역산 로직을 제거하고, 순수 목표가로 체결가를 계산합니다.
         buy_price = np.float32(position_to_sell.buy_price)
         sell_profit_rate = np.float32(position_to_sell.sell_profit_rate)
         
-        # [수정] trigger_price는 손절, 기간만료 등 외부에서 명시적으로 지정될 때만 사용합니다.
+        # trigger_price는 손절, 기간만료 등 외부에서 명시적으로 지정될 때만 사용합니다.
         # 수익 실현의 경우, 항상 buy_price를 기준으로 계산합니다.
         is_profit_taking = "수익 실현" in order_event.get("reason_for_trade", "")
+        is_stop_loss = "손절매" in order_event.get("reason_for_trade", "")
         
+        price_basis = np.float32(0.0)
+        target_price = np.float32(0.0) # 로그 기록용
         if is_profit_taking:
-            # [수정] GPU와 동일하게 순수 목표가 계산
+            # 수익 실현은 기존 로직 유지 (Target 가격에 도달해야만 체결)
             target_price = buy_price * (np.float32(1.0) + sell_profit_rate)
+            execution_price = self._adjust_price_up(target_price)
+            if ohlc_data["high_price"] < execution_price:
+                return # 체결 실패
+            price_basis = target_price # 체결 성공 시 기준가는 target_price
         else: # 손절 또는 기간만료 청산
-            # 신호 생성 시점의 종가를 trigger_price로 사용
             target_price = np.float32(order_event.get("trigger_price"))
-        
-        execution_price = self._adjust_price_up(target_price)
+            
+            if is_stop_loss:
+                # 시나리오 A: 장중 손절가 도달
+                if ohlc_data['high_price'] >= target_price:
+                    price_basis = target_price
+                # 시나리오 B: 갭하락으로 미도달
+                else:
+                    price_basis = np.float32(ohlc_data['close_price'])
+            else: # 기간만료 청산
+                price_basis = np.float32(ohlc_data['close_price'])
 
-        # [유지] 체결 조건: 당일 high가 execution_price 이상
-        if ohlc_data["high_price"] < execution_price:
-            return
+        execution_price = self._adjust_price_up(price_basis)
 
-        # [수정] 계산 로직은 변경 없음
+        # 계산 로직은 변경 없음
         quantity = position_to_sell.quantity
         revenue = np.float32(execution_price) * np.float32(quantity)
         commission = np.floor(round(revenue * np.float32(self.sell_commission_rate), 5))

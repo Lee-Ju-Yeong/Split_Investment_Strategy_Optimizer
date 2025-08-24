@@ -54,7 +54,7 @@ additional_buy_priority_options = cp.array([priority_val], dtype=cp.int32)
 # --- [New] Load Advanced Risk Management Parameters ---
 stop_loss_rate_options = cp.array([cpu_test_params.get('stop_loss_rate', -0.15)], dtype=cp.float32)
 max_splits_limit_options = cp.array([cpu_test_params.get('max_splits_limit', 10)], dtype=cp.int32)
-max_holding_period_options = cp.array([cpu_test_params.get('max_holding_period', 90)], dtype=cp.int32)
+max_inactivity_period_options = cp.array([cpu_test_params.get('max_inactivity_period', 90)], dtype=cp.int32)
 
 
 grid = cp.meshgrid(
@@ -63,9 +63,9 @@ grid = cp.meshgrid(
     additional_buy_drop_rate_options,
     sell_profit_rate_options,
     additional_buy_priority_options,
-    stop_loss_rate_options,          # Add new param
-    max_splits_limit_options,        # Add new param
-    max_holding_period_options       # Add new param
+    stop_loss_rate_options,          
+    max_splits_limit_options,        
+    max_inactivity_period_options       
 )
 param_combinations = cp.vstack([item.flatten() for item in grid]).T
 num_combinations = param_combinations.shape[0]
