@@ -36,7 +36,7 @@ class BasicExecutionHandler:
         tick_size = self._get_tick_size(price)
         return math.ceil(price / tick_size) * tick_size
 
-    def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler'):
+    def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx: int = -1):
         ticker = order_event["ticker"]
         order_type = order_event["type"]
         current_date = order_event["date"]
@@ -51,11 +51,11 @@ class BasicExecutionHandler:
         quantity_before = sum(p.quantity for p in positions_before)
 
         if order_type == "BUY":
-            self._execute_buy(order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before)
+            self._execute_buy(order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before, current_day_idx)
         elif order_type == "SELL":
-            self._execute_sell(order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before)
+            self._execute_sell(order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before, current_day_idx)
 
-    def _execute_buy(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before):
+    def _execute_buy(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before, current_day_idx):
         ticker = order_event["ticker"]
         investment_amount = np.float32(order_event["investment_amount"])
         
@@ -96,7 +96,7 @@ class BasicExecutionHandler:
         position_to_add.buy_price = execution_price 
         position_to_add.open_date = order_event["date"]
         position_to_add.quantity = quantity
-        portfolio.add_position(ticker, position_to_add, order_event["date"])
+        portfolio.add_position(ticker, position_to_add, order_event["date"], current_day_idx)
 
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])
@@ -131,7 +131,7 @@ class BasicExecutionHandler:
         )
         portfolio.record_trade(trade)
 
-    def _execute_sell(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before):
+    def _execute_sell(self, order_event, portfolio, data_handler, ohlc_data, cash_before, quantity_before, current_day_idx):
         ticker = order_event["ticker"]
         position_to_sell = order_event["position"]
 
@@ -187,7 +187,7 @@ class BasicExecutionHandler:
         
         # 정산
         portfolio.update_cash(net_revenue)
-        portfolio.remove_position(ticker, position_to_sell, order_event["date"])
+        portfolio.remove_position(ticker, position_to_sell, order_event["date"], current_day_idx)
 
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])

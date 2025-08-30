@@ -89,17 +89,20 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
     
     query = f"""
     SELECT 
-        stock_code AS ticker, 
-        date, 
-        open_price, 
-        high_price, 
-        low_price, 
-        close_price, 
-        volume,
-        atr_14_ratio
-    FROM DailyStockPrice
-    JOIN CalculatedIndicators USING (stock_code, date)
-    WHERE date BETWEEN '{start_date}' AND '{end_date}'
+        dsp.stock_code AS ticker, 
+        dsp.date, 
+        dsp.open_price, 
+        dsp.high_price, 
+        dsp.low_price, 
+        dsp.close_price, 
+        dsp.volume,
+        ci.atr_14_ratio
+    FROM 
+        DailyStockPrice AS dsp
+    LEFT JOIN 
+        CalculatedIndicators AS ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
+    WHERE 
+        dsp.date BETWEEN '{start_date}' AND '{end_date}'
     """
     sql_engine = create_engine(engine)
     df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
@@ -198,53 +201,42 @@ if __name__ == "__main__":
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
     all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
-    
-    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
-    print("\n--- [와일드카드 선수 식별] ---")
+    # [추가] <<<<<<< 단일화된 시스템 사전 검증 블록 >>>>>>>
+    print("\n" + "="*50)
+    print("🔬 GPU KERNEL PRE-FLIGHT CHECK")
+    print("="*50)
     try:
-        wildcard_indices = [234, 267] # GPU가 2020-03-17에 매수한 종목 인덱스
-        print("GPU가 매수한 '유형 B' 와일드카드 종목의 실제 코드는 다음과 같습니다:")
-        for idx in wildcard_indices:
-            ticker_code = all_tickers[idx]
-            print(f"  - Index {idx} -> Ticker: {ticker_code}")
-    except IndexError:
-        print("오류: 인덱스가 all_tickers 리스트의 범위를 벗어났습니다.")
-    print("--------------------------------\n")
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
-    print("\n--- [검증] GPU 매수 종목 vs CPU 매수 종목 직접 비교 ---")
-    try:
-        gpu_bought_indices = [85, 134, 167]
-        cpu_bought_tickers = ['033830', '045060', '014570']
+        # 1. Ticker-Index 매핑 순서의 비결정성(Non-determinism) 검증
+        print("\n[1] Ticker-Index Mapping Order Verification")
+        print("  - Purpose: Check if the order of `all_tickers` is consistent.")
+        print("  - Method: Displaying first 5 and last 5 tickers.")
+        print("\n  [First 5 Tickers in list]")
+        for i in range(min(5, len(all_tickers))):
+            print(f"    Index {i:<3} -> {all_tickers[i]}")
+        print("\n  [Last 5 Tickers in list]")
+        if len(all_tickers) > 5:
+            for i in range(len(all_tickers) - 5, len(all_tickers)):
+                print(f"    Index {i:<3} -> {all_tickers[i]}")
 
-        print("\n[1] GPU가 매수한 인덱스의 실제 종목 코드:")
-        for index in gpu_bought_indices:
-            print(f"  - Index {index} -> Ticker: {all_tickers[index]}")
+        # 2. 핵심 종목 인덱스 추적
+        print("\n[2] Key Ticker Index Tracking")
+        print("  - Purpose: Track the indices of specific tickers involved in debugging.")
+        tickers_to_watch = ['020000', '192440', '014570', '045060', '006650', '043370']
+        ticker_to_idx_map = {ticker: i for i, ticker in enumerate(all_tickers)}
+        
+        for ticker in tickers_to_watch:
+            print(f"    - Ticker {ticker} -> Index: {ticker_to_idx_map.get(ticker, 'Not Found')}")
 
-        print("\n[2] CPU가 매수한 종목 코드의 GPU 내부 인덱스:")
-        for ticker in cpu_bought_tickers:
-            # list.index()를 사용하여 해당 ticker가 리스트의 몇 번째에 있는지 확인
-            gpu_internal_index = all_tickers.index(ticker)
-            print(f"  - Ticker {ticker} -> Index: {gpu_internal_index}")
-            
-    except (ValueError, IndexError) as e:
-        print(f"검증 중 오류 발생: {e}")
-    print("----------------------------------------------------\n")
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    except Exception as e:
+        print(f"\n[ERROR] An error occurred during pre-flight check: {e}")
+    print("="*50 + "\n")
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-    
-    # [추가] GPU가 매수한 종목 인덱스가 실제 어떤 종목 코드인지 확인하는 로그
-    print("\n--- [DEBUG] Ticker to Index Mapping Check ---")
-    try:
-        print(f"Index  82 -> Ticker: {all_tickers[82]}")
-        print(f"Index  86 -> Ticker: {all_tickers[86]}")
-        print(f"Index 263 -> Ticker: {all_tickers[263]}")
-    except IndexError:
-        print("Error: One of the indices is out of bounds for the `all_tickers` list.")
-    print("-------------------------------------------\n")
-    
+    # [핵심 수정] Ticker-Index 매핑의 일관성을 보장하기 위해 리스트를 정렬합니다.
+    all_tickers = sorted(all_tickers)
+    print("✅ Ticker list has been sorted to ensure deterministic mapping.")
+
     print(f"📊 로드된 종목 수: {len(all_tickers)}")
-    print(f"📊 실제 거래일 수: {len(trading_date_indices_gpu)}")
     
     # 2. 백테스팅 커널 실행
     print(f"\n🚀 {num_combinations}개 파라미터 조합으로 GPU 백테스팅 시작...")

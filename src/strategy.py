@@ -140,7 +140,7 @@ class MagicSplitStrategy(Strategy):
                 active_candidates.append(code)
             # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
             # '2020-03-17' 단 하루 동안만 후보군 데이터 조회 과정을 상세히 로깅
-            if current_date.strftime('%Y-%m-%d') == '2015-03-05': # [수정] 날짜 변경
+            if current_date.strftime('%Y-%m-%d') == '2020-03-30': # [수정] 날짜 변경
                 from tqdm import tqdm 
                 tqdm.write("\n" + "="*80)
                 # [수정] 로그 메시지 명확화
@@ -173,7 +173,10 @@ class MagicSplitStrategy(Strategy):
                     if pd.notna(latest_atr):
                         candidate_atrs.append({"ticker": ticker, "atr_14_ratio": latest_atr})
 
-            sorted_candidates = sorted(candidate_atrs, key=lambda x: x["atr_14_ratio"], reverse=True)
+            # GPU와 동일한 정렬 기준 적용 (1. ATR 내림차순, 2. Ticker 오름차순)
+            # Python의 stable sort 특성을 활용: 먼저 2차 기준으로 정렬 후, 1차 기준으로 정렬
+            candidates_sorted_by_ticker = sorted(candidate_atrs, key=lambda x: x["ticker"])
+            sorted_candidates = sorted(candidates_sorted_by_ticker, key=lambda x: x["atr_14_ratio"], reverse=True)
             
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
@@ -234,10 +237,11 @@ class MagicSplitStrategy(Strategy):
                 trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
 
             if not liquidate:
-                last_trade_date = portfolio.last_trade_dates.get(ticker)
-                if last_trade_date:
-                    days_inactive = np.busday_count(pd.to_datetime(last_trade_date).date(), current_date.date())
-                    if days_inactive > self.max_inactivity_period:
+                last_trade_idx = portfolio.last_trade_dates.get(ticker)
+                if last_trade_idx is not None:
+                    # GPU와 동일한 '실제 거래일' 기준으로 비활성 기간 계산
+                    days_inactive = current_day_idx - last_trade_idx
+                    if days_inactive >= self.max_inactivity_period -1: # GPU 로직과 동일하게 >= 및 -1 조건 사용
                         liquidate = True
                         reason = "매매 미발생 기간 초과"
 

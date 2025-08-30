@@ -684,12 +684,20 @@ def run_magic_split_strategy_on_gpu(
     # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
-        # --- [추가] 데이터 비교를 위한 디버깅 로그 ---
-        if current_date.strftime('%Y-%m-%d') == '2015-03-05':
+        # --- 데이터 비교를 위한 디버깅 로그 ---
+        if current_date.strftime('%Y-%m-%d') == '2020-03-30':
             print("\n" + "="*80)
             print(f"[GPU_ATR_DEBUG] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 ATR 데이터 검사")
             print("="*80)
+            # 현재 보유 및 쿨다운 상태를 확인하여 CPU의 필터링 로직을 모방
+            # sim 0을 기준으로 검사
+            sim0_positions = positions_state[0]
+            sim0_cooldown = cooldown_state[0]
             
+            is_holding_sim0 = cp.any(sim0_positions[..., 0] > 0, axis=1).get() # (num_tickers,) bool 배열
+            
+            is_in_cooldown_sim0 = (sim0_cooldown != -1) & ((i - sim0_cooldown) < cooldown_period_days)
+            is_in_cooldown_sim0 = is_in_cooldown_sim0.get() # (num_tickers,) bool 배열
             # CPU와 동일한 로직으로 그날의 후보군 리스트를 가져옴
             past_or_equal_data_for_log = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
             if not past_or_equal_data_for_log.empty:
@@ -704,6 +712,9 @@ def run_magic_split_strategy_on_gpu(
                 
                 # 후보군을 티커 순으로 정렬하여 CPU와 비교
                 for ticker in sorted(candidate_tickers_list_for_log):
+                    ticker_idx = ticker_to_idx.get(ticker)
+                    if ticker_idx is None or is_holding_sim0[ticker_idx] or is_in_cooldown_sim0[ticker_idx]:
+                        continue # 보유 중이거나 쿨다운 상태이면 건너뛰기
                     if ticker in daily_atr_series_for_log.index:
                         # cudf 시리즈에서 스칼라 값을 안전하게 추출
                         atr_value = daily_atr_series_for_log.loc[ticker]
@@ -751,27 +762,29 @@ def run_magic_split_strategy_on_gpu(
             candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
 
             # 2. 전체 데이터에서 현재 날짜 '이하'의 모든 데이터를 가져옴
-            data_up_to_current = all_data_reset_idx[all_data_reset_idx['date'] <= current_date]
+            daily_data = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
             
-            # 3. 이 중에서 주간 후보군에 해당하는 종목 데이터만 필터링
-            candidate_data_all_dates = data_up_to_current[data_up_to_current['ticker'].isin(candidate_tickers_list)]
-            if not candidate_data_all_dates.empty:
-                # 4. 각 종목(ticker)별로 가장 최신 날짜의 데이터만 남김 (asof 효과)
-                candidate_data_all_dates = candidate_data_all_dates.sort_values(by='date', ascending=False)
-                latest_candidate_data = candidate_data_all_dates.drop_duplicates(subset=['ticker'], keep='first')
+            if not daily_data.empty:
+                # 3. 현재 날짜 데이터 중에서 주간 후보군에 해당하는 종목만 필터링
+                candidate_data_today = daily_data[daily_data['ticker'].isin(candidate_tickers_list)]
                 
-                # 5. 최종 후보 종목의 ATR 값을 추출 (NaN 값은 dropna로 제거)
-                latest_candidate_data = latest_candidate_data.set_index('ticker')
-                valid_candidate_atr_series = latest_candidate_data['atr_14_ratio'].dropna()
+                # 4. 유효한 ATR 값을 가진 후보만 최종 선정 (NaN 제거)
+                candidate_data_today = candidate_data_today.set_index('ticker')
+                valid_candidate_atr_series = candidate_data_today['atr_14_ratio'].dropna()
 
                 if not valid_candidate_atr_series.empty:
-                    # 6. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
+                    # 5. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
                     valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
                     valid_atrs = valid_candidate_atr_series.values
                     
-                    candidate_indices = cp.array([ticker_to_idx.get(t, -1) for t in valid_tickers if t in ticker_to_idx], dtype=cp.int32)
-                    candidate_tickers_for_day = candidate_indices[candidate_indices != -1]
-                    candidate_atrs_for_day = cp.asarray(valid_atrs, dtype=cp.float32)
+                    # ticker_to_idx 딕셔너리에 없는 티커는 제외
+                    candidate_indices_list = [ticker_to_idx.get(t) for t in valid_tickers if t in ticker_to_idx]
+                    
+                    # 실제 ATR 값도 ticker_to_idx에 존재하는 티커에 맞춰 필터링
+                    valid_atrs_filtered = [atr for t, atr in zip(valid_tickers, valid_atrs) if t in ticker_to_idx]
+
+                    candidate_tickers_for_day = cp.array(candidate_indices_list, dtype=cp.int32)
+                    candidate_atrs_for_day = cp.asarray(valid_atrs_filtered, dtype=cp.float32)
                 else:
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
