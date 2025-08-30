@@ -237,7 +237,7 @@ class MagicSplitStrategy(Strategy):
                 trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
 
             if not liquidate:
-                last_trade_idx = portfolio.last_trade_dates.get(ticker)
+                last_trade_idx = portfolio.last_trade_day_indices.get(ticker)
                 if last_trade_idx is not None:
                     # GPU와 동일한 '실제 거래일' 기준으로 비활성 기간 계산
                     days_inactive = current_day_idx - last_trade_idx
