@@ -75,8 +75,8 @@ class Portfolio:
             self.positions[ticker] = []
         self.positions[ticker].append(position)
         self.positions[ticker].sort(key=lambda p: p.order)
-        self.last_trade_dates[ticker] = trade_date # 매수 시 마지막 거래일 갱신
-        self.last_trade_day_indices[ticker] = trade_day_idx
+        # self.last_trade_dates[ticker] = trade_date # 매수 시 마지막 거래일 갱신
+        # self.last_trade_day_indices[ticker] = trade_day_idx
 
     # --- [수정] last_trade_date 갱신/삭제 로직 추가 ---
     def remove_position(self, ticker, position_to_remove: Position, trade_date, trade_day_idx):
@@ -93,14 +93,14 @@ class Portfolio:
             if not self.positions[ticker]:
                 # 모든 포지션이 매도된 경우 (완전 청산)
                 del self.positions[ticker]
-                if ticker in self.last_trade_dates:
-                    del self.last_trade_dates[ticker] # 마지막 거래일 기록도 삭제
-                if ticker in self.last_trade_day_indices:
-                    del self.last_trade_day_indices[ticker] # 마지막 거래일 기록도 삭제
-            else:
-                # 일부 포지션만 매도된 경우 (수익 실현)
-                self.last_trade_dates[ticker] = trade_date # 마지막 거래일 갱신
-                self.last_trade_day_indices[ticker] = trade_day_idx
+                # if ticker in self.last_trade_dates:
+                #     del self.last_trade_dates[ticker] # 마지막 거래일 기록도 삭제
+                # # if ticker in self.last_trade_day_indices:
+                # #     del self.last_trade_day_indices[ticker] # 마지막 거래일 기록도 삭제
+            # else:
+                # # 일부 포지션만 매도된 경우 (수익 실현)
+                # self.last_trade_dates[ticker] = trade_date # 마지막 거래일 갱신
+                # self.last_trade_day_indices[ticker] = trade_day_idx
 
     def get_total_value(self, evaluation_date, data_handler: 'DataHandler'):
         total_market_value = np.float32(0.0)

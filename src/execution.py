@@ -36,7 +36,7 @@ class BasicExecutionHandler:
         tick_size = self._get_tick_size(price)
         return math.ceil(price / tick_size) * tick_size
 
-    def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx: int = -1):
+    def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx):
         ticker = order_event["ticker"]
         order_type = order_event["type"]
         current_date = order_event["date"]
@@ -97,7 +97,9 @@ class BasicExecutionHandler:
         position_to_add.open_date = order_event["date"]
         position_to_add.quantity = quantity
         portfolio.add_position(ticker, position_to_add, order_event["date"], current_day_idx)
-
+        # 매수 거래 성공 시, 마지막 거래일 인덱스를 업데이트합니다.
+        portfolio.last_trade_dates[ticker] = order_event["date"]
+        portfolio.last_trade_day_indices[ticker] = current_day_idx
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])
         quantity_after = sum(p.quantity for p in positions_after)
@@ -188,7 +190,9 @@ class BasicExecutionHandler:
         # 정산
         portfolio.update_cash(net_revenue)
         portfolio.remove_position(ticker, position_to_sell, order_event["date"], current_day_idx)
-
+        # 매도 거래 성공 시, 마지막 거래일 인덱스를 업데이트합니다.
+        portfolio.last_trade_dates[ticker] = order_event["date"] # 부분 매도든 완전 청산이든 마지막 거래일은 오늘임
+        portfolio.last_trade_day_indices[ticker] = current_day_idx
         cash_after = portfolio.cash
         positions_after = portfolio.positions.get(ticker, [])
         quantity_after = sum(p.quantity for p in positions_after)

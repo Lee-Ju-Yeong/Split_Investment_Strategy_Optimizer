@@ -134,7 +134,7 @@ def _process_sell_signals_gpu(
     # 비활성 기간 조건
     has_traded_before = last_trade_day_idx_state != -1
     days_inactive = current_day_idx - last_trade_day_idx_state
-    stock_inactivity_mask = (days_inactive >= max_inactivity_periods - 1) & has_traded_before
+    stock_inactivity_mask = (days_inactive >= max_inactivity_periods - 1) & has_traded_before & has_any_position
     stock_liquidation_mask_base = stock_stop_loss_mask | stock_inactivity_mask
     stock_liquidation_mask = stock_liquidation_mask_base
     #  현실적인 손절매 체결 로직을 적용하여 최종 청산 마스크를 결정
@@ -684,64 +684,7 @@ def run_magic_split_strategy_on_gpu(
     # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
-        # --- 데이터 비교를 위한 디버깅 로그 ---
-        if current_date.strftime('%Y-%m-%d') == '2020-03-30':
-            print("\n" + "="*80)
-            print(f"[GPU_ATR_DEBUG] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 ATR 데이터 검사")
-            print("="*80)
-            # 현재 보유 및 쿨다운 상태를 확인하여 CPU의 필터링 로직을 모방
-            # sim 0을 기준으로 검사
-            sim0_positions = positions_state[0]
-            sim0_cooldown = cooldown_state[0]
-            
-            is_holding_sim0 = cp.any(sim0_positions[..., 0] > 0, axis=1).get() # (num_tickers,) bool 배열
-            
-            is_in_cooldown_sim0 = (sim0_cooldown != -1) & ((i - sim0_cooldown) < cooldown_period_days)
-            is_in_cooldown_sim0 = is_in_cooldown_sim0.get() # (num_tickers,) bool 배열
-            # CPU와 동일한 로직으로 그날의 후보군 리스트를 가져옴
-            past_or_equal_data_for_log = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
-            if not past_or_equal_data_for_log.empty:
-                latest_filter_date_for_log = past_or_equal_data_for_log['date'].max()
-                candidates_of_the_week_for_log = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date_for_log]
-                
-                # 주간 필터링된 모든 종목 리스트
-                candidate_tickers_list_for_log = candidates_of_the_week_for_log['ticker'].to_arrow().to_pylist()
-                
-                # 생성된 전체 데이터셋에서 오늘 날짜의 ATR 데이터만 추출
-                daily_atr_series_for_log = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['atr_14_ratio']
-                
-                # 후보군을 티커 순으로 정렬하여 CPU와 비교
-                for ticker in sorted(candidate_tickers_list_for_log):
-                    ticker_idx = ticker_to_idx.get(ticker)
-                    if ticker_idx is None or is_holding_sim0[ticker_idx] or is_in_cooldown_sim0[ticker_idx]:
-                        continue # 보유 중이거나 쿨다운 상태이면 건너뛰기
-                    if ticker in daily_atr_series_for_log.index:
-                        # cudf 시리즈에서 스칼라 값을 안전하게 추출
-                        atr_value = daily_atr_series_for_log.loc[ticker]
-                        # .item()은 cupy/numpy에서, .iloc[0]은 cudf에서 스칼라 값을 가져오는 일반적인 방법
-                        atr_value_scalar = atr_value.iloc[0] if hasattr(atr_value, 'iloc') and not atr_value.empty else atr_value
-                        print(f"  - Ticker: {ticker} | ATR: {atr_value_scalar:.4f}")
-                    else:
-                        print(f"  - Ticker: {ticker} | 결과: [데이터 없음]")
-            print("="*80 + "\n")
-        debug_ticker = '013570'
-        if debug_ticker in ticker_to_idx:
-            debug_ticker_idx = ticker_to_idx[debug_ticker]
-            daily_df = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
-            
-            # 해당 날짜에 해당 티커 데이터가 있는지 확인
-            ticker_data = daily_df[daily_df['ticker'] == debug_ticker]
-            if not ticker_data.empty:
-                # cudf.Series에서 스칼라 값을 안전하게 추출
-                o_price = ticker_data['open_price'].iloc[0]
-                h_price = ticker_data['high_price'].iloc[0]
-                l_price = ticker_data['low_price'].iloc[0]
-                c_price = ticker_data['close_price'].iloc[0]
-                print(f"[GPU_DATA_DEBUG] {current_date.strftime('%Y-%m-%d')} | {debug_ticker} | "
-                      f"Open={o_price}, High={h_price}, Low={l_price}, Close={c_price}")
-        if debug_mode and (i % 20 == 0 or i == num_trading_days - 1):
-            print(f"\n--- Day {i+1}/{num_trading_days}: {current_date.strftime('%Y-%m-%d')} ---")
-
+    
         # 2-1. 현재 날짜의 가격 및 후보 종목 데이터 준비
         # daily_prices_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['close_price']
         # current_prices_gpu = cp.asarray(daily_prices_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
@@ -814,7 +757,23 @@ def run_magic_split_strategy_on_gpu(
             all_tickers=all_tickers,
             trading_dates_pd_cpu=trading_dates_pd_cpu
         )
-        
+        # [추가] '유령 매도' 버그 집중 디버깅 (처리 후)
+        if i in debug_day_indices:
+            if ticker_053260 in ticker_to_idx:
+                ticker_idx = ticker_to_idx[ticker_053260]
+                
+                # --- 매도 처리 후 상태 ---
+                pos_state_after = positions_state[0, ticker_idx, :, :].get()
+                print("\n  --- AFTER _process_sell_signals_gpu ---")
+                for split_idx in range(pos_state_after.shape[0]):
+                    qty = pos_state_after[split_idx, 0]
+                    price = pos_state_after[split_idx, 1]
+                    if qty > 0:
+                        print(f"    - Split {split_idx}: Qty={qty}, BuyPrice={price}")
+                if not cp.any(positions_state[0, ticker_idx, :, 0] > 0):
+                    print("    - No active positions. (Correctly sold)")
+                print("="*50 + "\n")
+
         # 확보된 자원으로 신규 종목 진입을 시도합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,

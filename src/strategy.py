@@ -138,33 +138,6 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
-            # [추가] <<<<<<< 이 블록을 추가해주세요 >>>>>>>
-            # '2020-03-17' 단 하루 동안만 후보군 데이터 조회 과정을 상세히 로깅
-            if current_date.strftime('%Y-%m-%d') == '2020-03-30': # [수정] 날짜 변경
-                from tqdm import tqdm 
-                tqdm.write("\n" + "="*80)
-                # [수정] 로그 메시지 명확화
-                tqdm.write(f"[CPU_ATR_DEBUG] {current_date.strftime('%Y-%m-%d')} 신규 매수 후보군 ATR 데이터 검사")
-                tqdm.write("="*80)
-                # [추가] 후보군을 티커 순으로 정렬하여 GPU와 비교 용이하게 만듦
-                for ticker_to_check in sorted(active_candidates):
-                    data_row = data_handler.get_ohlc_data_on_date(current_date, ticker_to_check, self.backtest_start_date, self.backtest_end_date)
-                    
-                    if data_row is None:
-                        # [수정] 로그 메시지 포맷 통일
-                        log_msg = f"  - Ticker: {ticker_to_check} | 결과: [데이터 없음]"
-                    else:
-                        atr_value = data_row.get('atr_14_ratio', 'N/A')
-                        actual_date_str = data_row.name.strftime('%Y-%m-%d')
-                        if actual_date_str != current_date.strftime('%Y-%m-%d'):
-                            # [수정] 로그 메시지 포맷 통일
-                            log_msg = f"  - Ticker: {ticker_to_check} | ATR: {atr_value:.4f} (주의: {actual_date_str}자 데이터 사용)"
-                        else:
-                            # [수정] 로그 메시지 포맷 통일
-                            log_msg = f"  - Ticker: {ticker_to_check} | ATR: {atr_value:.4f}"
-                    tqdm.write(log_msg)
-                tqdm.write("="*80 + "\n")
-            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             candidate_atrs = []
             for ticker in active_candidates:
                 stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
@@ -212,7 +185,6 @@ class MagicSplitStrategy(Strategy):
     def generate_sell_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         signals = []
-
         for ticker in list(portfolio.positions.keys()):
             stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
             if stock_data is None or stock_data.empty or current_date not in stock_data.index:
@@ -241,6 +213,7 @@ class MagicSplitStrategy(Strategy):
                 if last_trade_idx is not None:
                     # GPU와 동일한 '실제 거래일' 기준으로 비활성 기간 계산
                     days_inactive = current_day_idx - last_trade_idx
+                    
                     if days_inactive >= self.max_inactivity_period -1: # GPU 로직과 동일하게 >= 및 -1 조건 사용
                         liquidate = True
                         reason = "매매 미발생 기간 초과"
