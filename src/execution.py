@@ -34,7 +34,9 @@ class BasicExecutionHandler:
 
     def _adjust_price_up(self, price):
         tick_size = self._get_tick_size(price)
-        return math.ceil(price / tick_size) * tick_size
+        divided = price / tick_size
+        rounded = round(divided, 5)
+        return math.ceil(rounded) * tick_size
 
     def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx):
         ticker = order_event["ticker"]
@@ -78,11 +80,11 @@ class BasicExecutionHandler:
         execution_price = self._adjust_price_up(price_basis)
         # [추가] 최종 체결가를 기준으로 수량 계산 (핵심 변경)
         if execution_price <= 0: return
-        quantity = np.int32(math.floor(round(investment_amount / execution_price, 5)))
+        quantity = np.int32(math.floor(investment_amount / execution_price))
         if quantity <= 0: return
         
         cost = np.float32(execution_price) * np.float32(quantity)
-        commission = np.floor(round(cost * np.float32(self.buy_commission_rate), 5))
+        commission = np.floor(cost * np.float32(self.buy_commission_rate))
         total_cost = cost + commission
         print(
         f"[CPU_BUY_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
@@ -173,9 +175,16 @@ class BasicExecutionHandler:
         # 계산 로직은 변경 없음
         quantity = position_to_sell.quantity
         revenue = np.float32(execution_price) * np.float32(quantity)
-        commission = np.floor(round(revenue * np.float32(self.sell_commission_rate), 5))
-        tax = np.floor(round(revenue * np.float32(self.sell_tax_rate), 5))
-        net_revenue = revenue - commission - tax
+        #  GPU와 계산 방식 동기화 (float32 타입 유지)
+        cost_factor = np.float32(1.0 - self.sell_commission_rate - self.sell_tax_rate)
+        net_revenue = np.floor(revenue * cost_factor)
+        # 실제 수수료와 세금은 정보 기록을 위해 역산합니다.
+        total_deduction = revenue - net_revenue
+        # 비율에 따라 배분하여 기록
+        commission_ratio = np.float32(self.sell_commission_rate / (self.sell_commission_rate + self.sell_tax_rate))
+        commission = np.floor(total_deduction * commission_ratio)
+        tax = total_deduction - commission
+  
         print(
         f"[CPU_SELL_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
         f"Qty: {quantity} * ExecPrice: {execution_price:,.0f} = Revenue: {revenue:,.0f}"
