@@ -1,6 +1,7 @@
 # data_handler.py (수정된 최종본)
 
 import pandas as pd
+import warnings
 from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
@@ -26,8 +27,10 @@ class DataHandler:
         print("CompanyInfo 캐시 로딩 중...")
         conn = self.get_connection()
         try:
-            # pymysql은 read_sql_table을 지원하지 않으므로 read_sql_query 사용
-            df = pd.read_sql_query('SELECT stock_code, company_name FROM CompanyInfo', conn)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                # pymysql은 read_sql_table을 지원하지 않으므로 read_sql_query 사용
+                df = pd.read_sql_query('SELECT stock_code, company_name FROM CompanyInfo', conn)
             if not df.empty:
                 STOCK_CODE_TO_NAME_CACHE = pd.Series(df.company_name.values, index=df.stock_code).to_dict()
                 print(f"CompanyInfo 캐시 로드 완료: {len(STOCK_CODE_TO_NAME_CACHE)}개 종목.")
@@ -51,8 +54,10 @@ class DataHandler:
         conn = self.get_connection()
         try:
             query = "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date"
-            # pd.read_sql 사용 시 날짜 파싱이 더 안정적
-            df = pd.read_sql(query, conn, params=(start_date, end_date))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                # pd.read_sql 사용 시 날짜 파싱이 더 안정적
+                df = pd.read_sql(query, conn, params=(start_date, end_date))
             return pd.to_datetime(df['date']).tolist()
         finally:
             conn.close()
@@ -73,7 +78,9 @@ class DataHandler:
             ORDER BY dsp.date ASC
         """
         try:
-            df = pd.read_sql(query, conn, params=(ticker, extended_start_date, end_date))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=(ticker, extended_start_date, end_date))
             if df.empty:
                 return df
 
@@ -124,7 +131,9 @@ class DataHandler:
             WHERE filter_date = (SELECT MAX(filter_date) FROM WeeklyFilteredStocks WHERE filter_date < %s)
         """
         try:
-            df = pd.read_sql(query, conn, params=[date_str])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=[date_str])
             return df['stock_code'].tolist()
         finally:
             conn.close()

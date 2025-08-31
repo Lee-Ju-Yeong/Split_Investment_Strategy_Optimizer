@@ -1,7 +1,10 @@
-# portfolio.py (수정 필수!)
+# portfolio.py (수정 완료)
 
 import pandas as pd
 import numpy as np
+import uuid # 고유 ID 생성을 위해 추가
+
+import uuid # 고유 ID 생성을 위해 추가
 
 # DataHandler 타입 힌트를 위해 추가 (실제 임포트는 아님)
 from typing import TYPE_CHECKING
@@ -9,7 +12,9 @@ if TYPE_CHECKING:
     from .data_handler import DataHandler
 
 class Position:
+    # --- [수정] entry_date 제거 ---
     def __init__(self, buy_price, quantity, order, additional_buy_drop_rate, sell_profit_rate):
+        self.position_id = str(uuid.uuid4())
         self.buy_price = buy_price
         self.quantity = quantity
         self.order = order
@@ -50,41 +55,62 @@ class Trade:
 
 class Portfolio:
     def __init__(self, initial_cash, start_date, end_date):
-        self.initial_cash = initial_cash
-        self.cash = initial_cash
+        self.initial_cash = np.float32(initial_cash)
+        self.cash = np.float32(initial_cash)
         self.start_date = start_date
         self.end_date = end_date
         self.positions = {}
+        # --- [추가] 마지막 거래일 추적용 딕셔너리 ---
+        self.last_trade_dates = {}
+        self.last_trade_day_indices = {}
         self.trade_history = []
-        self.daily_snapshot_history = [] # daily_value_history에서 이름 변경 및 확장
+        self.daily_snapshot_history = []
 
     def update_cash(self, amount):
         self.cash += amount
 
-    def add_position(self, ticker, position: Position):
+    # --- [수정] last_trade_date 갱신 로직 추가 ---
+    def add_position(self, ticker, position: Position, trade_date,trade_day_idx):
         if ticker not in self.positions:
             self.positions[ticker] = []
         self.positions[ticker].append(position)
         self.positions[ticker].sort(key=lambda p: p.order)
+        # self.last_trade_dates[ticker] = trade_date # 매수 시 마지막 거래일 갱신
+        # self.last_trade_day_indices[ticker] = trade_day_idx
 
-    def remove_position(self, ticker, position_to_remove: Position):
+    # --- [수정] last_trade_date 갱신/삭제 로직 추가 ---
+    def remove_position(self, ticker, position_to_remove: Position, trade_date, trade_day_idx):
         if ticker in self.positions:
-            try:
-                self.positions[ticker].remove(position_to_remove)
-                if not self.positions[ticker]:
-                    del self.positions[ticker]
-            except ValueError:
-                print(f"Warning: 제거하려는 포지션을 {ticker} 종목에서 찾을 수 없습니다.")
+            initial_len = len(self.positions[ticker])
+            self.positions[ticker] = [
+                p for p in self.positions[ticker] 
+                if p.position_id != position_to_remove.position_id
+            ]
+            
+            if len(self.positions[ticker]) == initial_len:
+                 print(f"Warning: 제거하려는 포지션(ID: {position_to_remove.position_id})을 {ticker} 종목에서 찾을 수 없습니다.")
 
-    def get_total_value(self, current_date, data_handler: 'DataHandler'):
-        total_market_value = 0
+            if not self.positions[ticker]:
+                # 모든 포지션이 매도된 경우 (완전 청산)
+                del self.positions[ticker]
+                # if ticker in self.last_trade_dates:
+                #     del self.last_trade_dates[ticker] # 마지막 거래일 기록도 삭제
+                # # if ticker in self.last_trade_day_indices:
+                # #     del self.last_trade_day_indices[ticker] # 마지막 거래일 기록도 삭제
+            # else:
+                # # 일부 포지션만 매도된 경우 (수익 실현)
+                # self.last_trade_dates[ticker] = trade_date # 마지막 거래일 갱신
+                # self.last_trade_day_indices[ticker] = trade_day_idx
+
+    def get_total_value(self, evaluation_date, data_handler: 'DataHandler'):
+        total_market_value = np.float32(0.0)
         for ticker, positions_list in self.positions.items():
-            current_price = data_handler.get_latest_price(current_date, ticker, self.start_date, self.end_date)
-            if current_price is not None and not np.isnan(current_price):
+            price_on_eval_date = data_handler.get_latest_price(evaluation_date, ticker, self.start_date, self.end_date)
+            if price_on_eval_date is not None and not np.isnan(price_on_eval_date):
+                price_f32 = np.float32(price_on_eval_date)
                 for position in positions_list:
-                    total_market_value += position.quantity * current_price
-        
-        return self.cash + total_market_value
+                    total_market_value += np.float32(position.quantity) * price_f32
+        return np.float32(self.cash) + total_market_value
 
     def record_trade(self, trade: Trade):
         self.trade_history.append(trade)
