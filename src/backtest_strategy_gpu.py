@@ -546,14 +546,24 @@ def _process_new_entry_signals_gpu(
         # 각 시뮬레이션의 k번째 우선순위 후보를 가리키는 고유 인덱스
         flat_indices_k = cp.arange(num_simulations) * num_candidates + candidate_idx_k
 
-        # 이 후보들이 여전히 매수 가능한지 '현재 시점'의 자본과 슬롯으로 다시 확인
-        can_afford = temp_capital >= total_costs[flat_indices_k]
+        # 이 후보들이 매수 가능한지 판단할 때 '자금 관리 원칙'을 추가합니다.
+        
+        # 원칙 1: (CPU와 동일) 전략이 요구하는 이상적인 투자금이 현재 가용 현금보다 많으면 매수하지 않습니다.
+        # flat_indices_k에 해당하는 시뮬레이션들의 'investment_per_order' 값을 가져옵니다.
+        # portfolio_state의 shape은 (num_sim, 2) 이므로, arange로 sim_indices를 만들어 접근합니다.
+        sim_indices_k = cp.arange(num_simulations)
+        investment_per_order_k = portfolio_state[sim_indices_k, 1]
+        has_sufficient_cash_for_budget = temp_capital >= investment_per_order_k
+
+        # 원칙 2: (기존 로직) 실제 매수 비용을 감당할 수 있어야 합니다.
+        can_afford_actual_cost = temp_capital >= total_costs[flat_indices_k]
+        
+        # 원칙 3: (기존 로직) 포트폴리오에 빈 슬롯이 있어야 합니다.
         has_slot = temp_available_slots > 0
         
-        # initial_buy_mask: 보유/쿨다운 등 기본 조건
-        # can_afford / has_slot: 동적으로 변하는 자원 조건
-        still_valid_mask = initial_buy_mask[flat_indices_k] & can_afford & has_slot
-        
+        # 모든 원칙을 결합하여 최종 매수 가능 여부를 결정합니다.
+        still_valid_mask = initial_buy_mask[flat_indices_k] & has_sufficient_cash_for_budget & can_afford_actual_cost & has_slot
+
         if not cp.any(still_valid_mask):
             continue
             
@@ -757,23 +767,6 @@ def run_magic_split_strategy_on_gpu(
             all_tickers=all_tickers,
             trading_dates_pd_cpu=trading_dates_pd_cpu
         )
-        # [추가] '유령 매도' 버그 집중 디버깅 (처리 후)
-        if i in debug_day_indices:
-            if ticker_053260 in ticker_to_idx:
-                ticker_idx = ticker_to_idx[ticker_053260]
-                
-                # --- 매도 처리 후 상태 ---
-                pos_state_after = positions_state[0, ticker_idx, :, :].get()
-                print("\n  --- AFTER _process_sell_signals_gpu ---")
-                for split_idx in range(pos_state_after.shape[0]):
-                    qty = pos_state_after[split_idx, 0]
-                    price = pos_state_after[split_idx, 1]
-                    if qty > 0:
-                        print(f"    - Split {split_idx}: Qty={qty}, BuyPrice={price}")
-                if not cp.any(positions_state[0, ticker_idx, :, 0] > 0):
-                    print("    - No active positions. (Correctly sold)")
-                print("="*50 + "\n")
-
         # 확보된 자원으로 신규 종목 진입을 시도합니다.
         portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,

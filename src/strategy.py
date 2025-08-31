@@ -22,14 +22,20 @@ class Position:
 
 class Strategy(ABC):
     @abstractmethod
-    def generate_sell_signals(self, current_date, portfolio, data_handler):
+    def generate_sell_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None): 
         """매도 관련 신호(수익 실현, 손절 등)를 생성합니다."""
         raise NotImplementedError("generate_sell_signals() 메소드를 구현해야 합니다.")
 
+    # 신규 진입과 추가 매수를 위한 두 개의 구체적인 추상 메소드를 정의합니다.
     @abstractmethod
-    def generate_buy_signals(self, current_date, portfolio, data_handler):
-        """매수 관련 신호(신규 진입, 추가 매수)를 생성합니다."""
-        raise NotImplementedError("generate_buy_signals() 메소드를 구현해야 합니다.")
+    def generate_new_entry_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        """신규 종목 진입 신호를 생성합니다."""
+        raise NotImplementedError("generate_new_entry_signals() 메소드를 구현해야 합니다.")
+
+    @abstractmethod
+    def generate_additional_buy_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        """기존 보유 종목의 추가 매수 신호를 생성합니다."""
+        raise NotImplementedError("generate_additional_buy_signals() 메소드를 구현해야 합니다.")
 
 class MagicSplitStrategy(Strategy):
     def __init__(
@@ -77,43 +83,14 @@ class MagicSplitStrategy(Strategy):
             
             self.investment_per_order = np.float32(total_portfolio_value) * np.float32(self.order_investment_ratio)
             self.previous_month = current_month
-
-    # [변경] 매수 신호만 생성하는 함수
-    def generate_buy_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
+    # 신규 진입 신호만 생성하는 함수
+    def generate_new_entry_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        # 각 신호 생성 함수가 독립적으로 호출되므로, 투자금 계산 로직은 각 함수에 포함되어야 합니다.
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
 
-        # 1. 추가 매수 신호 생성
-        for ticker in list(portfolio.positions.keys()):
-            # 당일 매도된 종목은 추가 매수 안 함 (cooldown_tracker에 오늘 날짜가 기록되었는지 확인)
-            if self.cooldown_tracker.get(ticker) == current_day_idx:
-                continue
-
-            stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
-            if stock_data is None or stock_data.empty or current_date not in stock_data.index:
-                continue
-            # [추가] "1차 포지션 존재" 규칙: 1차 포지션이 없으면 추가 매수 불가
-            positions = portfolio.positions[ticker]
-            if not any(p.order == 1 for p in positions):
-                continue
-
-            if len(positions) >= self.max_splits_limit:
-                continue    
-            current_close = stock_data.loc[current_date, "close_price"]
-            current_low = stock_data.loc[current_date, "low_price"]
-            if current_close <= 0: continue
-
-            last_pos = portfolio.positions[ticker][-1]
-            buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
-            if current_low <= buy_trigger_price:
-                if self.investment_per_order > 0:
-                    new_pos = Position(current_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_close) / last_pos.buy_price)
-                    buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
-
-        # 2. 신규 매수 신호 생성
+        # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
-        # 백테스트 시작 후 15일 동안만 슬롯 상태를 로깅
         if (current_date - self.backtest_start_date).days < 15:
             from tqdm import tqdm
             log_msg = (
@@ -123,13 +100,13 @@ class MagicSplitStrategy(Strategy):
                 f"AvailableSlots: {available_slots}"
             )
             tqdm.write(log_msg)
-        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        
         if available_slots > 0:
             candidate_codes = data_handler.get_filtered_stock_codes(current_date)
             
             active_candidates = []
             for code in candidate_codes:
-                # [수정] 쿨다운 체크 로직을 GPU와 동일하게 거래일 인덱스 차이로 변경
+                # 쿨다운 체크 로직을 GPU와 동일하게 거래일 인덱스 차이로 
                 is_in_cooldown = False
                 if self.cooldown_tracker.get(code) is not None:
                     if (current_day_idx - self.cooldown_tracker.get(code)) < self.cooldown_period_days:
@@ -138,6 +115,7 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
+            
             candidate_atrs = []
             for ticker in active_candidates:
                 stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
@@ -145,12 +123,11 @@ class MagicSplitStrategy(Strategy):
                     latest_atr = stock_data.loc[current_date, "atr_14_ratio"]
                     if pd.notna(latest_atr):
                         candidate_atrs.append({"ticker": ticker, "atr_14_ratio": latest_atr})
-
+                        
             # GPU와 동일한 정렬 기준 적용 (1. ATR 내림차순, 2. Ticker 오름차순)
             # Python의 stable sort 특성을 활용: 먼저 2차 기준으로 정렬 후, 1차 기준으로 정렬
             candidates_sorted_by_ticker = sorted(candidate_atrs, key=lambda x: x["ticker"])
             sorted_candidates = sorted(candidates_sorted_by_ticker, key=lambda x: x["atr_14_ratio"], reverse=True)
-            
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
             for candidate in sorted_candidates:
@@ -159,15 +136,12 @@ class MagicSplitStrategy(Strategy):
                 stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
                 current_price = stock_data.loc[current_date, "close_price"]
                 if current_price > 0:
-                    # [수정] 수량을 미리 계산하지 않고, 투자금을 직접 전달
                     if self.investment_per_order > 0:
-                        # [수정] Position 객체 생성 시 quantity를 0으로 초기화
                         new_pos = Position(current_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                        # [수정] quantity 대신 investment_per_order를 전달
                         buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 1, -candidate["atr_14_ratio"], "신규 진입", current_price))
                         num_new_entries += 1
 
-        # 모든 매수 신호를 우선순위에 따라 정렬
+        # 신규 매수 신호 내에서의 정렬
         buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))
         
         for signal in buy_signals:
@@ -175,6 +149,59 @@ class MagicSplitStrategy(Strategy):
             signal["end_date"] = self.backtest_end_date
             
         return buy_signals
+
+    # 추가 매수 신호만 생성하는 함수
+    def generate_additional_buy_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        # 투자금 재계산은 신규 매수에서 이미 했을 수 있지만, 이 함수가 단독으로 사용될 수도 있으므로 여기서도 호출합니다.
+        self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
+        buy_signals = []
+
+        # 추가 매수 신호 생성 로직
+        for ticker in list(portfolio.positions.keys()):
+            # 당일 매도된 종목은 추가 매수 안 함
+            if self.cooldown_tracker.get(ticker) == current_day_idx:
+                continue
+            
+            positions = portfolio.positions[ticker]
+            # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
+            # 이 종목의 첫 번째 매수(order 1)가 오늘 이전에 이루어졌는지 확인합니다.
+            first_position = next((p for p in positions if p.order == 1), None)
+            if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
+                continue
+            
+            stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
+            if stock_data is None or stock_data.empty or current_date not in stock_data.index:
+                continue
+
+            if not any(p.order == 1 for p in positions):
+                continue
+
+            if len(positions) >= self.max_splits_limit:
+                continue    
+            
+            current_close = stock_data.loc[current_date, "close_price"]
+            current_low = stock_data.loc[current_date, "low_price"]
+            if current_close <= 0: continue
+
+            last_pos = portfolio.positions[ticker][-1]
+            buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
+            
+            if current_low <= buy_trigger_price:
+                if self.investment_per_order > 0:
+                    new_pos = Position(current_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_close) / last_pos.buy_price)
+                    buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
+
+        # 추가 매수 신호 내에서의 정렬
+        buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))
+
+        for signal in buy_signals:
+            signal["start_date"] = self.backtest_start_date
+            signal["end_date"] = self.backtest_end_date
+
+        return buy_signals
+
+    
 
 
     def _create_sell_signal(self, date, ticker, position, reason, trigger_price):
@@ -219,11 +246,16 @@ class MagicSplitStrategy(Strategy):
                         reason = "매매 미발생 기간 초과"
 
             if liquidate:
+                # 임시 객체 생성 대신, 실제 보유 중인 모든 포지션에 대해 매도 신호를 생성합니다.
+                # 이는 execution 단계에서 올바른 position_id를 참조하여 포지션을 제거할 수 있도록 보장합니다.
                 for p in positions:
                     signals.append(self._create_sell_signal(current_date, ticker, p, reason, trigger_price))
-                self.cooldown_tracker[ticker] = current_day_idx
-                continue 
-
+                
+                # 신호가 하나라도 생성되었다면 쿨다운을 설정합니다.
+                if positions:
+                    self.cooldown_tracker[ticker] = current_day_idx
+                
+                continue # 이 종목에 대한 다른 매도(수익실현) 검사는 건너뜁니다.
             # reversed()를 사용하여 가장 최근 매수 포지션부터 순회
             for p in reversed(positions):
                 # [규칙] 당일 매수한 포지션은 익절 대상에서 제외

@@ -48,10 +48,16 @@ class BacktestEngine:
                 for signal in sell_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler, i)
 
-            # 단계 1-2: 매수 신호 생성 및 즉시 실행 (매도가 반영된 최신 포트폴리오 기준)
-            buy_signals = self.strategy.generate_buy_signals(current_date, self.portfolio, self.data_handler,trading_dates, i)
-            if buy_signals:
-                for signal in buy_signals:
+            # 단계 1-2: 매수 신호를 '신규 진입' -> '추가 매수' 순으로 분리하여 실행
+            # (1) 신규 진입 신호 생성 및 실행
+            new_entry_signals = self.strategy.generate_new_entry_signals(current_date, self.portfolio, self.data_handler, trading_dates, i)
+            if new_entry_signals:
+                for signal in new_entry_signals:
+                    self.execution_handler.execute_order(signal, self.portfolio, self.data_handler, i)
+            # (2) 추가 매수 신호 생성 및 실행 (신규 진입으로 자금/슬롯이 소진된 후의 상태 기준)
+            additional_buy_signals = self.strategy.generate_additional_buy_signals(current_date, self.portfolio, self.data_handler, trading_dates, i)
+            if additional_buy_signals:
+                for signal in additional_buy_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler, i)
 
             # --- 2. 일별 포트폴리오 가치 및 상태 기록 ---
