@@ -41,8 +41,8 @@ os.makedirs(PROCESSED_DATA_FOLDER, exist_ok=True) # 폴더 없으면 생성
 
 # --- 실행 플래그 ---
 USE_GPU = False                       # True로 설정 시 지표 계산에 GPU를 사용
-UPDATE_COMPANY_INFO_DB = False       # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
-PROCESS_HTS_CSV_FILES = False      # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
+UPDATE_COMPANY_INFO_DB = True       # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
+PROCESS_HTS_CSV_FILES = True      # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
 LOAD_FILTERED_STOCKS_CSV = True    # True로 설정 시 최종 필터링된 CSV를 DB에 적재/업데이트
 COLLECT_OHLCV_DATA = True          # True로 설정 시 OHLCV 데이터 수집 및 DB 저장 실행
 FORCE_RECOLLECT_OHLCV = False      # True로 설정 시, 기존 OHLCV 데이터를 모두 지우고 처음부터 다시 수집
