@@ -1,6 +1,9 @@
 # main_backtest.py (수정된 최종본)
 
 import warnings
+# pandas UserWarning을 다른 모듈 임포트 전에 필터링합니다.
+warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
+
 import pandas as pd
 import os
 from datetime import datetime
@@ -13,8 +16,6 @@ from .backtester import BacktestEngine
 from .performance_analyzer import PerformanceAnalyzer 
 from .config_loader import load_config
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
-
-warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
 def run_backtest_from_config(config: dict) -> dict:
     try:
