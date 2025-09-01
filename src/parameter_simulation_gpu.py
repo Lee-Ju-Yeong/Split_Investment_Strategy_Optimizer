@@ -30,16 +30,16 @@ db_pass_encoded = urllib.parse.quote_plus(db_config["password"])
 db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_config['host']}/{db_config['database']}"
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([10], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.03], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.03, ], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.03], dtype=cp.float32)
-additional_buy_priority_options = cp.array([0, 1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
+max_stocks_options = cp.array([24], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.02,0.15,0.25], dtype=cp.float32)
+additional_buy_drop_rate_options = cp.array([0.06,0.07,0.08 ], dtype=cp.float32)
+sell_profit_rate_options = cp.array([0.16,0.15,0.14,0.13], dtype=cp.float32)
+additional_buy_priority_options = cp.array([0], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # --- [New] Define search space for advanced risk parameters ---
-stop_loss_rate_options = cp.array([-0.40,-0.50, -0.60], dtype=cp.float32)
-max_splits_limit_options = cp.array([10], dtype=cp.int32)
-max_inactivity_period_options = cp.array([60, 120], dtype=cp.int32)
+stop_loss_rate_options = cp.array([-0.40,-0.50, -0.55,-0.6], dtype=cp.float32)
+max_splits_limit_options = cp.array([10,15,20], dtype=cp.int32)
+max_inactivity_period_options = cp.array([30,45,60], dtype=cp.int32)
 
 grid = cp.meshgrid(
     max_stocks_options,
@@ -112,7 +112,7 @@ def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers,
     return daily_portfolio_values
 
 # 4. Analysis and Result Saving
-def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_dates_pd):
+def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_dates_pd, save_to_file=True):
     print("\n--- 🔬 Analyzing detailed performance metrics ---")
     start_time = time.time()
     param_combinations_cpu = param_combinations_gpu.get()
@@ -134,6 +134,10 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
 
     full_results_df.replace([np.inf, -np.inf], np.nan, inplace=True)
     sorted_df = full_results_df.sort_values(by='calmar_ratio', ascending=False).dropna(subset=['calmar_ratio'])
+    
+    # [추가] 최적 파라미터를 딕셔너리로 반환하는 기능 추가
+    best_params_series = sorted_df.iloc[0]
+    best_params_dict = best_params_series.to_dict()
 
     print("\n🏆 Top 10 Performing Parameter Combinations (by Calmar Ratio):")
     # [수정] 터미널 출력에 max_inactivity_period 포함
@@ -156,50 +160,103 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
     sorted_df.to_csv(filepath, index=False, float_format='%.4f')
     print(f"\n✅ Full analysis saved to: {filepath}")
     print(f"⏱️  Analysis and saving took: {time.time() - start_time:.2f} seconds.")
-
-# 5. Main Execution Block
-if __name__ == "__main__":
-    backtest_start_date = backtest_settings["start_date"]
-    backtest_end_date = backtest_settings["end_date"]
-    initial_cash = backtest_settings["initial_cash"]
-    print(f"📅 테스트 기간: {backtest_start_date} ~ {backtest_end_date}")
-    # [이동] all_data_gpu를 먼저 로드하여 NameError를 방지
-    all_data_gpu = preload_all_data_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
+    # [수정] 파일 저장 로직을 조건부로 실행
+    if save_to_file:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = 'results'
+        os.makedirs(output_dir, exist_ok=True)
+        filepath = os.path.join(output_dir, f'gpu_simulation_results_{timestamp}.csv')
+        sorted_df.to_csv(filepath, index=False, float_format='%.4f')
+        print(f"\n✅ Full analysis saved to: {filepath}")
+    print(f"⏱️  Analysis took: {time.time() - start_time:.2f} seconds.") # [수정] 문구 변경
     
+    return best_params_dict, sorted_df # [추가] 전체 결과 DF도 반환
+# 5. [신규] 워커 함수: find_optimal_parameters
+def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float):
+    """
+    주어진 기간 동안 GPU를 사용하여 최적의 전략 파라미터를 찾습니다.
+    WFO 오케스트레이터에 의해 호출되는 '워커' 함수입니다.
+    """
+    print(f"\n" + "="*80)
+    print(f"WORKER: Finding Optimal Parameters for {start_date} to {end_date}")
+    print("="*80)
     
-    # CPU/Debug 스크립트와 동일하게 DB에서 실제 거래일만 가져오도록 변경
-    print("Fetching actual trading dates from DB...")
+    # 데이터 로드
+    all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
+    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
+    
+    # 거래일 및 티커 리스트 준비
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
         SELECT DISTINCT date 
         FROM DailyStockPrice 
-        WHERE date BETWEEN '{backtest_start_date}' AND '{backtest_end_date}'
+        WHERE date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY date
     """
     trading_dates_pd = pd.read_sql(trading_dates_query, sql_engine, parse_dates=['date'])['date']
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
-    # [추가] Ticker-Index 매핑의 일관성을 보장하기 위해 리스트를 정렬합니다.
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
-    print("✅ Ticker list has been sorted to ensure deterministic mapping.")
+    
+    print(f"  - Tickers for period: {len(all_tickers)}")
+    print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
-    print(f"📊 로드된 종목 수: {len(all_tickers)}")
-    print(f"📊 실제 거래일 수: {len(trading_date_indices_gpu)}")
-
-    print(f"\n🚀 {num_combinations}개 파라미터 조합으로 GPU 백테스팅 시작...")
-    start_time = time.time()
+    # 백테스팅 커널 실행
+    start_time_kernel = time.time()
     daily_values_result = run_gpu_optimization(
         param_combinations, all_data_gpu, weekly_filtered_gpu, all_tickers, 
         trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params
     )
-    end_time = time.time()
-    elapsed_time = end_time - start_time
+    end_time_kernel = time.time()
+    elapsed_time = end_time_kernel - start_time_kernel
+    print(f"  - GPU Kernel Execution Time: {elapsed_time:.2f}s")
+    
+    # 결과 분석 및 최적 파라미터 반환
+    # 이 함수가 워커로 호출될 때는 전체 시뮬레이션 결과를 파일로 저장할 필요가 없음 (save_to_file=False)
+    best_params, _ = analyze_and_save_results(
+        param_combinations, daily_values_result, trading_dates_pd, save_to_file=False
+    )
 
-    print(f"\n--- 🎉 GPU 백테스팅 완료 ---")
-    print(f"⏱️  총 소요 시간: {elapsed_time:.2f}초")
-    print(f"📈 조합 당 평균 시간: {elapsed_time/num_combinations*1000:.2f}ms")
+    # additional_buy_priority 값을 문자열로 변환하여 가독성 증진
+    priority_map_rev = {0: 'lowest_order', 1: 'highest_drop'}
+    if 'additional_buy_priority' in best_params:
+        best_params['additional_buy_priority'] = priority_map_rev.get(int(best_params['additional_buy_priority']), 'unknown')
+        
+    return best_params
+# 6. Main Execution Block
+if __name__ == "__main__":
+    # 이 파일이 단독으로 실행될 때, config.yaml의 전체 기간으로 최적화를 수행합니다.
+    backtest_start_date = backtest_settings["start_date"]
+    backtest_end_date = backtest_settings["end_date"]
+    initial_cash = backtest_settings["initial_cash"]
+    
+    print(f"📅 Running Standalone Parameter Optimization")
+    print(f"📅 Period: {backtest_start_date} ~ {backtest_end_date}")
 
-    analyze_and_save_results(param_combinations, daily_values_result, trading_dates_pd)
-    print(f"\n✅ GPU 파라미터 최적화 및 분석 완료!")
+    # 리팩토링된 워커 함수 호출
+    best_parameters_found, all_results_df = find_optimal_parameters(
+        start_date=backtest_start_date,
+        end_date=backtest_end_date,
+        initial_cash=initial_cash
+    )
+    
+    print("\n" + "="*80)
+    print("🏆 FINAL OPTIMAL PARAMETERS FOUND 🏆")
+    print("="*80)
+    # 딕셔너리를 예쁘게 출력
+    for key, value in best_parameters_found.items():
+        if isinstance(value, float):
+            print(f"  - {key:<25}: {value:.4f}")
+        else:
+            print(f"  - {key:<25}: {value}")
+    print("="*80)
+
+    # 단독 실행 시에는 전체 결과 CSV 파일을 저장
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = 'results'
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, f'standalone_simulation_results_{timestamp}.csv')
+    all_results_df.to_csv(filepath, index=False, float_format='%.4f')
+    print(f"\n✅ Full simulation analysis saved to: {filepath}")
+
