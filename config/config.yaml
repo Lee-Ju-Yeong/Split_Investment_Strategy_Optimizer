@@ -12,8 +12,8 @@ database:
 
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
-  start_date: '2020-03-15'
-  end_date: '2020-03-30'
+  start_date: '2015-01-01'
+  end_date: '2025-03-30'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
@@ -41,3 +41,16 @@ execution_params:
 paths:
   results_dir: "results/"
   log_dir: "logs/"
+
+# ===================================================================
+# 6. Walk-Forward Optimization Settings
+# ===================================================================
+walk_forward_settings:
+  # 학습(In-Sample) 기간 (일). 예: 365 * 6 = 2190일
+  in_sample_period_days: 2190
+
+  # 검증(Out-of-Sample) 기간 (일). 예: 182일 (약 6개월)
+  out_of_sample_period_days: 2190
+
+  # 윈도우 이동 간격 (일)
+  step_size_days: 182
