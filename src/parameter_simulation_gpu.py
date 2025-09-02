@@ -18,6 +18,8 @@ from src.config_loader import load_config
 from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
 from src.performance_analyzer import PerformanceAnalyzer
 import numpy as np
+
+
 # 1. Configuration and Parameter Setup
 config = load_config()
 execution_params = config["execution_params"]
@@ -31,15 +33,15 @@ db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_
 
 # Define the parameter space to be tested
 max_stocks_options = cp.array([24], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.02,0.15,0.25], dtype=cp.float32)
-additional_buy_drop_rate_options = cp.array([0.06,0.07,0.08 ], dtype=cp.float32)
-sell_profit_rate_options = cp.array([0.16,0.15,0.14,0.13], dtype=cp.float32)
+order_investment_ratio_options = cp.array([0.02], dtype=cp.float32) # [0.02,0.15,0.25]
+additional_buy_drop_rate_options = cp.array([0.06], dtype=cp.float32) # [0.06,0.07,0.08 ]
+sell_profit_rate_options = cp.array([0.16], dtype=cp.float32) # [0.16,0.15,0.14,0.13]
 additional_buy_priority_options = cp.array([0], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # --- [New] Define search space for advanced risk parameters ---
-stop_loss_rate_options = cp.array([-0.40,-0.50, -0.55,-0.6], dtype=cp.float32)
-max_splits_limit_options = cp.array([10,15,20], dtype=cp.int32)
-max_inactivity_period_options = cp.array([30,45,60], dtype=cp.int32)
+stop_loss_rate_options = cp.array([-0.40], dtype=cp.float32) # [-0.40,-0.50, -0.55,-0.6]
+max_splits_limit_options = cp.array([10], dtype=cp.int32) # [10,15,20]
+max_inactivity_period_options = cp.array([30], dtype=cp.int32) # [30,45,60]
 
 grid = cp.meshgrid(
     max_stocks_options,
@@ -53,7 +55,9 @@ grid = cp.meshgrid(
 )
 param_combinations = cp.vstack([item.flatten() for item in grid]).T
 num_combinations = param_combinations.shape[0]
-print(f"✅ Total parameter combinations generated for GPU: {num_combinations}")
+# [추가] 변경사항 확인을 위한 검증용 print문
+print(f"✅ [VERIFICATION] Newly compiled code is running. Num combinations: {num_combinations}")
+print(f"✅ [VERIFICATION] max_stocks_options shape: {max_stocks_options.shape}")
 
 # 2. GPU Data Pre-loader
 def preload_all_data_to_gpu(engine, start_date, end_date):
@@ -233,7 +237,20 @@ if __name__ == "__main__":
     
     print(f"📅 Running Standalone Parameter Optimization")
     print(f"📅 Period: {backtest_start_date} ~ {backtest_end_date}")
-
+    # WFO 설정 기반 예상 Fold 수 출력
+    # ----------------------------------------------------
+    wfo_settings = config.get('walk_forward_settings')
+    if wfo_settings:
+        # [신규] 'total_folds' 값을 직접 읽어옵니다.
+        total_folds = wfo_settings.get('total_folds')
+        if total_folds:
+            # [신규] 새로운 로직에 맞는 문구로 수정합니다.
+            print(f"💡 WFO Context: WFO is configured to run for a total of {total_folds} folds.")
+        else:
+            print("💡 WFO Context: 'total_folds' key not found in walk_forward_settings.")
+    else:
+        print("💡 WFO Context: 'walk_forward_settings' not found in config.")
+    # ----------------------------------------------------
     # 리팩토링된 워커 함수 호출
     best_parameters_found, all_results_df = find_optimal_parameters(
         start_date=backtest_start_date,

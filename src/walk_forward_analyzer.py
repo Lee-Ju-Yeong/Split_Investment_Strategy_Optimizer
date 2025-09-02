@@ -87,86 +87,77 @@ def run_walk_forward_analysis():
     
     initial_cash = backtest_settings['initial_cash'] 
 
-    # 기간 설정
-    total_start_date = pd.to_datetime(backtest_settings['start_date'])
-    total_end_date = pd.to_datetime(backtest_settings['end_date'])
+    # 2. [핵심 수정] 새로운 기간 계산 로직
+    # --------------------------------------------------------------------------
+    print("\n" + "="*80)
+    print("🚀 Starting Walk-Forward Optimization Analysis (Unanchored Rolling Window)")
     
-    in_sample_delta = timedelta(days=wfo_settings['in_sample_period_days'])
-    out_of_sample_delta = timedelta(days=wfo_settings['out_of_sample_period_days'])
+    # 설정값 추출
+    initial_is_start = pd.to_datetime(backtest_settings['start_date'])
+    initial_is_end = pd.to_datetime(backtest_settings['end_date'])
+    total_folds = wfo_settings['total_folds']
+    
+    # 기간의 '길이(delta)' 계산
+    is_delta = initial_is_end - initial_is_start
+    oos_delta = timedelta(days=wfo_settings['out_of_sample_period_days'])
     step_delta = timedelta(days=wfo_settings['step_size_days'])
 
-    # 2. 결과 저장을 위한 리스트 초기화
+    print(f"Total number of folds to be processed: {total_folds}")
+    print(f"In-Sample Period Length: {is_delta.days} days")
+    print(f"Out-of-Sample Period Length: {oos_delta.days} days")
+    print(f"Step Size: {step_delta.days} days")
+    print("="*80)
+    # --------------------------------------------------------------------------
+
+
+    # 3. 결과 저장을 위한 리스트 초기화
     all_oos_curves = []
     all_optimal_params = []
     
-    # 3. 롤링 윈도우 루프 실행
-    current_start = total_start_date
-    fold_num = 1
-
-    print("\n" + "="*80)
-    print("🚀 Starting Walk-Forward Optimization Analysis")
-    print("="*80)
-    
-    # tqdm을 사용하여 전체 진행 상황 표시
-    # 전체 기간을 step_size로 나누어 대략적인 총 Fold 수를 계산
-    total_folds_approx = (total_end_date - total_start_date) // step_delta
-    pbar = tqdm(total=total_folds_approx, desc="WFO Progress")
-
-    while True:
-        # Fold별 기간 계산
-        in_sample_end = current_start + in_sample_delta
-        out_of_sample_start = in_sample_end + timedelta(days=1)
-        out_of_sample_end = out_of_sample_start + out_of_sample_delta
-
-        # 검증 기간(OOS)이 전체 백테스트 기간을 넘어서면 루프 종료
-        if out_of_sample_end > total_end_date:
-            out_of_sample_end = total_end_date
-            print(f"\n[INFO] Final Out-of-Sample period adjusted to total end date: {out_of_sample_end.date()}")
-            # 조정된 OOS 기간이 IS 기간보다 이전이면 분석 종료
-            if out_of_sample_start >= out_of_sample_end:
-                 print(f"\n[INFO] Adjusted OOS start date is after end date. Stopping analysis.")
-                 break
+    # 4. [핵심 수정] 새로운 롤링 윈도우 루프
+    current_is_start = initial_is_start
+    pbar = tqdm(range(1, total_folds + 1), desc="WFO Progress")
+    for fold_num in pbar:
+        # 현재 Fold의 기간 계산
+        current_is_end = current_is_start + is_delta
+        oos_start = current_is_end + timedelta(days=1)
+        oos_end = oos_start + oos_delta
+        
+        # pbar에 현재 진행 중인 기간 표시
+        pbar.set_description(f"WFO Progress | IS: {current_is_start.date()}->{current_is_end.date()}")
 
         print(f"\n--- Fold {fold_num} {'-'*65}")
-        print(f"  In-Sample Period (IS)  : {current_start.date()} ~ {in_sample_end.date()}")
-        print(f"  Out-of-Sample Period (OOS): {out_of_sample_start.date()} ~ {out_of_sample_end.date()}")
+        print(f"  In-Sample Period (IS)  : {current_is_start.date()} ~ {current_is_end.date()}")
+        print(f"  Out-of-Sample Period (OOS): {oos_start.date()} ~ {oos_end.date()}")
         print("-"*(72))
 
-
-        
-        # 3-1. IS 기간으로 최적 파라미터 탐색
+        # 4-1. IS 기간으로 최적 파라미터 탐색
         optimal_params = find_optimal_parameters(
-            start_date=current_start.strftime('%Y-%m-%d'),
-            end_date=in_sample_end.strftime('%Y-%m-%d'),
+            start_date=current_is_start.strftime('%Y-%m-%d'),
+            end_date=current_is_end.strftime('%Y-%m-%d'),
             initial_cash=initial_cash
         )
         optimal_params['fold'] = fold_num
         all_optimal_params.append(optimal_params)
         print(f"  [Orchestrator] Found optimal params for Fold {fold_num}: {optimal_params}")
 
-        # 3-2. 찾은 파라미터로 OOS 기간 백테스트 실행
+        # 4-2. 찾은 파라미터로 OOS 기간 백테스트 실행
         oos_equity_curve = run_single_backtest(
-            start_date=out_of_sample_start.strftime('%Y-%m-%d'),
-            end_date=out_of_sample_end.strftime('%Y-%m-%d'),
+            start_date=oos_start.strftime('%Y-%m-%d'),
+            end_date=oos_end.strftime('%Y-%m-%d'),
             params_dict=optimal_params,
             initial_cash=initial_cash
         )
         all_oos_curves.append(oos_equity_curve)
         print(f"  [Orchestrator] Completed OOS backtest for Fold {fold_num}. OOS curve length: {len(oos_equity_curve)}")
-
-        # 마지막 Fold를 처리했으므로 루프 종료
-        if out_of_sample_end == total_end_date:
-            pbar.update(1)
-            break
             
-        # 다음 Fold를 위해 윈도우 이동
-        current_start += step_delta
-        fold_num += 1
-        pbar.update(1)
+        # 다음 Fold를 위해 시작일 이동
+        current_is_start += step_delta
         
     pbar.close()
+    
 
-    # 4. [수정] 최종 결과 종합 및 분석 (고도화)
+    # 5. [수정] 최종 결과 종합 및 분석 (고도화)
     print("\n" + "="*80)
     print("📈 Walk-Forward Optimization Finished. Aggregating results...")
     print("="*80)
@@ -175,7 +166,7 @@ def run_walk_forward_analysis():
         print("[ERROR] No Out-of-Sample results were generated.")
         return
 
-    # 4-1. OOS 수익 곡선 연결 및 성과 분석
+    # 5-1. OOS 수익 곡선 연결 및 성과 분석
     final_wfo_curve = pd.concat(all_oos_curves).sort_index()
     # 중복 인덱스 발생 시 평균값 사용 (거의 발생하지 않음)
     final_wfo_curve = final_wfo_curve.groupby(final_wfo_curve.index).mean()
@@ -190,13 +181,13 @@ def run_walk_forward_analysis():
     for key, value in wfo_metrics.items():
         print(f"  {key:<25}: {value}")
     
-    # 4-2. 파라미터 안정성 분석 및 결과 저장
+    # 5-2. 파라미터 안정성 분석 및 결과 저장
     params_df = pd.DataFrame(all_optimal_params)
     print("\n📊 Optimal Parameter Stability Analysis (Descriptive Stats):")
     # 문자열 타입 파라미터는 제외하고 기술 통계 출력
     print(params_df.drop(columns=['additional_buy_priority'], errors='ignore').describe())
     
-    # 4-3. 결과 파일 저장
+    # 5-3. 결과 파일 저장
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     results_dir = os.path.join("results", f"wfo_run_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
@@ -211,7 +202,7 @@ def run_walk_forward_analysis():
     final_wfo_curve.to_csv(curve_filepath)
     print(f"✅ Final WFO equity curve data saved to: {curve_filepath}")
 
-    # 4-4. 시각화
+    # 5-4. 시각화
     plot_wfo_results(final_wfo_curve, params_df, results_dir)
 
 if __name__ == '__main__':
