@@ -46,14 +46,6 @@ paths:
 # 6. Walk-Forward Optimization Settings
 # ===================================================================
 walk_forward_settings:
-  total_folds: 5
-  # OOS 기간이 IS 기간보다 며칠 뒤에 시작할지 정의 (시간차)
-  # 예: 182일 = IS 시작 후 6개월 뒤에 OOS 시작
-  oos_start_offset_days: 182
-
-  # OOS 기간의 '길이' (IS 기간과 같거나 다를 수 있음)
-  # 예: 2190일 = OOS 기간의 길이는 6년
-  out_of_sample_period_days: 2190
-
-  # 다음 Fold로 넘어갈 때 시작일을 이동시키는 간격
-  step_size_days: 182
+  # [핵심] 사용자가 설정할 단 두 개의 변수
+  total_folds: 3
+  period_length_days: 2190 # IS와 OOS 기간의 길이를 '일' 단위로 지정 (예: 6년)

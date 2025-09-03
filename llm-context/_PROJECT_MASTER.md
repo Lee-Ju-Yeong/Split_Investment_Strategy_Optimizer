@@ -52,9 +52,9 @@ persona: "복잡한 금융 데이터 시스템 구축에 특화된 전문가"
 - **(2024-09-02):** Walk-Forward Optimization(WFO) 시스템 구축을 최우선 과제로 선정. `feature/walk-forward-optimization` 브랜치 생성.
 - **(2024-09-02):** '오케스트레이터-워커' 아키텍처 채택. `walk_forward_analyzer.py`(오케스트레이터)와 `parameter_simulation_gpu.py`(최적화 워커), `debug_gpu_single_run.py`(단일 실행 워커)로 역할 분리 및 리팩토링 완료.
 - **(2024-09-03):** 초기 WFO 실행 결과, IS(학습) 대비 OOS(검증) 성과가 급격히 하락하는 **심각한 과최적화(Overfitting) 현상 발견.**
-- **(2024-09-03):** WFO 기간 계산 로직에 대한 파트너님의 의도(겹치는 기간)를 반영하여, '앵커링된 확장 윈도우' 방식에서 **'Unanchored Rolling Window' 방식으로 시스템 재설계 및 코드 수정 완료.**
-- **(2024-09-03):** `find_optimal_parameters` 함수의 반환 값 불일치로 인한 `TypeError` 해결. 시스템 통합 완료.
-- **(2024-09-03):** 부동소수점 표현 오차로 인한 로그 가독성 저하 문제 인지 및 출력 포맷팅 적용 결정.
+- **(2024-09-03):** 기존 WFO 기간 설정 방식이 복잡하고(`step_size`, `offset` 등), 전체 기간 제약(`start_date`, `end_date`)을 맞추기 어려운 문제점 발견.
+- **(2024-09-03):** **WFO 모델을 '제약조건 기반의 제어된 겹침(Constraint-based Controlled Overlap)' 방식으로 최종 진화.** 사용자는 `total_folds`와 `period_length_days`만 설정하면, 시스템이 모든 기간을 자동으로 계산하는 로직을 개발 및 적용 완료.
+- **(2024-09-03):** `config.yaml`의 WFO 설정을 대폭 간소화하여 사용자 편의성을 극대화하고, `walk_forward_analyzer.py`의 구조를 '기간 사전 계산 -> 루프 실행'으로 리팩토링하여 안정성 확보.
 
 ---
 # === Conversation Log: The Transcript ===
@@ -76,6 +76,8 @@ persona: "복잡한 금융 데이터 시스템 구축에 특화된 전문가"
 - **가설 1:** 파라미터 탐색 공간(`parameter_simulation_gpu.py`)이 너무 넓어, 특정 기간에만 유효한 극단적인 값을 찾아냈을 가능성. (예: `sell_profit_rate`가 너무 높거나 낮게 설정)
 - **가설 2:** `2015-2020`년과 `2021-2024`년의 시장 특성(regime)이 근본적으로 달라서, 기존 전략 로직이 새로운 시장 환경에 적응하지 못했을 가능성.
 - **TODO:**
+  - [x] **WFO 시스템 고도화 완료.** (방금 커밋으로 달성)
+  - [ ] **새로운 WFO 시스템으로 전체 분석 실행:** `config.yaml`의 `total_folds`를 3 또는 5로 설정하고, 완성된 `walk_forward_analyzer.py`를 실행하여 첫 번째 공식 WFO 리포트를 생성한다.
   - [ ] WFO 분석을 다시 실행하여 여러 Fold의 결과를 축적하고, 파라미터 안정성(분포)을 면밀히 분석한다. (`wfo_parameter_distribution.png` 확인)
-  - [ ] 파라미터 탐색 공간을 더 현실적이고 보수적인 범위로 좁혀서 다시 최적화를 시도해본다.
-  - [ ] 전략 자체의 로직을 개선할 부분이 있는지 검토한다. (예: 시장 변동성에 따라 파라미터를 동적으로 조절하는 로직 추가 고려)
+  - [ ] **파라미터 안정성 정밀 분석:** 생성된 `wfo_optimal_parameters.csv`와 `wfo_parameter_distribution.png`를 기반으로, 어떤 파라미터가 불안정한지(과최적화의 원인인지) 식별한다.
+  - [ ] **가설 1 검증:** 불안정한 파라미터의 탐색 공간(`parameter_simulation_gpu.py`)을 보수적으로 조정하여 2차 WFO 분석을 실행하고, OOS 성과 개선 여부를 확인한다.
