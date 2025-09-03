@@ -88,62 +88,131 @@ def run_walk_forward_analysis():
     initial_cash = backtest_settings['initial_cash'] 
 
 
-    # 2. [핵심 수정] 새로운 기간 계산 로직
+    # 2. [핵심] 모든 기간 파라미터 자동 계산
     # --------------------------------------------------------------------------
     print("\n" + "="*80)
-    print("🚀 Starting Walk-Forward Optimization Analysis (Unanchored Rolling Window)")
-    
-    # 설정값 추출
-    initial_is_start = pd.to_datetime(backtest_settings['start_date'])
-    initial_is_end = pd.to_datetime(backtest_settings['end_date'])
-    total_folds = wfo_settings['total_folds']
-    
-    # 기간의 '길이(delta)' 계산
-    is_delta = initial_is_end - initial_is_start
-    oos_delta = timedelta(days=wfo_settings['out_of_sample_period_days'])
-    step_delta = timedelta(days=wfo_settings['step_size_days'])
-    oos_offset_delta = timedelta(days=wfo_settings['oos_start_offset_days'])
-    
-    print(f"Total number of folds to be processed: {total_folds}")
-    print(f"In-Sample Period Length: {is_delta.days} days")
-    print(f"Out-of-Sample Period Length: {oos_delta.days} days")
-    print(f"Step Size: {step_delta.days} days")
-    print("="*80)
-    # --------------------------------------------------------------------------
+    print("🚀 Starting Walk-Forward Optimization (Fully Automated Period Calculation)")
 
+    # 사용자 설정값 추출
+    total_start_date = pd.to_datetime(backtest_settings['start_date'])
+    total_end_date = pd.to_datetime(backtest_settings['end_date'])
+    total_folds = wfo_settings['total_folds']
+    period_length_days = wfo_settings['period_length_days']
+    
+    if total_folds < 1:
+        raise ValueError("total_folds must be 1 or greater.")
+    if total_folds == 1:
+            print("  [INFO] total_folds is set to 1. Running a single optimization for the whole period.")
+
+    # 자동 계산
+    total_duration = total_end_date - total_start_date
+    period_delta = timedelta(days=period_length_days)
+
+    # 단일 기간 길이가 전체 기간보다 길면 실행 불가
+    if period_delta >= total_duration:
+        raise ValueError("period_length_days cannot be longer than the total duration.")
+    
+    # [최종 로직] 제약조건을 만족하는 '제어된 겹침' WFO 기간 계산
+    # --------------------------------------------------------------------------
+    print("\n" + "="*80)
+    print("🚀 Starting Walk-Forward Optimization (Constraint-based Controlled Overlap)")
+
+    # 사용자 설정값 추출
+    total_start_date = pd.to_datetime(backtest_settings['start_date'])
+    total_end_date = pd.to_datetime(backtest_settings['end_date'])
+    total_folds = wfo_settings['total_folds']
+    period_length_days = wfo_settings['period_length_days']
+
+    if total_folds < 1:
+        raise ValueError("total_folds must be 1 or greater.")
+    if total_folds == 1:
+            print("  [INFO] total_folds is set to 1. Running a single optimization for the whole period.")
+
+    period_delta = timedelta(days=period_length_days)
+    total_duration = total_end_date - total_start_date
+
+    if period_delta >= total_duration:
+        raise ValueError(f"period_length_days ({period_length_days}d) cannot be longer than or equal to the total duration ({total_duration.days}d).")
+
+    # [핵심] 모든 Fold 기간을 미리 계산하여 리스트에 저장
+    fold_periods = []
+    if total_folds == 1:
+        fold_periods.append({
+            'Fold': 1,
+            'IS_Start': total_start_date.date(), 'IS_End': total_end_date.date(),
+            'OOS_Start': None, 'OOS_End': None
+        })
+    else:
+        # step_delta는 한 Fold에서 다음 Fold로의 전진 거리(새로운 데이터 기간)를 의미
+        # (전체 기간 - 1개 Fold 길이)를 총 Fold 수로 나누어 계산
+        step_delta = (total_duration - period_delta) / total_folds
+        
+        if step_delta.days < 1:
+            print(f"[WARNING] step_delta is {step_delta.total_seconds() / 86400:.2f} days, which is less than 1.")
+            print("This implies very heavy overlap. Consider reducing period_length_days or total_folds.")
+
+        current_is_start = total_start_date
+        for i in range(total_folds):
+            is_start = current_is_start
+            is_end = is_start + period_delta
+            
+            oos_start = is_start + step_delta
+            oos_end = oos_start + period_delta
+            
+            fold_periods.append({
+                'Fold': i + 1,
+                'IS_Start': is_start.date(), 'IS_End': is_end.date(),
+                'OOS_Start': oos_start.date(), 'OOS_End': oos_end.date()
+            })
+            
+            # 다음 Fold의 IS 시작점은 현재 IS 시작점에서 step_delta만큼 이동
+            current_is_start += step_delta
+    # [추가] 계산된 Fold 기간을 표로 출력하여 사전 확인
+    print("\n--- Calculated Walk-Forward Folds ---")
+    folds_df = pd.DataFrame(fold_periods)
+    print(folds_df.to_string(index=False))
+    print("="*80)
 
     # 3. 결과 저장을 위한 리스트 초기화
     all_oos_curves = []
     all_optimal_params = []
     
     # 4. 새로운 롤링 윈도우 루프
-    current_is_start = initial_is_start
-    pbar = tqdm(range(1, total_folds + 1), desc="WFO Progress")
-    for fold_num in pbar:
+    pbar = tqdm(fold_periods, desc="WFO Progress")
+    for period in pbar:
+        fold_num = period['Fold']
+        is_start = period['IS_Start']
+        is_end = period['IS_End']
+        oos_start = period['OOS_Start']
+        oos_end = period['OOS_End']
         
-        # 현재 Fold의 기간 계산
-        current_is_end = current_is_start + is_delta
-        oos_start = current_is_start + oos_offset_delta
-        oos_end = oos_start + oos_delta
-        
-        # pbar에 현재 진행 중인 기간 표시
-        pbar.set_description(f"WFO Progress | IS: {current_is_start.date()}->{current_is_end.date()}")
+        # OOS 기간이 없는 경우 (total_folds=1) 건너뛰기
+        if oos_start is None:
+            print("\n[INFO] Skipping OOS backtest as only one fold is defined.")
+            continue
+
+        pbar.set_description(f"WFO Progress | IS: {is_start}->{is_end}")
 
         print(f"\n--- Fold {fold_num} {'-'*65}")
-        print(f"  In-Sample Period (IS)  : {current_is_start.date()} ~ {current_is_end.date()}")
-        print(f"  Out-of-Sample Period (OOS): {oos_start.date()} ~ {oos_end.date()}")
+        print(f"  In-Sample Period (IS)  : {is_start} ~ {is_end}")
+        print(f"  Out-of-Sample Period (OOS): {oos_start} ~ {oos_end}")
         print("-"*(72))
 
         # 4-1. IS 기간으로 최적 파라미터 탐색
-        # 함수가 반환하는 2개의 값을 별도의 변수로 받습니다. (Unpacking)
         optimal_params_dict, _ = find_optimal_parameters(
-            start_date=current_is_start.strftime('%Y-%m-%d'),
-            end_date=current_is_end.strftime('%Y-%m-%d'),
+            start_date=is_start.strftime('%Y-%m-%d'),
+            end_date=is_end.strftime('%Y-%m-%d'),
             initial_cash=initial_cash
         )
         optimal_params_dict['fold'] = fold_num
         all_optimal_params.append(optimal_params_dict)
-        print(f"  [Orchestrator] Found optimal params for Fold {fold_num}: {optimal_params_dict}")
+
+        # [개선] 출력을 보기 좋게 포맷팅합니다.
+        formatted_params_str = ", ".join([
+            f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" 
+            for k, v in optimal_params_dict.items()
+        ])
+        print(f"  [Orchestrator] Found optimal params for Fold {fold_num}: {{{formatted_params_str}}}")
 
         # 4-2. 찾은 파라미터로 OOS 기간 백테스트 실행
         oos_equity_curve = run_single_backtest(
@@ -155,11 +224,7 @@ def run_walk_forward_analysis():
         all_oos_curves.append(oos_equity_curve)
         print(f"  [Orchestrator] Completed OOS backtest for Fold {fold_num}. OOS curve length: {len(oos_equity_curve)}")
             
-        # 다음 Fold를 위해 시작일 이동
-        current_is_start += step_delta
-        
     pbar.close()
-    
 
     # 5. [수정] 최종 결과 종합 및 분석 (고도화)
     print("\n" + "="*80)
