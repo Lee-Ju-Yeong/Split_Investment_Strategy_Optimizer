@@ -12,24 +12,24 @@ database:
 
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
-  start_date: '2015-01-01'
-  end_date: '2020-12-30'
+  start_date: '2014-08-01'
+  end_date: '2025-05-30'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
 # --- 3. Magic Split Strategy Parameters ---
 strategy_params:
   max_stocks: 24
-  order_investment_ratio: 0.25
-  additional_buy_drop_rate: 0.08
-  sell_profit_rate: 0.13
+  order_investment_ratio: 0.02
+  additional_buy_drop_rate: 0.06
+  sell_profit_rate: 0.16
   additional_buy_priority: 'lowest_order'
   cooldown_period_days: 5 # 매도 후 재매수 방지 기간 (영업일 기준)
 
   # --- [New] Advanced Risk Management Parameters ---
-  stop_loss_rate: -0.550000011920929 # 포지션 진입가 대비 최대 손실률 (-15%)
+  stop_loss_rate: -0.40 # 포지션 진입가 대비 최대 손실률 (-15%)
   max_splits_limit: 10 # 최대 분할매수 차수 (10차까지)
-  max_inactivity_period: 45      # (정적) 최대 매매 미발생 기간 (일)
+  max_inactivity_period: 30      # (정적) 최대 매매 미발생 기간 (일)
 
 # --- 4. Execution Handler Parameters ---
 execution_params:
@@ -46,11 +46,14 @@ paths:
 # 6. Walk-Forward Optimization Settings
 # ===================================================================
 walk_forward_settings:
-  # [신규] 총 몇 개의 Fold를 실행할지 직접 지정
   total_folds: 5
+  # OOS 기간이 IS 기간보다 며칠 뒤에 시작할지 정의 (시간차)
+  # 예: 182일 = IS 시작 후 6개월 뒤에 OOS 시작
+  oos_start_offset_days: 182
 
-  # [의미 변경] 이제 학습 기간과 동일하게 설정하여 순차적 테스트
-  out_of_sample_period_days: 2190 # 6년 (IS 기간과 동일)
+  # OOS 기간의 '길이' (IS 기간과 같거나 다를 수 있음)
+  # 예: 2190일 = OOS 기간의 길이는 6년
+  out_of_sample_period_days: 2190
 
-  # [유지] Fold가 진행될 때마다 시작일을 얼마나 이동시킬지 정의
-  step_size_days: 182 # 약 6개월
+  # 다음 Fold로 넘어갈 때 시작일을 이동시키는 간격
+  step_size_days: 182
