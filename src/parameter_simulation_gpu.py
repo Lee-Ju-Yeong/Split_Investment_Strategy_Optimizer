@@ -32,16 +32,16 @@ db_pass_encoded = urllib.parse.quote_plus(db_config["password"])
 db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_config['host']}/{db_config['database']}"
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([24], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.02], dtype=cp.float32) # [0.02,0.15,0.25]
-additional_buy_drop_rate_options = cp.array([0.06], dtype=cp.float32) # [0.06,0.07,0.08 ]
-sell_profit_rate_options = cp.array([0.16], dtype=cp.float32) # [0.16,0.15,0.14,0.13]
-additional_buy_priority_options = cp.array([0], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
+max_stocks_options = cp.array([12,24], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.015,0.02,0.025], dtype=cp.float32) # [0.02,0.15,0.25]
+additional_buy_drop_rate_options = cp.array([0.06,0.08], dtype=cp.float32) # [0.06,0.07,0.08 ]
+sell_profit_rate_options = cp.array([0.16,0.12], dtype=cp.float32) # [0.16,0.15,0.14,0.13]
+additional_buy_priority_options = cp.array([0,1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # --- [New] Define search space for advanced risk parameters ---
-stop_loss_rate_options = cp.array([-0.40], dtype=cp.float32) # [-0.40,-0.50, -0.55,-0.6]
-max_splits_limit_options = cp.array([10], dtype=cp.int32) # [10,15,20]
-max_inactivity_period_options = cp.array([30], dtype=cp.int32) # [30,45,60]
+stop_loss_rate_options = cp.array([-0.40,-0.50,-0.6], dtype=cp.float32) # [-0.40,-0.50, -0.55,-0.6]
+max_splits_limit_options = cp.array([10,20], dtype=cp.int32) # [10,15,20]
+max_inactivity_period_options = cp.array([50,60], dtype=cp.int32) # [30,45,60]
 
 grid = cp.meshgrid(
     max_stocks_options,
@@ -218,7 +218,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     
     # 결과 분석 및 최적 파라미터 반환
     # 이 함수가 워커로 호출될 때는 전체 시뮬레이션 결과를 파일로 저장할 필요가 없음 (save_to_file=False)
-    best_params, _ = analyze_and_save_results(
+    best_params, all_results_df = analyze_and_save_results(
         param_combinations, daily_values_result, trading_dates_pd, save_to_file=False
     )
 
@@ -226,8 +226,17 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     priority_map_rev = {0: 'lowest_order', 1: 'highest_drop'}
     if 'additional_buy_priority' in best_params:
         best_params['additional_buy_priority'] = priority_map_rev.get(int(best_params['additional_buy_priority']), 'unknown')
-        
-    return best_params
+    
+    strategy_param_keys = [
+        'max_stocks', 'order_investment_ratio', 'additional_buy_drop_rate', 
+        'sell_profit_rate', 'additional_buy_priority', 'stop_loss_rate', 
+        'max_splits_limit', 'max_inactivity_period'
+    ]
+    cleaned_params = {key: best_params[key] for key in strategy_param_keys if key in best_params}    
+    
+    # [핵심 수정] 2개의 값을 튜플로 묶어 반환
+    return cleaned_params, all_results_df
+    
 # 6. Main Execution Block
 if __name__ == "__main__":
     # 이 파일이 단독으로 실행될 때, config.yaml의 전체 기간으로 최적화를 수행합니다.
@@ -235,21 +244,22 @@ if __name__ == "__main__":
     backtest_end_date = backtest_settings["end_date"]
     initial_cash = backtest_settings["initial_cash"]
     
-    print(f"📅 Running Standalone Parameter Optimization")
-    print(f"📅 Period: {backtest_start_date} ~ {backtest_end_date}")
-    # WFO 설정 기반 예상 Fold 수 출력
-    # ----------------------------------------------------
+    # 실행 모드를 명확히 알리고 사용자에게 가이드를 제공
+    # --------------------------------------------------------------------------
+    print("\n" + "="*80)
+    print(" 실행 모드: 단독 파라미터 최적화 (STANDALONE OPTIMIZATION MODE)")
+    print("="*80)
+    print(f" 이 스크립트는 아래 명시된 '단일 고정 기간'에 대해서만 1회 최적화를 수행합니다.")
+    print(f"  - 최적화 대상 기간: {backtest_start_date} ~ {backtest_end_date}")
+    
     wfo_settings = config.get('walk_forward_settings')
-    if wfo_settings:
-        # [신규] 'total_folds' 값을 직접 읽어옵니다.
+    if wfo_settings and wfo_settings.get('total_folds'):
         total_folds = wfo_settings.get('total_folds')
-        if total_folds:
-            # [신규] 새로운 로직에 맞는 문구로 수정합니다.
-            print(f"💡 WFO Context: WFO is configured to run for a total of {total_folds} folds.")
-        else:
-            print("💡 WFO Context: 'total_folds' key not found in walk_forward_settings.")
-    else:
-        print("💡 WFO Context: 'walk_forward_settings' not found in config.")
+        print("\n [정보] 전체 Walk-Forward 분석을 실행하시려면 아래 명령어를 사용하십시오.")
+        print(f"  - 명령어: python -m src.walk_forward_analyzer")
+        print(f"  - 예상 Fold 수: {total_folds} folds")
+    print("="*80 + "\n")
+    # -------------------------------------------------------------------------
     # ----------------------------------------------------
     # 리팩토링된 워커 함수 호출
     best_parameters_found, all_results_df = find_optimal_parameters(

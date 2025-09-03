@@ -8,12 +8,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from .config_loader import load_config
-# [수정] 실제 워커 함수 및 분석 모듈 임포트
+# 실제 워커 함수 및 분석 모듈 임포트
 from .parameter_simulation_gpu import find_optimal_parameters
 from .debug_gpu_single_run import run_single_backtest
 from .performance_analyzer import PerformanceAnalyzer
 
-# --- [신규] 분석 및 시각화 헬퍼 함수 ---
+# --- 분석 및 시각화 헬퍼 함수 ---
 def plot_wfo_results(final_curve: pd.Series, params_df: pd.DataFrame, results_dir: str):
     """최종 WFO 결과(수익곡선, 파라미터 분포)를 시각화하고 저장합니다."""
     print("\n" + "="*80)
@@ -87,6 +87,7 @@ def run_walk_forward_analysis():
     
     initial_cash = backtest_settings['initial_cash'] 
 
+
     # 2. [핵심 수정] 새로운 기간 계산 로직
     # --------------------------------------------------------------------------
     print("\n" + "="*80)
@@ -101,7 +102,8 @@ def run_walk_forward_analysis():
     is_delta = initial_is_end - initial_is_start
     oos_delta = timedelta(days=wfo_settings['out_of_sample_period_days'])
     step_delta = timedelta(days=wfo_settings['step_size_days'])
-
+    oos_offset_delta = timedelta(days=wfo_settings['oos_start_offset_days'])
+    
     print(f"Total number of folds to be processed: {total_folds}")
     print(f"In-Sample Period Length: {is_delta.days} days")
     print(f"Out-of-Sample Period Length: {oos_delta.days} days")
@@ -114,13 +116,14 @@ def run_walk_forward_analysis():
     all_oos_curves = []
     all_optimal_params = []
     
-    # 4. [핵심 수정] 새로운 롤링 윈도우 루프
+    # 4. 새로운 롤링 윈도우 루프
     current_is_start = initial_is_start
     pbar = tqdm(range(1, total_folds + 1), desc="WFO Progress")
     for fold_num in pbar:
+        
         # 현재 Fold의 기간 계산
         current_is_end = current_is_start + is_delta
-        oos_start = current_is_end + timedelta(days=1)
+        oos_start = current_is_start + oos_offset_delta
         oos_end = oos_start + oos_delta
         
         # pbar에 현재 진행 중인 기간 표시
@@ -132,20 +135,21 @@ def run_walk_forward_analysis():
         print("-"*(72))
 
         # 4-1. IS 기간으로 최적 파라미터 탐색
-        optimal_params = find_optimal_parameters(
+        # 함수가 반환하는 2개의 값을 별도의 변수로 받습니다. (Unpacking)
+        optimal_params_dict, _ = find_optimal_parameters(
             start_date=current_is_start.strftime('%Y-%m-%d'),
             end_date=current_is_end.strftime('%Y-%m-%d'),
             initial_cash=initial_cash
         )
-        optimal_params['fold'] = fold_num
-        all_optimal_params.append(optimal_params)
-        print(f"  [Orchestrator] Found optimal params for Fold {fold_num}: {optimal_params}")
+        optimal_params_dict['fold'] = fold_num
+        all_optimal_params.append(optimal_params_dict)
+        print(f"  [Orchestrator] Found optimal params for Fold {fold_num}: {optimal_params_dict}")
 
         # 4-2. 찾은 파라미터로 OOS 기간 백테스트 실행
         oos_equity_curve = run_single_backtest(
             start_date=oos_start.strftime('%Y-%m-%d'),
             end_date=oos_end.strftime('%Y-%m-%d'),
-            params_dict=optimal_params,
+            params_dict=optimal_params_dict,
             initial_cash=initial_cash
         )
         all_oos_curves.append(oos_equity_curve)
