@@ -16,13 +16,13 @@ tags:
 # === Rolling Summary & Key Decisions ===
 # WFO 시스템 개발 과정에서의 주요 결정 사항입니다.
 
-- **WFO 모델 채택:** 파트너님의 의도를 반영하여, **'Unanchored Rolling Window (비고정 롤링 윈도우)'** 방식을 최종 WFO 모델로 채택. 이 모델은 학습(IS) 기간과 검증(OOS) 기간이 함께 시간의 흐름에 따라 이동하여, 변화하는 시장 환경에 대한 전략의 적응력을 가장 현실적으로 테스트함.
+- **WFO 모델 채택:** **'제약조건 기반의 제어된 겹침(Constraint-based Controlled Overlap)'** 모델을 채택. 이 모델은 사용자가 지정한 전체 백테스트 기간(`start_date`, `end_date`) 내에서, 첫 Fold의 시작과 마지막 Fold의 끝을 보장하면서 IS/OOS 기간을 자동으로 균등 분배합니다. 데이터가 제한적인 현실적 제약 하에서 전략의 강건성을 테스트하는 가장 실용적인 접근법입니다.
 - **아키텍처 설계:** **'오케스트레이터-워커(Orchestrator-Worker)'** 아키텍처를 채택.
     - **Orchestrator (`walk_forward_analyzer.py`):** 전체 WFO 프로세스(Fold 분할, 루프, 결과 종합)를 지휘.
     - **Worker 1 (`parameter_simulation_gpu.py`):** IS 기간의 최적 파라미터 탐색 임무 수행.
     - **Worker 2 (`debug_gpu_single_run.py`):** OOS 기간의 단일 백테스트 임무 수행.
     - 이 설계는 각 모듈의 책임을 명확히 분리하고 코드의 재사용성을 극대화함.
-- **설정 중앙화:** WFO의 모든 동작 규칙(Fold 수, 기간 길이, 이동 간격 등)을 `config.yaml`의 `walk_forward_settings` 섹션에서 중앙 관리하도록 설계하여, 코드 수정 없이 다양한 시나리오를 테스트할 수 있는 유연성을 확보.
+- **설정 중앙화:** ** WFO의 모든 동작 규칙을 `config.yaml`에서 중앙 관리하되, 사용자가 직관적으로 이해하기 어려운 `step_size`, `offset` 등의 설정을 제거했습니다. 대신, **`total_folds`와 `period_length_days` 단 두 개의 파라미터만으로 전체 WFO 기간이 자동으로 계산**되도록 설계하여 사용자 편의성과 설정의 명확성을 극대화했습니다.
 - **핵심 결과물 정의:**
     1.  **최종 WFO Equity Curve:** 모든 OOS 기간의 수익 곡선을 하나로 연결한, 전략의 최종 실효성 지표.
     2.  **파라미터 안정성 리포트:** 각 Fold에서 선택된 최적 파라미터의 분포를 분석하여, 파라미터가 특정 기간에만 의존적인지(불안정) 아니면 시점에 관계없이 일관적인지(안정)를 판단.
@@ -39,7 +39,7 @@ Walk-Forward 분석은 이 문제를 해결하기 위해, 인간이 과거 데�
 
 **WFO 프로세스:**
 1.  **학습 (In-Sample):** 과거의 특정 기간(예: 2015-2020년) 데이터로 가장 좋은 성과를 내는 최적 파라미터를 찾는다.
-2.  **검증 (Out-of-Sample):** 위에서 찾은 파라미터를 학습에 사용되지 않은, 시간적으로 약간 뒤따라오는 미래 기간(예: 2015년 7월-2021년 6월)에 적용하여 실제 성과를 테스트한다.
+2.  **검증 (Out-of-Sample):**  위에서 찾은 파라미터를, **학습 기간과 일부러 겹치게 설정된 미래 예측 기간(Out-of-Sample)**(예: 2015년 7월-2021년 6월)에 적용하여 실제 성과를 테스트합니다. 이 '제어된 겹침'은 제한된 데이터 기간 내에서 충분한 길이의 학습/검증 기간을 확보하기 위한 실용적인 절충안입니다.
 3.  **이동 (Walk Forward):** 학습과 검증 기간을 함께 시간의 흐름에 따라 뒤로 이동시킨 후(예: 6개월), 1~2번 과정을 반복한다.
 
 이 과정을 여러 번 반복하여 얻어진 **모든 검증(OOS) 기간의 성과만을 연결**한 것이 바로 전략의 진정한 장기 성과, 즉 **WFO Equity Curve**입니다.
@@ -49,7 +49,7 @@ Walk-Forward 분석은 이 문제를 해결하기 위해, 인간이 과거 데�
 ### 가. `walk_forward_analyzer.py` (Orchestrator)
 - **역할:** **WFO 프로젝트의 총사령관.**
 - **핵심 로직:**
-    1.  `config.yaml`을 로드하여 `total_folds`, `is_delta`, `oos_delta`, `step_delta` 등 WFO 실행 규칙을 설정.
+    1.  `config.yaml`을 로드하여 `total_folds`, `period_length_days` 등 핵심 설정값을 가져온 후, 전체 백테스트 기간(`start_date`~`end_date`) 제약 조건에 맞춰 모든 Fold의 IS/OOS 기간을 **자동으로 사전 계산**합니다.
     2.  `total_folds` 만큼 `for` 루프를 실행.
     3.  **루프 내부:**
         a. 현재 Fold 번호에 맞는 IS 및 OOS 기간을 정확히 계산.
@@ -70,13 +70,10 @@ Walk-Forward 분석은 이 문제를 해결하기 위해, 인간이 과거 데�
 - **WFO 내에서의 동작:** `run_single_backtest` 함수가 호출되면, 주어진 파라미터와 기간으로 단일 GPU 백테스트를 수행하고, 결과물인 일별 수익 곡선(Pandas Series)을 반환.
 
 ### 라. `config.yaml` (`walk_forward_settings` 섹션)
-- **역할:** WFO 시스템의 모든 동작을 제어하는 **설정 파일**.
+- **역할:** WFO 시스템의 모든 동작을 제어하는 **단순하고 직관적인 설정 파일**.
 - **주요 키:**
-    - `total_folds`: 총 몇 번의 학습/검증 사이클을 반복할지 결정.
-    - `oos_start_offset_days`: OOS 기간이 IS 기간 시작일로부터 며칠 후에 시작될지(시간차)를 결정.
-    - `out_of_sample_period_days`: OOS 기간의 '길이'를 결정.
-    - `step_size_days`: 한 사이클이 끝난 후, 다음 학습/검증 기간을 얼마나 뒤로 이동시킬지 결정.
-
+    - `total_folds`: 전체 백테스트 기간 내에서 총 몇 개의 Fold(학습/검증 사이클)를 생성할지 결정.
+    - `period_length_days`: 각 Fold의 학습(IS) 기간과 검증(OOS) 기간의 길이를 '일' 단위로 지정. 두 기간의 길이는 동일합니다.
 ---
 # === Scratchpad / Notes Area ===
 - **결과 해석 가이드:**
