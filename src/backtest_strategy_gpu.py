@@ -721,10 +721,9 @@ def run_magic_split_strategy_on_gpu(
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
     
     #  각 월의 첫 거래일 인덱스를 미리 계산
-    monthly_grouper = trading_dates_pd_cpu.groupby(pd.Grouper(freq='MS'))
-    month_start_indices = monthly_grouper.first().index.map(
-        lambda dt: trading_dates_pd_cpu.get_loc(dt)
-    ).dropna().astype(int).tolist()
+    monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq='MS'))
+    month_first_dates = monthly_grouper.first().dropna()
+    month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
     data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
