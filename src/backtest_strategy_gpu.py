@@ -30,9 +30,9 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
     low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].to_cupy().astype(cp.float32)
     
     # 커널 연산을 위해 NaN을 0으로 대체 (거래정지 등)
-    close_tensor = cp.nan_to_num(close_tensor, copy=False)
-    high_tensor = cp.nan_to_num(high_tensor, copy=False)
-    low_tensor = cp.nan_to_num(low_tensor, copy=False)
+    close_tensor = base_df.join(pivoted_close, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
+    high_tensor = base_df.join(pivoted_high, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
+    low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
 
     print("✅ GPU Tensors created successfully.")
     return {"close": close_tensor, "high": high_tensor, "low": low_tensor}
