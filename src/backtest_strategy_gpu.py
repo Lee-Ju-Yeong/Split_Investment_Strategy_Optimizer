@@ -9,6 +9,35 @@ import cupy as cp
 import cudf
 import pandas as pd
 
+
+def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
+    """
+    Long-format cuDF를 Wide-format CuPy 텐서 딕셔너리로 변환합니다.
+    (num_days, num_tickers) 형태의 행렬을 생성하여 반환합니다.
+    """
+    print("⏳ Creating wide-format GPU data tensors to eliminate CPU-side slicing...")
+    
+    # pivot_table이 cudf에서 더 안정적일 수 있음
+    pivoted_close = all_data_gpu.pivot_table(index='date', columns='ticker', values='close_price')
+    pivoted_high = all_data_gpu.pivot_table(index='date', columns='ticker', values='high_price')
+    pivoted_low = all_data_gpu.pivot_table(index='date', columns='ticker', values='low_price')
+
+    # trading_dates_pd와 all_tickers 순서에 맞게 재정렬 및 CuPy로 변환
+    # .loc 대신 join을 사용하여 누락된 날짜/티커에 대해 NaN을 보장
+    base_df = cudf.DataFrame(index=trading_dates_pd)
+    close_tensor = base_df.join(pivoted_close, how='left')[all_tickers].to_cupy().astype(cp.float32)
+    high_tensor = base_df.join(pivoted_high, how='left')[all_tickers].to_cupy().astype(cp.float32)
+    low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].to_cupy().astype(cp.float32)
+    
+    # 커널 연산을 위해 NaN을 0으로 대체 (거래정지 등)
+    close_tensor = cp.nan_to_num(close_tensor, copy=False)
+    high_tensor = cp.nan_to_num(high_tensor, copy=False)
+    low_tensor = cp.nan_to_num(low_tensor, copy=False)
+
+    print("✅ GPU Tensors created successfully.")
+    return {"close": close_tensor, "high": high_tensor, "low": low_tensor}
+
+
 def get_tick_size_gpu(price_array):
     """ Vectorized tick size calculation on GPU. """
     condlist = [
@@ -678,7 +707,7 @@ def run_magic_split_strategy_on_gpu(
     cooldown_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32)
     last_trade_day_idx_state = cp.full((num_combinations, num_tickers), -1, dtype=cp.int32)
     daily_portfolio_values = cp.zeros((num_combinations, num_trading_days), dtype=cp.float32)
-    # [추가] 로그 버퍼 및 카운터 초기화
+    #  로그 버퍼 및 카운터 초기화
     # 포맷: [day, sim_idx, stock_idx, capital_before, cost]
     log_buffer = cp.zeros((1000, 5), dtype=cp.float32)
     log_counter = cp.zeros(1, dtype=cp.int32)
@@ -690,22 +719,23 @@ def run_magic_split_strategy_on_gpu(
 
     previous_month = -1
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+    #  루프 시작 전, 전체 기간 데이터 텐서를 한 번만 생성
+    data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
+    close_prices_tensor = data_tensors["close"]
+    high_prices_tensor = data_tensors["high"]
+    low_prices_tensor = data_tensors["low"]
     
     # --- 2. 메인 백테스팅 루프 ---
     for i, date_idx in enumerate(trading_date_indices):
         current_date = trading_dates_pd_cpu[date_idx.item()]
-    
+        
+        current_prices_gpu = close_prices_tensor[i]
+        current_highs_gpu  = high_prices_tensor[i]
+        current_lows_gpu   = low_prices_tensor[i]
         # 2-1. 현재 날짜의 가격 및 후보 종목 데이터 준비
         # daily_prices_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['close_price']
         # current_prices_gpu = cp.asarray(daily_prices_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-        # [추가] high도 함께 로드
-        daily_df = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')
-        daily_close_series = daily_df['close_price']
-        daily_high_series  = daily_df['high_price']
-        daily_low_series   = daily_df['low_price']
-        current_prices_gpu = cp.asarray(daily_close_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-        current_highs_gpu  = cp.asarray(daily_high_series .reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-        current_lows_gpu   = cp.asarray(daily_low_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
+        #  high도 함께 로드
         # CPU의 asof 동작을 GPU에서 완벽하게 모방하는 신규 후보군 선정 로직
         past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
         if not past_or_equal_data.empty:
