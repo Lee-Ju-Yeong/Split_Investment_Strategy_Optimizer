@@ -141,8 +141,7 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
 # 3. GPU Backtesting Kernel
 # -----------------------------------------------------------------------------
 
-### ### 로직 동기화: 이제 daily_portfolio_values 만 반환합니다. ### ###
-def run_gpu_optimization(params_gpu, data_gpu,
+def run_gpu_backtest_kernel(params_gpu, data_gpu,
                          weekly_filtered_gpu, all_tickers,
                          trading_date_indices_gpu,
                          trading_dates_pd,
@@ -151,7 +150,7 @@ def run_gpu_optimization(params_gpu, data_gpu,
                          debug_mode: bool = False,
                          ):
     """
-    GPU-accelerated backtesting을 오케스트레이션합니다.
+    GPU-accelerated 백테스팅 커널을 직접 실행합니다.
     """
     print("🚀 Starting GPU backtesting kernel...")
     
@@ -172,78 +171,54 @@ def run_gpu_optimization(params_gpu, data_gpu,
     
     return daily_portfolio_values
 
+# 4. [신규] 워커 함수: run_single_backtest
+def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initial_cash: float, debug_mode: bool = False):
+    """
+    주어진 기간과 파라미터로 단일 GPU 백테스트를 수행하고 결과를 반환합니다.
+    WFO 오케스트레이터에 의해 호출되는 '워커' 함수입니다.
+    """
+    print(f"\n" + "="*80)
+    print(f"WORKER: Running Single Backtest for {start_date} to {end_date}")
+    print(f"Params: {params_dict}")
+    print("="*80)
 
-# -----------------------------------------------------------------------------
-# 4. Main Execution Block
-# -----------------------------------------------------------------------------
+    # 1. 파라미터 딕셔너리를 GPU가 사용할 수 있는 cp.ndarray로 변환
+    priority_map = {'lowest_order': 0, 'highest_drop': 1}
+    priority_val = priority_map.get(params_dict.get('additional_buy_priority', 'lowest_order'), 0)
+    
+    param_combinations = cp.array([[
+        params_dict['max_stocks'],
+        params_dict['order_investment_ratio'],
+        params_dict['additional_buy_drop_rate'],
+        params_dict['sell_profit_rate'],
+        priority_val,
+        params_dict['stop_loss_rate'],
+        params_dict['max_splits_limit'],
+        params_dict['max_inactivity_period'],
+    ]], dtype=cp.float32)
 
-if __name__ == "__main__":
-    backtest_start_date = backtest_settings['start_date']
-    backtest_end_date = backtest_settings['end_date']
-    initial_cash = backtest_settings['initial_cash']
+    # 2. 데이터 로드 및 준비
+    all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
+    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
     
-    print(f"📅 테스트 기간: {backtest_start_date} ~ {backtest_end_date}")
-    
-    # 1. 데이터 로드 및 준비
-    all_data_gpu = preload_all_data_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, backtest_start_date, backtest_end_date)
-    
-    # [수정] CPU와 동일하게 DB에서 실제 거래일만 가져오도록 변경합니다.
-    print("Fetching actual trading dates from DB...")
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
         SELECT DISTINCT date 
         FROM DailyStockPrice 
-        WHERE date BETWEEN '{backtest_start_date}' AND '{backtest_end_date}'
+        WHERE date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY date
     """
     trading_dates_pd = pd.read_sql(trading_dates_query, sql_engine, parse_dates=['date'])['date']
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
+    
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
-    all_tickers = all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist()
-    # [추가] <<<<<<< 단일화된 시스템 사전 검증 블록 >>>>>>>
-    print("\n" + "="*50)
-    print("🔬 GPU KERNEL PRE-FLIGHT CHECK")
-    print("="*50)
-    try:
-        # 1. Ticker-Index 매핑 순서의 비결정성(Non-determinism) 검증
-        print("\n[1] Ticker-Index Mapping Order Verification")
-        print("  - Purpose: Check if the order of `all_tickers` is consistent.")
-        print("  - Method: Displaying first 5 and last 5 tickers.")
-        print("\n  [First 5 Tickers in list]")
-        for i in range(min(5, len(all_tickers))):
-            print(f"    Index {i:<3} -> {all_tickers[i]}")
-        print("\n  [Last 5 Tickers in list]")
-        if len(all_tickers) > 5:
-            for i in range(len(all_tickers) - 5, len(all_tickers)):
-                print(f"    Index {i:<3} -> {all_tickers[i]}")
+    all_tickers = sorted(all_data_gpu.index.get_level_values('ticker').unique().to_pandas().tolist())
+    print(f"  - Tickers for period: {len(all_tickers)}")
+    print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
-        # 2. 핵심 종목 인덱스 추적
-        print("\n[2] Key Ticker Index Tracking")
-        print("  - Purpose: Track the indices of specific tickers involved in debugging.")
-        tickers_to_watch = ['020000', '192440', '014570', '045060', '006650', '043370']
-        ticker_to_idx_map = {ticker: i for i, ticker in enumerate(all_tickers)}
-        
-        for ticker in tickers_to_watch:
-            print(f"    - Ticker {ticker} -> Index: {ticker_to_idx_map.get(ticker, 'Not Found')}")
-
-    except Exception as e:
-        print(f"\n[ERROR] An error occurred during pre-flight check: {e}")
-    print("="*50 + "\n")
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-    # [핵심 수정] Ticker-Index 매핑의 일관성을 보장하기 위해 리스트를 정렬합니다.
-    all_tickers = sorted(all_tickers)
-    print("✅ Ticker list has been sorted to ensure deterministic mapping.")
-
-    print(f"📊 로드된 종목 수: {len(all_tickers)}")
-    
-    # 2. 백테스팅 커널 실행
-    print(f"\n🚀 {num_combinations}개 파라미터 조합으로 GPU 백테스팅 시작...")
-    start_time = time.time()
-    
-    ### ### 로직 동기화: 이제 반환값은 하나입니다. ### ###
-    daily_values_result = run_gpu_optimization(
+    # 3. 백테스팅 커널 실행
+    start_time_kernel = time.time()
+    daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
         all_data_gpu, 
         weekly_filtered_gpu,
@@ -252,42 +227,59 @@ if __name__ == "__main__":
         trading_dates_pd,
         initial_cash,
         execution_params,
-        debug_mode=True, # 디버깅 스크립트이므로 항상 True
+        debug_mode=debug_mode,
+    )
+    end_time_kernel = time.time()
+    print(f"  - GPU Kernel Execution Time: {end_time_kernel - start_time_kernel:.2f}s")
+    
+    # 4. 결과 처리 및 반환
+    if daily_values_result is None or daily_values_result.shape[0] == 0:
+        print("  - [Warning] Backtest returned no data. Returning empty series.")
+        return pd.Series(dtype=float)
+
+    daily_values_cpu = daily_values_result.get()[0] # 첫 번째 (유일한) 시뮬레이션 결과
+    equity_curve_series = pd.Series(daily_values_cpu, index=trading_dates_pd)
+    
+    return equity_curve_series
+# -----------------------------------------------------------------------------
+# 5. Main Execution Block
+# -----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # 이 파일이 단독으로 실행될 때, config.yaml의 설정으로 CPU-GPU 비교 검증을 수행합니다.
+    backtest_start_date = backtest_settings['start_date']
+    backtest_end_date = backtest_settings['end_date']
+    initial_cash = backtest_settings['initial_cash']
+    
+    print(f"📅 Running Standalone GPU Debug/Verification Run")
+    print(f"📅 Period: {backtest_start_date} ~ {backtest_end_date}")
+    # config.yaml에서 직접 파라미터 로드
+    params_for_debug = config['strategy_params']
+    
+    # 리팩토링된 워커 함수 호출
+    equity_curve = run_single_backtest(
+        start_date=backtest_start_date,
+        end_date=backtest_end_date,
+        params_dict=params_for_debug,
+        initial_cash=initial_cash,
+        debug_mode=True  # 단독 실행 시에는 항상 상세 로그 출력
     )
     
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    
-    print(f"\n--- 🎉 GPU 백테스팅 완료 ---")
-    print(f"⏱️  총 소요 시간: {elapsed_time:.2f}초")
-    
-    ### ### 로직 동기화: 기존 결과 요약 로직을 삭제하고, 상세 분석 로직으로 대체 ### ###
-    
-    # 3. 상세 성과 분석
+    # 기존과 동일한 성과 분석 및 출력 로직
     print("\n" + "="*60)
-    print("📈 GPU 백테스팅 성과 요약 (단일 실행)")
+    print("📈 GPU Standalone Run - Performance Summary")
     print("="*60)
-
-    # GPU에서 CPU로 데이터 이동 (결과는 (1, num_days) 형태)
-    daily_values_cpu = daily_values_result.get()
     
-    # 첫 번째 (그리고 유일한) 시뮬레이션 결과에 대해 분석
-    if daily_values_cpu.shape[0] > 0:
-        daily_series = pd.Series(daily_values_cpu[0], index=trading_dates_pd)
-        
-        # PerformanceAnalyzer가 요구하는 DataFrame 형식으로 변환
-        history_df = pd.DataFrame(daily_series, columns=['total_value'])
 
-        # PerformanceAnalyzer를 사용하여 지표 계산
+    if not equity_curve.empty:
+        history_df = pd.DataFrame(equity_curve, columns=['total_value'])
         analyzer = PerformanceAnalyzer(history_df)
-        # CPU 백테스터(main_backtest)와 동일한 포맷으로 출력
         metrics = analyzer.get_metrics(formatted=True)
 
-        # 결과 출력
         for key, value in metrics.items():
             print(f"{key:<25}: {value}")
     else:
-        print("오류: 분석할 백테스팅 결과 데이터가 없습니다.")
+        print("Error: No backtesting result data to analyze.")
 
     print("="*60)
-    print(f"\n✅ GPU 디버깅 및 분석 완료!")
+    print(f"\n✅ GPU standalone run and analysis complete!")
