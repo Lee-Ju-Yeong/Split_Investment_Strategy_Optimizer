@@ -717,143 +717,139 @@ def run_magic_split_strategy_on_gpu(
     weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
     print("Data prepared for GPU backtest. (asof logic will be applied in main loop)")
 
-    previous_month = -1
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-    #  루프 시작 전, 전체 기간 데이터 텐서를 한 번만 생성
+    # --- 2.  메인 루프를 월 블록 단위로 변경 ---
+    
+    #  각 월의 첫 거래일 인덱스를 미리 계산
+    monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq='MS'))
+    month_start_indices = monthly_grouper.first().index.map(
+        lambda dt: trading_dates_pd_cpu.get_loc(dt)
+    ).dropna().astype(int).tolist()
     data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
     low_prices_tensor = data_tensors["low"]
-    
-    # --- 2. 메인 백테스팅 루프 ---
-    for i, date_idx in enumerate(trading_date_indices):
-        current_date = trading_dates_pd_cpu[date_idx.item()]
+    # 월 블록 루프 시작
+    for i in range(len(month_start_indices)):
+        start_idx = month_start_indices[i]
+        end_idx = month_start_indices[i+1] if i + 1 < len(month_start_indices) else num_trading_days
         
-        current_prices_gpu = close_prices_tensor[i]
-        current_highs_gpu  = high_prices_tensor[i]
-        current_lows_gpu   = low_prices_tensor[i]
-        # 2-1. 현재 날짜의 가격 및 후보 종목 데이터 준비
-        # daily_prices_series = all_data_reset_idx[all_data_reset_idx['date'] == current_date].set_index('ticker')['close_price']
-        # current_prices_gpu = cp.asarray(daily_prices_series.reindex(all_tickers).fillna(0).values, dtype=cp.float32)
-        #  high도 함께 로드
-        # CPU의 asof 동작을 GPU에서 완벽하게 모방하는 신규 후보군 선정 로직
-        past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
-        if not past_or_equal_data.empty:
-            # 1. 해당 주간의 필터링된 종목 리스트를 가져옴
-            latest_filter_date = past_or_equal_data['date'].max()
-            candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
-            candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
+        # 월별 투자금 재계산 로직을 월 블록 루프의 시작점으로 이동
+        # 평가 기준가는 월 블록 시작일의 전일 종가 또는 초기값
+        eval_prices = previous_prices_gpu if start_idx > 0 else cp.zeros(num_tickers, dtype=cp.float32)
+        current_rebalance_date = trading_dates_pd_cpu[start_idx]
+        
+        portfolio_state = _calculate_monthly_investment_gpu(
+            portfolio_state, positions_state, param_combinations, eval_prices, current_rebalance_date, debug_mode
+        )
+        #  디버깅 및 검증을 위한 임시 '일일 루프' (향후 단일 커널로 대체될 부분)
+        for day_idx in range(start_idx, end_idx):
+            current_date = trading_dates_pd_cpu[day_idx]
+            # 텐서에서 하루치 데이터 슬라이싱
+            current_prices_gpu = close_prices_tensor[day_idx]
+            current_highs_gpu  = high_prices_tensor[day_idx]
+            current_lows_gpu   = low_prices_tensor[day_idx]
 
-            # 2. 전체 데이터에서 현재 날짜 '이하'의 모든 데이터를 가져옴
-            daily_data = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
-            
-            if not daily_data.empty:
-                # 3. 현재 날짜 데이터 중에서 주간 후보군에 해당하는 종목만 필터링
-                candidate_data_today = daily_data[daily_data['ticker'].isin(candidate_tickers_list)]
+            # --- 후보군 선정 로직 (기존과 동일) ---
+            past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
+            if not past_or_equal_data.empty:
+                # 1. 해당 주간의 필터링된 종목 리스트를 가져옴
+                latest_filter_date = past_or_equal_data['date'].max()
+                candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
+                candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
+
+                # 2. 전체 데이터에서 현재 날짜 '이하'의 모든 데이터를 가져옴
+                daily_data_for_candidates = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
                 
-                # 4. 유효한 ATR 값을 가진 후보만 최종 선정 (NaN 제거)
-                candidate_data_today = candidate_data_today.set_index('ticker')
-                valid_candidate_atr_series = candidate_data_today['atr_14_ratio'].dropna()
-
-                if not valid_candidate_atr_series.empty:
-                    # 5. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
-                    valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
-                    valid_atrs = valid_candidate_atr_series.values
+                if not daily_data_for_candidates.empty:
+                    # 3. 현재 날짜 데이터 중에서 주간 후보군에 해당하는 종목만 필터링
+                    candidate_data_today = daily_data_for_candidates[daily_data_for_candidates['ticker'].isin(candidate_tickers_list)]
                     
-                    # ticker_to_idx 딕셔너리에 없는 티커는 제외
-                    candidate_indices_list = [ticker_to_idx.get(t) for t in valid_tickers if t in ticker_to_idx]
-                    
-                    # 실제 ATR 값도 ticker_to_idx에 존재하는 티커에 맞춰 필터링
-                    valid_atrs_filtered = [atr for t, atr in zip(valid_tickers, valid_atrs) if t in ticker_to_idx]
+                    # 4. 유효한 ATR 값을 가진 후보만 최종 선정 (NaN 제거)
+                    valid_candidate_atr_series = candidate_data_today.set_index('ticker')['atr_14_ratio'].dropna()
 
-                    candidate_tickers_for_day = cp.array(candidate_indices_list, dtype=cp.int32)
-                    candidate_atrs_for_day = cp.asarray(valid_atrs_filtered, dtype=cp.float32)
+                    if not valid_candidate_atr_series.empty:
+                        # 5. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
+                        valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
+                        valid_atrs = valid_candidate_atr_series.values
+                        
+                        # ticker_to_idx 딕셔너리에 없는 티커는 제외
+                        candidate_indices_list = [ticker_to_idx.get(t) for t in valid_tickers if t in ticker_to_idx]
+                        
+                        # 실제 ATR 값도 ticker_to_idx에 존재하는 티커에 맞춰 필터링
+                        valid_atrs_filtered = [atr for t, atr in zip(valid_tickers, valid_atrs) if t in ticker_to_idx]
+
+                        candidate_tickers_for_day = cp.array(candidate_indices_list, dtype=cp.int32)
+                        candidate_atrs_for_day = cp.asarray(valid_atrs_filtered, dtype=cp.float32)
+                    else:
+                        candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                        candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
-        else:
-            candidate_tickers_for_day = cp.array([], dtype=cp.int32)
-            candidate_atrs_for_day = cp.array([], dtype=cp.float32)
 
-        # 2-2. 월별 투자금 재계산
-        if current_date.month != previous_month:
-            portfolio_state = _calculate_monthly_investment_gpu(
-                portfolio_state, positions_state, param_combinations, previous_prices_gpu, current_date, debug_mode
+            # 2-2. 월별 투자금 재계산
+            # --- 신호 처리 함수 호출 (기존과 동일) ---
+            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_today_mask = _process_sell_signals_gpu(
+                portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
+                param_combinations, current_prices_gpu, current_highs_gpu,
+                execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
+                debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
-            previous_month = current_date.month
-
-         # 매도를 먼저 처리하여 현금과 포트폴리오 슬롯을 확보합니다.
-        portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_today_mask = _process_sell_signals_gpu(
-            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
-            param_combinations, 
-            current_prices_gpu,                       # current_close_prices 역할
-            current_highs_gpu,                        # current_high_prices 역할
-            execution_params["sell_commission_rate"], 
-            execution_params["sell_tax_rate"],
-            debug_mode=debug_mode,
-            all_tickers=all_tickers,
-            trading_dates_pd_cpu=trading_dates_pd_cpu
-        )
-        # 확보된 자원으로 신규 종목 진입을 시도합니다.
-        portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
-            portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, i,
-            cooldown_period_days, param_combinations, current_prices_gpu,
-            candidate_tickers_for_day, candidate_atrs_for_day,
-            execution_params["buy_commission_rate"],
-            log_buffer, log_counter, debug_mode, all_tickers=all_tickers
-        )
-        
-        # 마지막으로 기존 보유 종목의 추가 매수를 처리합니다.
-        portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
-            portfolio_state, positions_state, last_trade_day_idx_state,sell_occurred_today_mask, i,
-            param_combinations, current_prices_gpu,current_lows_gpu,current_highs_gpu,
-            execution_params["buy_commission_rate"],
-            log_buffer, log_counter, debug_mode, all_tickers=all_tickers
-        )
-        
-        # 2-4. 일일 포트폴리오 가치 업데이트
-        stock_quantities = cp.sum(positions_state[..., 0], axis=2)
-        stock_market_values = stock_quantities * current_prices_gpu
-        total_stock_value = cp.sum(stock_market_values, axis=1)
-        
-        daily_portfolio_values[:, i] = portfolio_state[:, 0] + total_stock_value
-
-        if debug_mode:
-            capital_snapshot = portfolio_state[0, 0].get()
-            stock_val_snapshot = total_stock_value[0].get()
-            total_val_snapshot = daily_portfolio_values[0, i].get()
-            num_pos_snapshot = cp.sum(cp.any(positions_state[0, :, :, 0] > 0, axis=1)).get()
-            
-            # [추가] CPU 로그와 유사한 포맷으로 출력하여 비교 용이성 증대
-            header = f"\n{'='*120}\n"
-            footer = f"\n{'='*120}"
-            date_str = current_date.strftime('%Y-%m-%d')
-            
-            cash_ratio = (capital_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
-            stock_ratio = (stock_val_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
-
-            summary_str = (
-                f"GPU STATE | Date: {date_str} | Day {i+1}/{num_trading_days}\n"
-                f"{'-'*120}\n"
-                f"Total Value: {total_val_snapshot:,.0f} | "
-                f"Cash: {capital_snapshot:,.0f} ({cash_ratio:.1f}%) | "
-                f"Stocks: {stock_val_snapshot:,.0f} ({stock_ratio:.1f}%)\n"
-                f"Holdings Count: {num_pos_snapshot} Stocks"
+            portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
+                portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
+                cooldown_period_days, param_combinations, current_prices_gpu,
+                candidate_tickers_for_day, candidate_atrs_for_day,
+                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
             )
-            
-            log_message = header + summary_str
-            
-            holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
-            if holding_indices.size > 0:
-                holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
-                log_message += f"\n[Current Holdings]\n{holdings_str}"
+            portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
+                portfolio_state, positions_state, last_trade_day_idx_state, sell_occurred_today_mask, day_idx,
+                param_combinations, current_prices_gpu, current_lows_gpu, current_highs_gpu,
+                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
+            )
+        
+            # --- 일일 포트폴리오 가치 업데이트 (기존과 동일) ---
+            stock_quantities = cp.sum(positions_state[..., 0], axis=2)
+            stock_market_values = stock_quantities * current_prices_gpu
+            total_stock_value = cp.sum(stock_market_values, axis=1)
+            daily_portfolio_values[:, day_idx] = portfolio_state[:, 0] + total_stock_value
+            if debug_mode:
+                capital_snapshot = portfolio_state[0, 0].get()
+                stock_val_snapshot = total_stock_value[0].get()
+                total_val_snapshot = daily_portfolio_values[0, day_idx].get()
+                num_pos_snapshot = cp.sum(cp.any(positions_state[0, :, :, 0] > 0, axis=1)).get()
+                
+                # [추가] CPU 로그와 유사한 포맷으로 출력하여 비교 용이성 증대
+                header = f"\n{'='*120}\n"
+                footer = f"\n{'='*120}"
+                date_str = current_date.strftime('%Y-%m-%d')
+                
+                cash_ratio = (capital_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
+                stock_ratio = (stock_val_snapshot / total_val_snapshot) * 100 if total_val_snapshot else 0
 
-            log_message += footer
-            print(log_message)
-        previous_prices_gpu = current_prices_gpu.copy()
+                summary_str = (
+                    f"GPU STATE | Date: {date_str} | Day {day_idx+1}/{num_trading_days}\n"
+                    f"{'-'*120}\n"
+                    f"Total Value: {total_val_snapshot:,.0f} | "
+                    f"Cash: {capital_snapshot:,.0f} ({cash_ratio:.1f}%) | "
+                    f"Stocks: {stock_val_snapshot:,.0f} ({stock_ratio:.1f}%)\n"
+                    f"Holdings Count: {num_pos_snapshot} Stocks"
+                )
+                
+                log_message = header + summary_str
+                
+                holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
+                if holding_indices.size > 0:
+                    holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
+                    log_message += f"\n[Current Holdings]\n{holdings_str}"
+
+                log_message += footer
+                print(log_message)
+            # 월 블록의 마지막 날 종가를 다음 리밸런싱을 위한 평가 기준으로 저장
+        previous_prices_gpu = close_prices_tensor[end_idx - 1].copy()
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
     if not debug_mode and log_counter[0] > 0:
         print("\n" + "="*60)
@@ -872,3 +868,6 @@ def run_magic_split_strategy_on_gpu(
         print("\n[Analysis] This suggests that on certain days, multiple parallel buy orders consumed more capital than available.")
         print("="*60)
     return daily_portfolio_values
+
+    
+       
