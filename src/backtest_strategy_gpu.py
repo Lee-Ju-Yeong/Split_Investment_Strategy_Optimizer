@@ -25,11 +25,6 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
     # trading_dates_pd와 all_tickers 순서에 맞게 재정렬 및 CuPy로 변환
     # .loc 대신 join을 사용하여 누락된 날짜/티커에 대해 NaN을 보장
     base_df = cudf.DataFrame(index=trading_dates_pd)
-    close_tensor = base_df.join(pivoted_close, how='left')[all_tickers].to_cupy().astype(cp.float32)
-    high_tensor = base_df.join(pivoted_high, how='left')[all_tickers].to_cupy().astype(cp.float32)
-    low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].to_cupy().astype(cp.float32)
-    
-    # 커널 연산을 위해 NaN을 0으로 대체 (거래정지 등)
     close_tensor = base_df.join(pivoted_close, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
     high_tensor = base_df.join(pivoted_high, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
     low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
