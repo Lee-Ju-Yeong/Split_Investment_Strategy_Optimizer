@@ -12,24 +12,24 @@ database:
 
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
-  start_date: '2020-03-15'
-  end_date: '2020-03-30'
+  start_date: '2014-08-01'
+  end_date: '2025-05-30'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
 # --- 3. Magic Split Strategy Parameters ---
 strategy_params:
-  max_stocks: 3
-  order_investment_ratio: 0.04
-  additional_buy_drop_rate: 0.01
-  sell_profit_rate: 0.01
-  additional_buy_priority: 'lowest_order'
+  max_stocks: 20
+  order_investment_ratio: 0.026
+  additional_buy_drop_rate: 0.067
+  sell_profit_rate: 0.167
+  additional_buy_priority: 'highest_drop'  # lowest_order
   cooldown_period_days: 5 # 매도 후 재매수 방지 기간 (영업일 기준)
 
   # --- [New] Advanced Risk Management Parameters ---
-  stop_loss_rate: -0.40 # 포지션 진입가 대비 최대 손실률 (-15%)
-  max_splits_limit: 10 # 최대 분할매수 차수 (10차까지)
-  max_inactivity_period: 90      # (정적) 최대 매매 미발생 기간 (일)
+  stop_loss_rate: -0.50 # 포지션 진입가 대비 최대 손실률 (-15%)
+  max_splits_limit: 15 # 최대 분할매수 차수 (10차까지)
+  max_inactivity_period: 43     # (정적) 최대 매매 미발생 기간 (일)
 
 # --- 4. Execution Handler Parameters ---
 execution_params:
@@ -41,3 +41,11 @@ execution_params:
 paths:
   results_dir: "results/"
   log_dir: "logs/"
+
+# ===================================================================
+# 6. Walk-Forward Optimization Settings
+# ===================================================================
+walk_forward_settings:
+  # [핵심] 사용자가 설정할 단 두 개의 변수
+  total_folds: 5
+  period_length_days: 2000 # IS와 OOS 기간의 길이를 '일' 단위로 지정 (예: 3년)
