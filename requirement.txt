@@ -9,6 +9,7 @@ numpy
 # Visualization
 matplotlib
 seaborn
+plotly
 
 # Configuration and Encryption
 configparser
@@ -28,3 +29,9 @@ pykrx
 
 # Progress Bar for loops
 tqdm
+
+# --- Configuration ---
+pyyaml
+
+# --- Machine Learning & Statistics ---
+scikit-learn

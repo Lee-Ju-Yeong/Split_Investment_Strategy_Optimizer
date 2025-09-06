@@ -32,16 +32,16 @@ db_pass_encoded = urllib.parse.quote_plus(db_config["password"])
 db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_config['host']}/{db_config['database']}"
 
 # Define the parameter space to be tested
-max_stocks_options = cp.array([12,24], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.015,0.02,0.025], dtype=cp.float32) # [0.02,0.15,0.25]
-additional_buy_drop_rate_options = cp.array([0.06,0.08], dtype=cp.float32) # [0.06,0.07,0.08 ]
-sell_profit_rate_options = cp.array([0.16,0.12], dtype=cp.float32) # [0.16,0.15,0.14,0.13]
-additional_buy_priority_options = cp.array([0,1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
+max_stocks_options = cp.array([20], dtype=cp.int32)
+order_investment_ratio_options = cp.array([0.02,0.025,0.03,0.035,0.04, 0.05], dtype=cp.float32) # [0.02,0.025,0.03,0.035,0.04, 0.05]
+additional_buy_drop_rate_options = cp.array([0.04, 0.05, 0.06, 0.07, 0.08, 0.09 , 0.10, 0.11], dtype=cp.float32) # [0.04, 0.05, 0.06, 0.07, 0.08, 0.09 , 0.10, 0.11 ]
+sell_profit_rate_options = cp.array([0.14,0.16,0.18,0.2,0.22], dtype=cp.float32) # [0.14,0.16,0.18,0.2,0.22]]
+additional_buy_priority_options = cp.array([1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
 
 # --- [New] Define search space for advanced risk parameters ---
-stop_loss_rate_options = cp.array([-0.40,-0.50,-0.6], dtype=cp.float32) # [-0.40,-0.50, -0.55,-0.6]
-max_splits_limit_options = cp.array([10,20], dtype=cp.int32) # [10,15,20]
-max_inactivity_period_options = cp.array([50,60], dtype=cp.int32) # [30,45,60]
+stop_loss_rate_options = cp.array([-0.4,-0.5,-0.6,-0.7], dtype=cp.float32) # [-0.4,-0.5,-0.6,-0.7]
+max_splits_limit_options = cp.array([15], dtype=cp.int32) # [10,15,20]
+max_inactivity_period_options = cp.array([30,60,90,180,360], dtype=cp.int32) # [30,60,90,180,360]
 
 grid = cp.meshgrid(
     max_stocks_options,
@@ -140,8 +140,12 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
     sorted_df = full_results_df.sort_values(by='calmar_ratio', ascending=False).dropna(subset=['calmar_ratio'])
     
     # [추가] 최적 파라미터를 딕셔너리로 반환하는 기능 추가
-    best_params_series = sorted_df.iloc[0]
-    best_params_dict = best_params_series.to_dict()
+    # [수정] 엣지 케이스: 유효한 결과가 없을 경우 IndexError 방지
+    if not sorted_df.empty:
+        best_params_series = sorted_df.iloc[0]
+        best_params_dict = best_params_series.to_dict()
+    else:
+        best_params_dict = {} # 빈 딕셔너리 반환
 
     print("\n🏆 Top 10 Performing Parameter Combinations (by Calmar Ratio):")
     # [수정] 터미널 출력에 max_inactivity_period 포함
@@ -157,14 +161,8 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
             if col in display_df.columns: display_df[col] = display_df[col].map('{:.2f}'.format)
         print(display_df.to_string(index=False))
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = 'results'
-    os.makedirs(output_dir, exist_ok=True)
-    filepath = os.path.join(output_dir, f'gpu_simulation_results_{timestamp}.csv')
-    sorted_df.to_csv(filepath, index=False, float_format='%.4f')
-    print(f"\n✅ Full analysis saved to: {filepath}")
-    print(f"⏱️  Analysis and saving took: {time.time() - start_time:.2f} seconds.")
-    # [수정] 파일 저장 로직을 조건부로 실행
+
+    #  파일 저장 로직을 조건부로 실행
     if save_to_file:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = 'results'
@@ -172,17 +170,18 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
         filepath = os.path.join(output_dir, f'gpu_simulation_results_{timestamp}.csv')
         sorted_df.to_csv(filepath, index=False, float_format='%.4f')
         print(f"\n✅ Full analysis saved to: {filepath}")
-    print(f"⏱️  Analysis took: {time.time() - start_time:.2f} seconds.") # [수정] 문구 변경
+    print(f"⏱️  Analysis took: {time.time() - start_time:.2f} seconds.") 
     
     return best_params_dict, sorted_df # [추가] 전체 결과 DF도 반환
 # 5. [신규] 워커 함수: find_optimal_parameters
 def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float):
     """
-    주어진 기간 동안 GPU를 사용하여 최적의 전략 파라미터를 찾습니다.
-    WFO 오케스트레이터에 의해 호출되는 '워커' 함수입니다.
+   [역할 변경] 주어진 기간 동안 GPU를 사용하여 파라미터 최적화를 실행하고,
+  '전체 시뮬레이션 결과'를 DataFrame으로 반환합니다.
+   (WFO 오케스트레이터가 이 결과를 받아 클러스터링 분석을 수행합니다.
     """
     print(f"\n" + "="*80)
-    print(f"WORKER: Finding Optimal Parameters for {start_date} to {end_date}")
+    print(f"WORKER: Running GPU Simulations for {start_date} to {end_date}")
     print("="*80)
     
     # 데이터 로드
@@ -217,25 +216,17 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     print(f"  - GPU Kernel Execution Time: {elapsed_time:.2f}s")
     
     # 결과 분석 및 최적 파라미터 반환
-    # 이 함수가 워커로 호출될 때는 전체 시뮬레이션 결과를 파일로 저장할 필요가 없음 (save_to_file=False)
-    best_params, all_results_df = analyze_and_save_results(
+ # [변경] 이 함수는 이제 분석만 수행하고, 결과 DF를 그대로 반환합니다.
+    # 파일 저장은 단독 실행 시에만 이루어집니다.
+    best_params_for_log, all_results_df = analyze_and_save_results(
         param_combinations, daily_values_result, trading_dates_pd, save_to_file=False
     )
-
-    # additional_buy_priority 값을 문자열로 변환하여 가독성 증진
     priority_map_rev = {0: 'lowest_order', 1: 'highest_drop'}
-    if 'additional_buy_priority' in best_params:
-        best_params['additional_buy_priority'] = priority_map_rev.get(int(best_params['additional_buy_priority']), 'unknown')
-    
-    strategy_param_keys = [
-        'max_stocks', 'order_investment_ratio', 'additional_buy_drop_rate', 
-        'sell_profit_rate', 'additional_buy_priority', 'stop_loss_rate', 
-        'max_splits_limit', 'max_inactivity_period'
-    ]
-    cleaned_params = {key: best_params[key] for key in strategy_param_keys if key in best_params}    
-    
-    # [핵심 수정] 2개의 값을 튜플로 묶어 반환
-    return cleaned_params, all_results_df
+    if 'additional_buy_priority' in best_params_for_log:
+        best_params_for_log['additional_buy_priority'] = priority_map_rev.get(int(best_params_for_log.get('additional_buy_priority', -1)), 'unknown')
+    # 반환값은 (단순 최적 파라미터, 전체 시뮬레이션 결과 DF) 튜플을 유지합니다.
+    # 오케스트레이터는 이 중 두 번째 값(all_results_df)을 사용합니다.
+    return best_params_for_log, all_results_df
     
 # 6. Main Execution Block
 if __name__ == "__main__":
@@ -269,14 +260,16 @@ if __name__ == "__main__":
     )
     
     print("\n" + "="*80)
-    print("🏆 FINAL OPTIMAL PARAMETERS FOUND 🏆")
+    print("🏆 STANDALONE RUN - BEST PARAMETERS (by Calmar Ratio) 🏆")
     print("="*80)
-    # 딕셔너리를 예쁘게 출력
-    for key, value in best_parameters_found.items():
-        if isinstance(value, float):
-            print(f"  - {key:<25}: {value:.4f}")
-        else:
-            print(f"  - {key:<25}: {value}")
+    if best_parameters_found:
+        for key, value in best_parameters_found.items():
+            if isinstance(value, float):
+                print(f"  - {key:<25}: {value:.4f}")
+            else:
+                print(f"  - {key:<25}: {value}")
+    else:
+        print("  No valid parameters found.")
     print("="*80)
 
     # 단독 실행 시에는 전체 결과 CSV 파일을 저장
