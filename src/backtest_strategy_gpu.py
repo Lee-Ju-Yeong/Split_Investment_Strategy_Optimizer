@@ -12,25 +12,49 @@ import pandas as pd
 
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
-    Long-format cuDF를 Wide-format CuPy 텐서 딕셔너리로 변환합니다.
-    (num_days, num_tickers) 형태의 행렬을 생성하여 반환합니다.
+    [수정] 인덱스 매핑을 사용하여 Long-format cuDF를 Wide-format CuPy 텐서로 직접 변환합니다.
+    이 방식은 pivot/join보다 명시적이고 데이터 정렬 오류에 강건합니다.
     """
-    print("⏳ Creating wide-format GPU data tensors to eliminate CPU-side slicing...")
+    print("⏳ Creating wide-format GPU data tensors using direct index mapping...")
+    start_time = time.time()
+
+    num_days = len(trading_dates_pd)
+    num_tickers = len(all_tickers)
+
+    # 1. 날짜와 티커를 정수 인덱스로 매핑하는 딕셔너리 생성
+    #    trading_dates_pd는 DatetimeIndex, all_tickers는 list 여야 함
+    date_map = {date.to_datetime64(): i for i, date in enumerate(trading_dates_pd)}
+    ticker_map = {ticker: i for i, ticker in enumerate(all_tickers)}
     
-    # pivot_table이 cudf에서 더 안정적일 수 있음
-    pivoted_close = all_data_gpu.pivot_table(index='date', columns='ticker', values='close_price')
-    pivoted_high = all_data_gpu.pivot_table(index='date', columns='ticker', values='high_price')
-    pivoted_low = all_data_gpu.pivot_table(index='date', columns='ticker', values='low_price')
+    # cuDF의 map 함수를 사용하기 위해 매핑 딕셔너리를 cudf.Series로 변환
+    date_map_gdf = cudf.Series(date_map)
+    ticker_map_gdf = cudf.Series(ticker_map)
+    
+    # 2. 원본 데이터에 정수 인덱스 컬럼 추가
+    #    .astype('datetime64[ns]')로 타입을 맞춰줘야 map이 잘 동작함
+    all_data_gpu['day_idx'] = all_data_gpu['date'].astype('datetime64[ns]').map(date_map_gdf)
+    all_data_gpu['ticker_idx'] = all_data_gpu['ticker'].map(ticker_map_gdf)
+    
+    # 유효한 인덱스만 필터링
+    data_valid = all_data_gpu.dropna(subset=['day_idx', 'ticker_idx'])
+    
+    # 3. 필요한 각 컬럼에 대해 (num_days, num_tickers) 텐서 생성하고 값 채우기
+    tensors = {}
+    for col_name in ['close_price', 'high_price', 'low_price']:
+        # 0으로 채워진 빈 텐서 생성
+        tensor = cp.zeros((num_days, num_tickers), dtype=cp.float32)
+        
+        # 값을 채워넣을 위치(row, col)와 값(value)을 CuPy 배열로 추출
+        day_indices = cp.asarray(data_valid['day_idx'].astype(cp.int32))
+        ticker_indices = cp.asarray(data_valid['ticker_idx'].astype(cp.int32))
+        values = cp.asarray(data_valid[col_name].astype(cp.float32))
+        
+        # CuPy의 고급 인덱싱(fancy indexing)을 사용하여 값을 한 번에 할당
+        tensor[day_indices, ticker_indices] = values
+        tensors[col_name.replace('_price', '')] = tensor # "close", "high", "low" 키로 저장
 
-    # trading_dates_pd와 all_tickers 순서에 맞게 재정렬 및 CuPy로 변환
-    # .loc 대신 join을 사용하여 누락된 날짜/티커에 대해 NaN을 보장
-    base_df = cudf.DataFrame(index=trading_dates_pd)
-    close_tensor = base_df.join(pivoted_close, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
-    high_tensor = base_df.join(pivoted_high, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
-    low_tensor = base_df.join(pivoted_low, how='left')[all_tickers].fillna(0).to_cupy().astype(cp.float32)
-
-    print("✅ GPU Tensors created successfully.")
-    return {"close": close_tensor, "high": high_tensor, "low": low_tensor}
+    print(f"✅ GPU Tensors created successfully in {time.time() - start_time:.2f}s.")
+    return tensors
 
 
 def get_tick_size_gpu(price_array):
