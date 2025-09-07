@@ -27,37 +27,40 @@ db_config = config["database"]
 backtest_settings = config["backtest_settings"]
 strategy_params = config["strategy_params"]
 execution_params['cooldown_period_days'] = strategy_params.get('cooldown_period_days', 5)
-
+strategy_params = config["strategy_params"]
 db_pass_encoded = urllib.parse.quote_plus(db_config["password"])
 db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_config['host']}/{db_config['database']}"
 
-# Define the parameter space to be tested
-max_stocks_options = cp.array([20], dtype=cp.int32)
-order_investment_ratio_options = cp.array([0.02,0.025,0.03,0.035,0.04, 0.05], dtype=cp.float32) # [0.02,0.025,0.03,0.035,0.04, 0.05]
-additional_buy_drop_rate_options = cp.array([0.04, 0.05, 0.06, 0.07, 0.08, 0.09 , 0.10, 0.11], dtype=cp.float32) # [0.04, 0.05, 0.06, 0.07, 0.08, 0.09 , 0.10, 0.11 ]
-sell_profit_rate_options = cp.array([0.14,0.16,0.18,0.2,0.22], dtype=cp.float32) # [0.14,0.16,0.18,0.2,0.22]]
-additional_buy_priority_options = cp.array([1], dtype=cp.int32) # 0: lowest_order, 1: highest_drop
+# [추가] config.yaml의 parameter_space를 읽어 동적으로 파라미터 조합 생성
+param_space_config = config['parameter_space']
+param_order = [ # meshgrid 순서를 보장하기 위한 리스트
+    'max_stocks', 'order_investment_ratio', 'additional_buy_drop_rate', 
+    'sell_profit_rate', 'additional_buy_priority', 'stop_loss_rate', 
+    'max_splits_limit', 'max_inactivity_period'
+]
+param_options_list = []
+for key in param_order:
+    spec = param_space_config[key]
+    dtype = np.int32 if key in ['max_stocks', 'additional_buy_priority', 'max_splits_limit', 'max_inactivity_period'] else np.float32
+    
+    if spec['type'] == 'linspace':
+        options = np.linspace(spec['start'], spec['stop'], spec['num'], dtype=dtype)
+    elif spec['type'] == 'list':
+        options = np.array(spec['values'], dtype=dtype)
+    elif spec['type'] == 'range':
+        options = np.arange(spec['start'], spec['stop'], spec['step'], dtype=dtype)
+    else:
+        raise ValueError(f"Unsupported parameter type '{spec['type']}' for '{key}'")
+    param_options_list.append(cp.asarray(options))
 
-# --- [New] Define search space for advanced risk parameters ---
-stop_loss_rate_options = cp.array([-0.4,-0.5,-0.6,-0.7], dtype=cp.float32) # [-0.4,-0.5,-0.6,-0.7]
-max_splits_limit_options = cp.array([15], dtype=cp.int32) # [10,15,20]
-max_inactivity_period_options = cp.array([30,60,90,180,360], dtype=cp.int32) # [30,60,90,180,360]
-
-grid = cp.meshgrid(
-    max_stocks_options,
-    order_investment_ratio_options,
-    additional_buy_drop_rate_options,
-    sell_profit_rate_options,
-    additional_buy_priority_options,
-    stop_loss_rate_options,
-    max_splits_limit_options,
-    max_inactivity_period_options 
-)
+grid = cp.meshgrid(*param_options_list) # 리스트를 언패킹하여 전달
 param_combinations = cp.vstack([item.flatten() for item in grid]).T
 num_combinations = param_combinations.shape[0]
+
+print(f"✅ Dynamically generated {num_combinations} parameter combinations from config.yaml.")
 # [추가] 변경사항 확인을 위한 검증용 print문
 print(f"✅ [VERIFICATION] Newly compiled code is running. Num combinations: {num_combinations}")
-print(f"✅ [VERIFICATION] max_stocks_options shape: {max_stocks_options.shape}")
+
 
 # 2. GPU Data Pre-loader
 def preload_all_data_to_gpu(engine, start_date, end_date):
