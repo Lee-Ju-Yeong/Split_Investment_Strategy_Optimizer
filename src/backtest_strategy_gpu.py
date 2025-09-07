@@ -8,7 +8,7 @@ using CuPy for massive parallelization.
 import cupy as cp
 import cudf
 import pandas as pd
-
+import time 
 
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
