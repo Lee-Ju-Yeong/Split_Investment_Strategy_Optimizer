@@ -196,7 +196,8 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         WHERE date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY date
     """
-    trading_dates_pd = pd.read_sql(trading_dates_query, sql_engine, parse_dates=['date'])['date']
+    trading_dates_pd_df = pd.read_sql(trading_dates_query, sql_engine, parse_dates=['date'], index_col='date')
+    trading_dates_pd = trading_dates_pd_df.index # 이제 DatetimeIndex 객체
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values('date').isin(trading_dates_pd)]
