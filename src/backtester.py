@@ -22,13 +22,6 @@ class BacktestEngine:
         
         # tqdm의 mininterval을 늘려 로그 출력이 밀리지 않게 함
         for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress", mininterval=1.0)):
-            # [추가] 데이터 검증용 로그
-            if current_date.strftime('%Y-%m-%d') == '2014-08-01':
-                for ticker in ['051390', '065680']:
-                    ohlc = self.data_handler.get_ohlc_data_on_date(current_date, ticker, self.start_date, self.end_date)
-                    if ohlc is not None:
-                        tqdm.write(f"[CPU_PRICE_CHECK] {current_date.strftime('%Y-%m-%d')} {ticker} | "
-                                   f"Close={ohlc['close_price']:.0f}")
             debug_ticker = '013570'
             try:
                 stock_data = self.data_handler.load_stock_data(debug_ticker, self.start_date, self.end_date)
