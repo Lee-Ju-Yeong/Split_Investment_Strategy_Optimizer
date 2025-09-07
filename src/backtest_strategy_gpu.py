@@ -59,21 +59,20 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 def get_tick_size_gpu(price_array):
     """ Vectorized tick size calculation on GPU. """
-    condlist = [
-        price_array < 2000, price_array < 5000, price_array < 20000,
-        price_array < 50000, price_array < 200000, price_array < 500000,
-    ]
-    # [수정] cp.full_like를 사용하여 price_array와 동일한 shape의 배열 리스트를 생성합니다.
-    # 이것이 cupy.select가 요구하는 형식입니다.
-    choicelist = [
-        cp.full_like(price_array, 1),
-        cp.full_like(price_array, 5),
-        cp.full_like(price_array, 10),
-        cp.full_like(price_array, 50),
-        cp.full_like(price_array, 100),
-        cp.full_like(price_array, 500),
-    ]
-    return cp.select(condlist, choicelist, default=1000)    
+    # cp.select는 내부적으로 큰 임시 배열들을 생성하여 메모리 사용량이 많습니다.
+    # cp.where를 연쇄적으로 사용하여 단일 결과 배열을 점진적으로 채워나가 메모리 사용량을 최소화합니다.
+    # 기본값(1000원)으로 결과 배열을 초기화합니다.
+    result = cp.full_like(price_array, 1000, dtype=cp.int32)
+    
+    # 가격이 낮은 조건부터 순서대로 값을 덮어씁니다.
+    result = cp.where(price_array < 500000, 500, result)
+    result = cp.where(price_array < 200000, 100, result)
+    result = cp.where(price_array < 50000, 50, result)
+    result = cp.where(price_array < 20000, 10, result)
+    result = cp.where(price_array < 5000, 5, result)
+    result = cp.where(price_array < 2000, 1, result)
+    
+    return result
 
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
