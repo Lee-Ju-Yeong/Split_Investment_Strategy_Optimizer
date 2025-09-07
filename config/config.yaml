@@ -13,7 +13,7 @@ database:
 # --- 2. Backtest Period & Capital ---
 backtest_settings:
   start_date: '2014-08-01'
-  end_date: '2015-05-30'
+  end_date: '2025-05-30'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
 
