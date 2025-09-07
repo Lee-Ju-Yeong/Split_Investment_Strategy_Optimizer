@@ -31,6 +31,40 @@ strategy_params:
   max_splits_limit: 15 # 최대 분할매수 차수 (10차까지)
   max_inactivity_period: 43     # (정적) 최대 매매 미발생 기간 (일)
 
+# [추가] GPU 대량 시뮬레이션을 위한 파라미터 공간 정의
+parameter_space:
+  max_stocks:
+    type: 'list'
+    values: [20]
+  order_investment_ratio:
+    type: 'linspace'
+    start: 0.02
+    stop: 0.05
+    num: 4 # 0.02, 0.03, 0.04, 0.05
+  additional_buy_drop_rate:
+    type: 'range'
+    start: 0.04
+    stop: 0.12 # 0.12는 포함되지 않음
+    step: 0.02 # 0.04, 0.06, 0.08, 0.10
+  sell_profit_rate:
+    type: 'list'
+    values: [0.14, 0.16, 0.18, 0.20, 0.22]
+  additional_buy_priority:
+    type: 'list' # 문자열 대신 숫자로 매핑 (0: lowest_order, 1: highest_drop)
+    values: [1]
+  stop_loss_rate:
+    type: 'list'
+    values: [-0.4, -0.5, -0.6, -0.7]
+  max_splits_limit:
+    type: 'list'
+    values: [15]
+  max_inactivity_period:
+    type: 'range'
+    start: 30
+    stop: 181 # 181은 포함되지 않음
+    step: 30 # 30, 60, 90, 120, 150, 180
+
+
 # --- 4. Execution Handler Parameters ---
 execution_params:
   buy_commission_rate: 0.00015
