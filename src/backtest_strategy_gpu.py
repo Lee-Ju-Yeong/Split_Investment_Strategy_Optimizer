@@ -763,14 +763,6 @@ def run_magic_split_strategy_on_gpu(
         #  디버깅 및 검증을 위한 임시 '일일 루프' (향후 단일 커널로 대체될 부분)
         for day_idx in range(start_idx, end_idx):
             current_date = trading_dates_pd_cpu[day_idx]
-            # [추가] 데이터 검증용 로그
-            if current_date.strftime('%Y-%m-%d') == '2014-08-01':
-                for ticker in ['051390', '065680']:
-                    ticker_idx = ticker_to_idx.get(ticker)
-                    if ticker_idx is not None:
-                        close_price = close_prices_tensor[day_idx, ticker_idx].item()
-                        print(f"[GPU_PRICE_CHECK] {current_date.strftime('%Y-%m-%d')} {ticker} | "
-                              f"Close={close_price:.0f}")
             # 텐서에서 하루치 데이터 슬라이싱
             current_prices_gpu = close_prices_tensor[day_idx]
             current_highs_gpu  = high_prices_tensor[day_idx]
