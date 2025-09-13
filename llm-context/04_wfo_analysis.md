@@ -15,7 +15,7 @@ tags:
 model: "퀀트-J (시니어 퀀트 시스템 개발자)"
 persona: "과최적화를 방지하고 전략의 강건성을 정량적으로 검증하는 퀀트 분석가"
 created_date: "2025-09-01" # (Based on git log)
-last_modified: "2025-09-06" # (Documentation Update)
+last_modified: "2025-09-13" # (Documentation Update)
 ---
 
 ## 시스템 프롬프트 (System Prompt / The Constitution)
