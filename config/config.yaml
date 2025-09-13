@@ -16,7 +16,7 @@ backtest_settings:
   end_date: '2025-05-30'
   initial_cash: 100000000
   save_full_trade_history: True  # True로 설정하면 모든 거래 내역을 CSV로 저장합니다.
-  simulation_batch_size: 1000 # [추가] GPU 시뮬레이션 배치 크기, None이면 전체 실행
+  simulation_batch_size: 512 # [추가] GPU 시뮬레이션 배치 크기, None이면 전체 실행
 
 # --- 3. Magic Split Strategy Parameters ---
 strategy_params:
@@ -38,18 +38,20 @@ parameter_space:
     type: 'list'
     values: [20]
   order_investment_ratio:
-    type: 'linspace'
+    type: 'range'
     start: 0.02
     stop: 0.05
-    num: 6 
+    step: 0.005
   additional_buy_drop_rate:
     type: 'range'
     start: 0.04
     stop: 0.12 # 0.12는 포함되지 않음
-    step: 0.01 # 0.04, 0.06, 0.08, 0.10
+    step: 0.02 # 0.04, 0.06, 0.08, 0.10
   sell_profit_rate:
-    type: 'list'
-    values: [0.14, 0.16, 0.18, 0.20, 0.22]
+    type: 'range'
+    start: 0.14
+    stop: 0.22
+    step: 0.02
   additional_buy_priority:
     type: 'list' # 문자열 대신 숫자로 매핑 (0: lowest_order, 1: highest_drop)
     values: [1]
