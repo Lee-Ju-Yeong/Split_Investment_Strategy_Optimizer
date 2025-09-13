@@ -59,21 +59,20 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 def get_tick_size_gpu(price_array):
     """ Vectorized tick size calculation on GPU. """
-    condlist = [
-        price_array < 2000, price_array < 5000, price_array < 20000,
-        price_array < 50000, price_array < 200000, price_array < 500000,
-    ]
-    # [수정] cp.full_like를 사용하여 price_array와 동일한 shape의 배열 리스트를 생성합니다.
-    # 이것이 cupy.select가 요구하는 형식입니다.
-    choicelist = [
-        cp.full_like(price_array, 1),
-        cp.full_like(price_array, 5),
-        cp.full_like(price_array, 10),
-        cp.full_like(price_array, 50),
-        cp.full_like(price_array, 100),
-        cp.full_like(price_array, 500),
-    ]
-    return cp.select(condlist, choicelist, default=1000)    
+    # cp.select는 내부적으로 큰 임시 배열들을 생성하여 메모리 사용량이 많습니다.
+    # cp.where를 연쇄적으로 사용하여 단일 결과 배열을 점진적으로 채워나가 메모리 사용량을 최소화합니다.
+    # 기본값(1000원)으로 결과 배열을 초기화합니다.
+    result = cp.full_like(price_array, 1000, dtype=cp.int32)
+    
+    # 가격이 낮은 조건부터 순서대로 값을 덮어씁니다.
+    result = cp.where(price_array < 500000, 500, result)
+    result = cp.where(price_array < 200000, 100, result)
+    result = cp.where(price_array < 50000, 50, result)
+    result = cp.where(price_array < 20000, 10, result)
+    result = cp.where(price_array < 5000, 5, result)
+    result = cp.where(price_array < 2000, 1, result)
+    
+    return result
 
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
@@ -359,22 +358,21 @@ def _process_additional_buy_signals_gpu(
     debug_mode: bool = False,
     all_tickers: list = None
 ):
-    """ [수정] 순차적 자금 차감을 적용하여 경쟁 조건 버그를 해결한 추가 매수 로직 """
-    # --- [유지] 1. 파라미터 및 기본 상태 준비 ---
+    """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
+    # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
     add_buy_drop_rates = param_combinations[:, 2:3]
     max_splits_limits = param_combinations[:, 6:7]
-    quantities = positions_state[..., 0]
-    buy_prices = positions_state[..., 1]
+    quantities_state = positions_state[..., 0]
+    buy_prices_state = positions_state[..., 1]
     
-    has_positions = quantities > 0
+    has_positions = quantities_state > 0
     num_positions = cp.sum(has_positions, axis=2)
     has_any_position = num_positions > 0
     if not cp.any(has_any_position):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
-    # --- [유지] 2. 추가 매수 조건에 맞는 모든 후보 탐색 ---
     last_pos_mask = (cp.cumsum(has_positions, axis=2) == num_positions[:, :, cp.newaxis]) & has_positions
-    last_buy_prices = cp.sum(buy_prices * last_pos_mask, axis=2)
+    last_buy_prices = cp.sum(buy_prices_state * last_pos_mask, axis=2)
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
@@ -387,120 +385,126 @@ def _process_additional_buy_signals_gpu(
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
-    # --- 3. [핵심 수정] 후보들을 우선순위에 따라 정렬 ---
+    # 2. 모든 후보에 대한 비용 및 우선순위 계산 (벡터화)
     sim_indices, stock_indices = cp.where(initial_buy_mask)
     
-    # 각 후보가 속한 시뮬레이션의 'additional_buy_priority' 파라미터 값을 가져옵니다.
-    # 0: lowest_order, 1: highest_drop
-    add_buy_priorities = param_combinations[:, 4:5]
-    priorities_for_candidates = add_buy_priorities[sim_indices].flatten()
+    # 비용 계산
+    candidate_investments = portfolio_state[sim_indices, 1]
+    candidate_trigger_prices = trigger_prices[sim_indices, stock_indices]
+    candidate_highs = current_highs[stock_indices]
+    epsilon = cp.float32(1.0)
+    price_basis = cp.where(candidate_highs <= candidate_trigger_prices - epsilon, candidate_highs, candidate_trigger_prices)
+    exec_prices = adjust_price_up_gpu(price_basis)
+    
+    quantities = cp.zeros_like(exec_prices, dtype=cp.int32)
+    valid_price_mask = exec_prices > 0
+    quantities[valid_price_mask] = cp.floor(candidate_investments[valid_price_mask] / exec_prices[valid_price_mask])
 
-    # 'lowest_order' 점수 계산: 현재 보유한 분할매수 차수 (오름차순 정렬 대상)
+    costs = exec_prices * quantities
+    commissions = cp.floor(costs * buy_commission_rate)
+    total_costs = costs + commissions
+
+    # 우선순위 점수 계산
+    add_buy_priorities = param_combinations[sim_indices, 4]
     scores_lowest_order = num_positions[sim_indices, stock_indices]
-
-    # 'highest_drop' 점수 계산: 실제 하락률 (내림차순 정렬 대상)
     candidate_last_buy_prices = last_buy_prices[sim_indices, stock_indices]
     candidate_current_prices = current_prices[stock_indices]
-    epsilon = 1e-9 # 0으로 나누기 방지
-    scores_highest_drop = (candidate_last_buy_prices - candidate_current_prices) / (candidate_last_buy_prices + epsilon)
+    price_epsilon = 1e-9
+    scores_highest_drop = (candidate_last_buy_prices - candidate_current_prices) / (candidate_last_buy_prices + price_epsilon)
+    priority_scores = cp.where(add_buy_priorities == 0, scores_lowest_order, -scores_highest_drop)
+
+    # 3. 시뮬레이션 ID와 우선순위로 후보 정렬
+    # lexsort는 마지막 행부터 정렬하므로, 우선순위가 낮은 키(stock_indices)를 먼저, 높은 키(sim_indices)를 나중에 넣습니다.
+    # (sim_idx 오름차순 -> priority_score 오름차순 -> stock_idx 오름차순)
+    sort_keys = cp.vstack((stock_indices, priority_scores, sim_indices))
+    sorted_indices = cp.lexsort(sort_keys)
     
-    # 파라미터 값에 따라 최종 우선순위 점수를 선택합니다.
-    # lowest_order(0)는 오름차순 정렬해야 하므로 점수를 그대로 사용합니다.
-    # highest_drop(1)은 내림차순 정렬해야 하므로, 점수에 음수를 취한 뒤 오름차순 정렬합니다.
-    priority_scores = cp.where(priorities_for_candidates == 0,
-                               scores_lowest_order,
-                               -scores_highest_drop) # 내림차순 정렬을 위해 음수화
+    sorted_sims = sim_indices[sorted_indices]
+    sorted_stocks = stock_indices[sorted_indices]
+    sorted_costs = total_costs[sorted_indices]
+    sorted_quantities = quantities[sorted_indices]
+    sorted_exec_prices = exec_prices[sorted_indices]
 
-     # 1. 2차 정렬 기준: 후보들의 stock_idx (오름차순)
-    candidate_stock_indices = stock_indices
-    key2_stock_indices = candidate_stock_indices.astype(cp.float32)
-
-    # 2. 1차 정렬 기준: 계산된 우선순위 점수 (오름차순)
-    key1_priority_scores = priority_scores
-
-    # [추가] 두 개의 1D 키 배열을 vstack을 사용해 (2, N) 형태의 단일 2D 배열로 쌓습니다.
-    # lexsort는 마지막 행부터 정렬하므로, 우선순위가 낮은 키(key2)를 먼저, 높은 키(key1)를 나중에 넣습니다.
-    sort_keys_array = cp.vstack((key2_stock_indices, key1_priority_scores))
-
-    # [수정] 단일 2D 배열을 lexsort에 전달합니다.
-    sorted_indices = cp.lexsort(sort_keys_array)
+    # 4. 세그먼트화된 누적 합계를 사용해 감당 가능한 매수 결정
+    # 각 시뮬레이션 그룹의 시작점을 찾습니다.
+    unique_sims, sim_start_indices = cp.unique(sorted_sims, return_index=True)
     
-    # 정렬된 순서대로 후보 정보 재배열
-    sorted_sim_indices = sim_indices[sorted_indices]
-    sorted_stock_indices = stock_indices[sorted_indices]
-
-    # --- 4. [핵심 수정] 순차적 자금 차감을 통한 최종 매수 실행 ---
-    temp_capital = portfolio_state[:, 0].copy()
+    # 전체 누적 합계 계산
+    global_cumsum = cp.cumsum(sorted_costs)
     
-    if debug_mode:
-        temp_cap_log = portfolio_state[0, 0].item()
+    # `repeat`를 사용하여 세그먼트별로 차감할 값을 효율적으로 전파합니다.
+    # (maximum.accumulate가 일부 CuPy 버전에서 지원되지 않는 문제를 우회)
+    run_lengths = cp.diff(cp.concatenate((sim_start_indices, cp.array([len(sorted_sims)]))))
+    run_lengths_list = run_lengths.tolist() # .repeat()를 위해 파이썬 리스트로 변환
+    
+    # 각 세그먼트에서 빼야 할 값 (첫 세그먼트는 0, 나머지는 이전 세그먼트의 누적 합)
+    segment_subtraction_values = cp.concatenate((cp.array([0], dtype=global_cumsum.dtype), global_cumsum[sim_start_indices[1:] - 1]))
+    
+    prefix_sum_broadcast = cp.repeat(segment_subtraction_values, run_lengths_list)
 
-    # 정렬된 후보들을 순회하며 하나씩 매수 시도
-    for i in range(len(sorted_indices)):
-        sim_idx = sorted_sim_indices[i]
-        stock_idx = sorted_stock_indices[i]
+    # 세그먼트화된 (시뮬레이션별) 누적 합계
+    per_sim_cumsum = global_cumsum - prefix_sum_broadcast
+    
+    # 각 후보에 대해 해당 시뮬레이션의 가용 자본을 broadcast
+    sim_capitals = portfolio_state[unique_sims, 0]
+    capital_broadcast = cp.repeat(sim_capitals, run_lengths_list)
+    
+    # 최종 매수 마스크: 시뮬레이션별 누적 비용이 가용 자본을 넘지 않는 후보들
+    final_buy_mask = per_sim_cumsum <= capital_broadcast
+    final_buy_mask &= (sorted_quantities > 0) # 수량이 0인 매수는 제외
 
-        # 이 거래가 현재 자본으로 감당 가능한지 확인
-        # (주의: 매번 portfolio_state 원본이 아닌 temp_capital과 비교해야 함)
-        investment = portfolio_state[sim_idx, 1] # 투자금은 월별로 고정
-        
-        # 매수가 결정 (기존 로직과 동일)
-        target_price = trigger_prices[sim_idx, stock_idx]
-        high_price = current_highs[stock_idx]
-        epsilon = cp.float32(1.0) # 최소 가격 단위(1원)를 안전 마진으로 사용
-        price_basis = cp.where(high_price <= target_price - epsilon, high_price, target_price)
-        
-        # [추가] price_basis 검증을 위한 상세 로그
-        if debug_mode and sim_idx == 0:
-            ticker = all_tickers[stock_idx.item()]
-            scenario = "B (Clear Gap Down)" if high_price.item() <= target_price.item() - epsilon.item() else "A (Touch or Close)"
-            print(f"  └─ [ADD_BUY_DEBUG] Stock {stock_idx.item()}({ticker}) | Scenario: {scenario} | "
-                  f"High: {high_price.item():.2f} vs Target: {target_price.item():.2f} "
-                  f"-> Basis: {price_basis.item():.2f}")
-            
-            
-        exec_price = adjust_price_up_gpu(price_basis)
-        
-        if exec_price <= 0: continue
-        
-        # 비용 계산
-        quantity = cp.floor(investment / exec_price)
-        if quantity <= 0: continue
-        
-        cost = exec_price * quantity
-        commission = cp.floor(cost * buy_commission_rate)
-        total_cost = cost + commission
-        
-        # 순차적 자본 확인
-        if temp_capital[sim_idx] >= total_cost:
-            # 매수 실행: 상태 업데이트
-            is_empty_slot = positions_state[sim_idx, stock_idx, :, 0] == 0
-            split_idx = cp.argmax(is_empty_slot)
-            # 엣지 케이스: 모든 슬롯이 차있는 경우는 initial_buy_mask에서 이미 걸러짐
-            
-            positions_state[sim_idx, stock_idx, split_idx, 0] = quantity
-            positions_state[sim_idx, stock_idx, split_idx, 1] = exec_price
-            positions_state[sim_idx, stock_idx, split_idx, 2] = current_day_idx
-            last_trade_day_idx_state[sim_idx, stock_idx] = current_day_idx
-            
-            # [핵심] 임시 자본 즉시 차감
-            capital_before_buy = temp_capital[sim_idx].copy() # 로그용
-            temp_capital[sim_idx] -= total_cost
+    if not cp.any(final_buy_mask):
+        return portfolio_state, positions_state, last_trade_day_idx_state
 
-            # 디버깅 로그
-            if debug_mode and sim_idx == 0:
-                ticker_code = all_tickers[stock_idx.item()]
-                print(f"[GPU_ADD_BUY_CALC] {current_day_idx}, Sim 0, Stock {stock_idx.item()}({ticker_code}) | "
-              f"Invest: {investment.item():,.0f} / ExecPrice: {exec_price.item():,.0f} = Qty: {quantity.item():,.0f}")
-                # print(f"[GPU_ADD_BUY] Day {current_day_idx}, Sim 0, Stock {stock_idx.item()}({ticker_code}) | "
-                #       f"Cost: {total_cost.item():,.0f} | "
-                #       f"Cap Before: {capital_before_buy.item():,.0f} -> Cap After: {temp_capital[sim_idx].item():,.0f}")
+    # 5. 최종 매수 목록을 기반으로 상태 병렬 업데이트
+    # 매수가 실행될 후보들의 정보
+    final_sims = sorted_sims[final_buy_mask]
+    final_stocks = sorted_stocks[final_buy_mask]
+    final_quantities = sorted_quantities[final_buy_mask]
+    final_exec_prices = sorted_exec_prices[final_buy_mask]
+    final_costs = sorted_costs[final_buy_mask]
 
-    # --- 5. [유지] 최종 자본 상태 반영 ---
-    portfolio_state[:, 0] = temp_capital
+    # 자본 업데이트
+    # 매수가 발생한 시뮬레이션과 각 시뮬레이션별 총비용 계산
+    unique_bought_sims, bought_sim_starts = cp.unique(final_sims, return_index=True)
+    total_cost_per_sim = cp.add.reduceat(final_costs, bought_sim_starts)
+    
+    # `subtract.at`이 float32를 지원하지 않는 문제를 우회하기 위해,
+    # 차감할 비용을 담은 임시 배열을 생성한 후, 전체를 한 번에 뺍니다.
+    costs_to_subtract = cp.zeros_like(portfolio_state[:, 0])
+    costs_to_subtract[unique_bought_sims] = total_cost_per_sim
+    portfolio_state[:, 0] -= costs_to_subtract
+
+    # 포지션 업데이트
+    # 추가 매수가 들어갈 비어있는 split_idx를 찾습니다.
+    # 추가 매수는 종목당 하루에 최대 한 번이므로, 현재 보유 차수가 곧 비어있는 인덱스가 됩니다.
+    split_indices = num_positions[final_sims, final_stocks]
+    
+    positions_state[final_sims, final_stocks, split_indices, 0] = final_quantities
+    positions_state[final_sims, final_stocks, split_indices, 1] = final_exec_prices
+    positions_state[final_sims, final_stocks, split_indices, 2] = current_day_idx
+    
+    # 마지막 거래일 업데이트
+    # 중복된 (sim, stock)이 있을 수 있으므로 unique 처리 후 업데이트
+    unique_final_trades, _ = cp.unique(cp.vstack([final_sims, final_stocks]), axis=1, return_index=True)
+    last_trade_day_idx_state[unique_final_trades[0], unique_final_trades[1]] = current_day_idx
+
+    # 디버깅 로그
+    if debug_mode and cp.any(cp.isin(final_sims, cp.array([0]))):
+        sim0_mask = (final_sims == 0)
+        if cp.any(sim0_mask):
+            sim0_stocks = final_stocks[sim0_mask]
+            sim0_quants = final_quantities[sim0_mask]
+            sim0_prices = final_exec_prices[sim0_mask]
+            
+            capital_after = portfolio_state[0, 0].item()
+            
+            print(f"[GPU_ADD_BUY_SUMMARY] Day {current_day_idx}, Sim 0 | Buys: {sim0_stocks.size} | Capital After: {capital_after:,.0f}")
+            for i in range(sim0_stocks.size):
+                ticker_code = all_tickers[sim0_stocks[i].item()]
+                print(f"  └─ Stock {sim0_stocks[i].item()}({ticker_code}) | Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}")
+
     return portfolio_state, positions_state, last_trade_day_idx_state
-
-# 기존 _process_new_entry_signals_gpu 함수를 아래 코드로 전체 교체하십시오.
 
 def _process_new_entry_signals_gpu(
     portfolio_state: cp.ndarray,

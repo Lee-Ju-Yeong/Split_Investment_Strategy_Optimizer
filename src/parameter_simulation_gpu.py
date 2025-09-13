@@ -208,19 +208,48 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     
     print(f"  - Tickers for period: {len(all_tickers)}")
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
+    #  배치 처리 로직 
+    batch_size = backtest_settings.get('simulation_batch_size')
+    if batch_size is None or batch_size <= 0:
+        batch_size = num_combinations
+    num_batches = (num_combinations + batch_size - 1) // batch_size
+    print(f"  - Total Simulations: {num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")    
+   
+   
+   
+   
+    all_daily_values_list = []
+    total_kernel_time = 0
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, num_combinations)
+        param_batch = param_combinations[start_idx:end_idx]
+        
+        print(f"\n  --- Running Batch {i+1}/{num_batches} (Sims {start_idx}-{end_idx-1}) ---")
+        
+        start_time_kernel = time.time()
+        daily_values_batch = run_gpu_optimization(
+            param_batch, all_data_gpu, weekly_filtered_gpu, all_tickers, 
+            trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params
+        )
+        end_time_kernel = time.time()
+        
+        batch_time = end_time_kernel - start_time_kernel
+        total_kernel_time += batch_time
+        print(f"  - Batch {i+1} Kernel Execution Time: {batch_time:.2f}s")
 
-    # 백테스팅 커널 실행
-    start_time_kernel = time.time()
-    daily_values_result = run_gpu_optimization(
-        param_combinations, all_data_gpu, weekly_filtered_gpu, all_tickers, 
-        trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params
-    )
-    end_time_kernel = time.time()
-    elapsed_time = end_time_kernel - start_time_kernel
-    print(f"  - GPU Kernel Execution Time: {elapsed_time:.2f}s")
+        all_daily_values_list.append(daily_values_batch)
+
+    print(f"\n  - Total GPU Kernel Execution Time: {total_kernel_time:.2f}s")
+    # 모든 배치의 결과를 하나로 합침
+    if not all_daily_values_list:
+        print("[Error] No simulation results were generated.")
+        return {}, pd.DataFrame()
+    
+    daily_values_result = cp.vstack(all_daily_values_list)
     
     # 결과 분석 및 최적 파라미터 반환
- # [변경] 이 함수는 이제 분석만 수행하고, 결과 DF를 그대로 반환합니다.
+    # 이 함수는 분석만 수행하고, 결과 DF를 그대로 반환합니다.
     # 파일 저장은 단독 실행 시에만 이루어집니다.
     best_params_for_log, all_results_df = analyze_and_save_results(
         param_combinations, daily_values_result, trading_dates_pd, save_to_file=False
@@ -228,6 +257,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     priority_map_rev = {0: 'lowest_order', 1: 'highest_drop'}
     if 'additional_buy_priority' in best_params_for_log:
         best_params_for_log['additional_buy_priority'] = priority_map_rev.get(int(best_params_for_log.get('additional_buy_priority', -1)), 'unknown')
+    
     # 반환값은 (단순 최적 파라미터, 전체 시뮬레이션 결과 DF) 튜플을 유지합니다.
     # 오케스트레이터는 이 중 두 번째 값(all_results_df)을 사용합니다.
     return best_params_for_log, all_results_df
