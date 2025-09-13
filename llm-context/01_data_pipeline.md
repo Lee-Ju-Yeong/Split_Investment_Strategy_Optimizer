@@ -14,7 +14,7 @@ tags:
 model: "퀀트-J (시니어 퀀트 시스템 개발자)"
 persona: "데이터 무결성과 파이프라인 자동화에 특화된 데이터 아키텍트"
 created_date: "2025-08-03" # (Based on git log)
-last_modified: "2025-09-06" # (Documentation Update)
+last_modified: "2025-09-13" # (Documentation Update)
 ---
 
 ## 시스템 프롬프트 (System Prompt / The Constitution)
