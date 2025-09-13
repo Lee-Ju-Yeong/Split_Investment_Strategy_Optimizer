@@ -176,7 +176,71 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
     print(f"⏱️  Analysis took: {time.time() - start_time:.2f} seconds.") 
     
     return best_params_dict, sorted_df # [추가] 전체 결과 DF도 반환
-# 5. [신규] 워커 함수: find_optimal_parameters
+import subprocess
+import re
+
+# ... (기존 import 구문들)
+
+# 5. [신규] 최적 배치 크기 자동 계산
+def get_optimal_batch_size(
+    config, 
+    num_tickers,
+    fixed_data_memory_bytes,
+    safety_factor=0.9
+):
+    """
+    현재 가용 GPU 메모리를 기반으로 최적의 시뮬레이션 배치 크기를 계산합니다.
+    """
+    try:
+        # 1. nvidia-smi로 가용 메모리 조회 (MiB 단위)
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.free', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, check=True
+        )
+        free_memory_mib = int(result.stdout.strip())
+        free_memory_bytes = free_memory_mib * 1024 * 1024
+        
+        # 2. 시뮬레이션 1개당 필요한 메모리 추정 (bytes 단위)
+        p_space = config['parameter_space']
+        max_stocks = max(p_space['max_stocks']['values']) if p_space['max_stocks']['type'] == 'list' else int(p_space['max_stocks']['stop'])
+        max_splits = max(p_space['max_splits_limit']['values']) if p_space['max_splits_limit']['type'] == 'list' else int(p_space['max_splits_limit']['stop'])
+        
+        portfolio_state_per_sim = 4 * 4
+        positions_state_per_sim = max_stocks * max_splits * 6 * 4
+        buy_signals_per_sim = num_tickers * 1 
+        sell_signals_per_sim = max_stocks * 1
+        
+        estimated_mem_per_sim = portfolio_state_per_sim + positions_state_per_sim + buy_signals_per_sim + sell_signals_per_sim
+        estimated_mem_per_sim_with_buffer = estimated_mem_per_sim * 1.2 # 20% 여유분
+
+        # 3. 최적 배치 크기 계산
+        usable_memory = (free_memory_bytes * safety_factor) - fixed_data_memory_bytes
+        if usable_memory <= 0:
+            raise ValueError("Not enough free memory for simulations.")
+            
+        optimal_size = int(usable_memory / estimated_mem_per_sim_with_buffer)
+        
+        # --- 상세 로깅 추가 ---
+        print("\n--- 📊 Optimal Batch Size Calculation ---")
+        print(f"  - Available GPU Memory   : {free_memory_mib} MiB")
+        print(f"  - Memory for Fixed Data  : {fixed_data_memory_bytes / (1024*1024):.2f} MiB")
+        print(f"  - Usable Memory (90% SF) : {usable_memory / (1024*1024):.2f} MiB")
+        print(f"  - Estimated Mem/Sim (20% Buf): {estimated_mem_per_sim_with_buffer / 1024:.2f} KB")
+        print(f"  - Calculated Batch Size  : {usable_memory:.2f} / {estimated_mem_per_sim_with_buffer:.2f} = {optimal_size}")
+        print("----------------------------------------\n")
+        # ---------------------
+
+        if optimal_size <= 0:
+            raise ValueError(f"Calculated optimal size is zero or negative.")
+
+        return optimal_size
+
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError) as e:
+        print(f"⚠️  Could not execute nvidia-smi or calculate optimal batch size: {e}")
+        return None
+
+
+# 6. [수정] 워커 함수: find_optimal_parameters
 def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float):
     """
    [역할 변경] 주어진 기간 동안 GPU를 사용하여 파라미터 최적화를 실행하고,
@@ -208,15 +272,24 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     
     print(f"  - Tickers for period: {len(all_tickers)}")
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
-    #  배치 처리 로직 
-    batch_size = backtest_settings.get('simulation_batch_size')
-    if batch_size is None or batch_size <= 0:
-        batch_size = num_combinations
+
+    #  배치 처리 로직 (자동 계산 기능 추가)
+    # --------------------------------------------------------------------------
+    fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
+    optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    
+    if optimal_batch_size:
+        batch_size = min(optimal_batch_size, num_combinations) # 계산된 값이 전체 조합 수보다 클 수 없도록 제한
+        print(f"✅ Using automatically calculated optimal batch size: {batch_size}")
+    else:
+        batch_size = backtest_settings.get('simulation_batch_size')
+        if batch_size is None or batch_size <= 0:
+            batch_size = num_combinations
+        print(f"⚠️ Using fallback batch size from config: {batch_size}")
+    # --------------------------------------------------------------------------
+
     num_batches = (num_combinations + batch_size - 1) // batch_size
     print(f"  - Total Simulations: {num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")    
-   
-   
-   
    
     all_daily_values_list = []
     total_kernel_time = 0
@@ -249,8 +322,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     daily_values_result = cp.vstack(all_daily_values_list)
     
     # 결과 분석 및 최적 파라미터 반환
-    # 이 함수는 분석만 수행하고, 결과 DF를 그대로 반환합니다.
-    # 파일 저장은 단독 실행 시에만 이루어집니다.
     best_params_for_log, all_results_df = analyze_and_save_results(
         param_combinations, daily_values_result, trading_dates_pd, save_to_file=False
     )
@@ -258,11 +329,9 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     if 'additional_buy_priority' in best_params_for_log:
         best_params_for_log['additional_buy_priority'] = priority_map_rev.get(int(best_params_for_log.get('additional_buy_priority', -1)), 'unknown')
     
-    # 반환값은 (단순 최적 파라미터, 전체 시뮬레이션 결과 DF) 튜플을 유지합니다.
-    # 오케스트레이터는 이 중 두 번째 값(all_results_df)을 사용합니다.
     return best_params_for_log, all_results_df
     
-# 6. Main Execution Block
+# 7. [수정] Main Execution Block
 if __name__ == "__main__":
     # 이 파일이 단독으로 실행될 때, config.yaml의 전체 기간으로 최적화를 수행합니다.
     backtest_start_date = backtest_settings["start_date"]
@@ -285,7 +354,7 @@ if __name__ == "__main__":
         print(f"  - 예상 Fold 수: {total_folds} folds")
     print("="*80 + "\n")
     # -------------------------------------------------------------------------
-    # ----------------------------------------------------
+    
     # 리팩토링된 워커 함수 호출
     best_parameters_found, all_results_df = find_optimal_parameters(
         start_date=backtest_start_date,
@@ -313,4 +382,5 @@ if __name__ == "__main__":
     filepath = os.path.join(output_dir, f'standalone_simulation_results_{timestamp}.csv')
     all_results_df.to_csv(filepath, index=False, float_format='%.4f')
     print(f"\n✅ Full simulation analysis saved to: {filepath}")
+
 
