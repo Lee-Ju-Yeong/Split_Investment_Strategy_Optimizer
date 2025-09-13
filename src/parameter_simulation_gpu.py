@@ -214,14 +214,10 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         batch_size = num_combinations
     num_batches = (num_combinations + batch_size - 1) // batch_size
     print(f"  - Total Simulations: {num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")    
-    # 백테스팅 커널 실행
-    start_time_kernel = time.time()
-    daily_values_result = run_gpu_optimization(
-        param_combinations, all_data_gpu, weekly_filtered_gpu, all_tickers, 
-        trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params
-    )
-    end_time_kernel = time.time()
-    elapsed_time = end_time_kernel - start_time_kernel
+   
+   
+   
+   
     all_daily_values_list = []
     total_kernel_time = 0
     for i in range(num_batches):
@@ -250,7 +246,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         print("[Error] No simulation results were generated.")
         return {}, pd.DataFrame()
     
-    print(f"  - GPU Kernel Execution Time: {elapsed_time:.2f}s")
     daily_values_result = cp.vstack(all_daily_values_list)
     
     # 결과 분석 및 최적 파라미터 반환
