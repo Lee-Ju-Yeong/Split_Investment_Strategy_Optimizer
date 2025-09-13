@@ -15,7 +15,7 @@ tags:
 model: "퀀트-J (시니어 퀀트 시스템 개발자)"
 persona: "데이터 기반의 강건성 분석에 특화된 퀀트 연구원"
 created_date: "2025-09-06"
-last_modified: "2025-09-06"
+last_modified: "2025-09-13"
 ---
 
 ## 시스템 프롬프트 (System Prompt / The Constitution)
