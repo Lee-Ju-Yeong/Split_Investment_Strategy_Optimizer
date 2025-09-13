@@ -433,7 +433,7 @@ def _process_additional_buy_signals_gpu(
     
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
-
+ 
     # 정렬된 후보들을 순회하며 하나씩 매수 시도
     for i in range(len(sorted_indices)):
         sim_idx = sorted_sim_indices[i]
