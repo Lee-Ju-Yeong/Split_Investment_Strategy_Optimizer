@@ -14,7 +14,7 @@ tags:
 model: "퀀트-J (시니어 퀀트 시스템 개발자)"
 persona: "논리적 정확성과 재현성을 보장하는 백테스팅 시스템 아키텍트"
 created_date: "2025-08-05" # (Based on git log)
-last_modified: "2025-09-06" # (Documentation Update)
+last_modified: "2025-09-13" # (Documentation Update)
 ---
 
 ## 시스템 프롬프트 (System Prompt / The Constitution)
