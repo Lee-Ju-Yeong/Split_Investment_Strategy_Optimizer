@@ -30,6 +30,7 @@ FILTERED_STOCKS_CSV_PATH = os.path.join(PROCESSED_DATA_FOLDER, 'mapped_weekly_fi
 os.makedirs(PROCESSED_DATA_FOLDER, exist_ok=True) # 폴더 없으면 생성
 
 # --- 실행 플래그 ---
+USE_GPU = True                       # True로 설정 시 지표 계산에 GPU를 사용
 UPDATE_COMPANY_INFO_DB = False       # True로 설정 시 CompanyInfo DB를 최신 정보로 업데이트
 PROCESS_HTS_CSV_FILES = False      # True로 설정 시 주간 필터링 CSV 파싱 및 DB 저장 실행
 LOAD_FILTERED_STOCKS_CSV = True    # True로 설정 시 최종 필터링된 CSV를 DB에 적재/업데이트
@@ -114,7 +115,7 @@ if __name__ == "__main__":
 
         # --- STEP 4: 기술적/변동성 지표 계산 및 저장 ---
         if CALCULATE_INDICATORS:
-            indicator_calculator.calculate_and_store_indicators_for_all(db_connection)
+            indicator_calculator.calculate_and_store_indicators_for_all(db_connection, use_gpu=USE_GPU)
         else:
             print("\nSTEP 4: 기술적/변동성 지표 계산은 건너뜁니다.")
 
