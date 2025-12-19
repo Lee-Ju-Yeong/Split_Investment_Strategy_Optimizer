@@ -8,34 +8,70 @@
 
 ### 1. 주식 및 ETF 데이터 수집
 - **주식 및 ETF 데이터 수집 스크립트**:
-  - `ticker_collector.py`: 주식 티커 정보를 수집합니다.
-  - `stock_data_collector.py`: 주식 가격 데이터를 수집하고 MySQL 데이터베이스에 저장합니다.
-  - `etf_data_collector.py`: ETF 가격 데이터를 수집하고 MySQL 데이터베이스에 저장합니다.
+  - `src/ticker_collector.py`: 주식 티커 정보를 수집합니다.
+  - `src/stock_data_collector.py`: 주식 가격 데이터를 수집하고 MySQL 데이터베이스에 저장합니다.
+  - `src/etf_data_collector.py`: ETF 가격 데이터를 수집하고 MySQL 데이터베이스에 저장합니다.
     - PER, PBR, 배당수익률 등의 조건을 만족하는 주식만 저장합니다.
     - 상장폐지된 주식 및 조건을 만족하지 않는 주식을 필터링여부를 결정합니다.
     - 효율적인 업데이트를 위해 별도의 `ticker_status` 테이블을 사용합니다.
 
 ### 2. 분할 투자 전략 백테스팅
 - **백테스팅 최적화기**:
-  - `backtest_strategy.py`: 핵심 백테스팅 전략 및 로직이 포함되어 있습니다.
-  - `single_backtest.py`: 단일 백테스팅 실행 스크립트입니다.
-  - `parameter_simulation.py`: 여러 백테스팅을 병렬로 실행하여 최적의 파라미터를 찾는 스크립트입니다.
+  - `src/backtest_strategy.py`: 핵심 백테스팅 전략 및 로직이 포함되어 있습니다.
+  - `src/single_backtest.py`: 단일 백테스팅 실행 스크립트입니다.
+  - `src/parameter_simulation.py`: 여러 백테스팅을 병렬로 실행하여 최적의 파라미터를 찾는 스크립트입니다.
 
 ### 3. 데이터 파이프라인
 - **데이터 파이프라인**:
-  - `data_pipeline.py`: 전체 데이터 수집 및 데이터베이스 설정 파이프라인을 설정합니다.
-  - `db_setup.py`: 데이터베이스 설정 및 테이블 생성을 처리합니다.
+  - `src/main_script.py`: 전체 데이터 수집 및 지표 계산 파이프라인(권장).
+  - `src/data_pipeline.py`: 레거시 데이터 파이프라인(간단 수집용).
+  - `src/db_setup.py`: 데이터베이스 설정 및 테이블 생성을 처리합니다.
 
 ### 4. 웹 인터페이스
 - **Flask 애플리케이션**:
-  - `app.py`: Flask 애플리케이션을 초기화하고 라우팅을 설정합니다.
+  - `src/app.py`: Flask 애플리케이션을 초기화하고 라우팅을 설정합니다.
   - `templates/index.html`: 웹 인터페이스 템플릿입니다.
   - `static/css/styles.css`: 웹 인터페이스를 위한 스타일 시트입니다.
   - `static/js/scripts.js`: 웹 인터페이스를 위한 자바스크립트 파일입니다.
 
+### 5. GPU 가속
+- `src/indicator_calculator_gpu.py`: GPU 기반 기술 지표 계산(옵션).
+- `src/main_script.py`의 `USE_GPU` 플래그로 CPU/GPU 전환.
+- GPU 사용 시 `cudf`, `cupy` 설치가 필요합니다.
+
+## 설치 및 실행
+
+### 1) 의존성 설치
+- pip: `pip install -r requirement.txt`
+- conda: `conda env create -f environment.yml`
+
+### 2) 설정 파일
+- 레거시 파이프라인/DB 유틸: `config.ini`에 MySQL 접속 정보를 설정합니다.
+- 리팩토링 엔진/웹 UI/GPU 최적화: `config/config.yaml`을 사용합니다.
+  - 예시 파일: `config/config.example.yaml`
+  - 생성 예시: `cp config/config.example.yaml config/config.yaml`
+- 실제 계정 정보는 로컬에서만 관리하고 공개 저장소에 커밋하지 않는 것을 권장합니다.
+
+### 3) DB 테이블 생성
+- `python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"`
+- 또는 `python -m src.main_script` 실행 시 테이블이 자동 생성됩니다.
+
+### 4) 목적별 실행 경로
+- 데이터 파이프라인(권장): `python -m src.main_script` (파일 상단 플래그로 단계 제어)
+- 레거시 파이프라인: `python src/data_pipeline.py`
+- 레거시 분할 백테스트: `python src/single_backtest.py`
+- 파라미터 스윕: `python src/parameter_simulation.py`
+- 리팩토링 백테스트: `python -m src.main_backtest`
+
+### 5) 웹 UI 실행
+- 실행: `python -m src.app`
+- 사전 준비: `DailyStockPrice`, `CalculatedIndicators`, `WeeklyFilteredStocks`, `CompanyInfo` 테이블이 채워져 있어야 합니다.
+- 결과 파일은 `results/run_*/`에 저장됩니다.
+
 ## 분할 투자 전략 설명
 
-분할 투자 전략은 주식이나 ETF의 가격이 일정 비율로 하락할 때 분할 매수하고, 일정 비율로 상승할 때 분할 매도하는 전략입니다. 이를 통해 리스크를 관리하고 일정한 수익을 목표로 합니다. 
+분할 투자 전략은 주식이나 ETF의 가격이 일정 비율로 하락할 때 분할 매수하고, 일정 비율로 상승할 때 분할 매도하는 전략입니다. 이를 통해 리스크를 관리하고 일정한 수익을 목표로 합니다.
+이 섹션의 공식은 `src/backtest_strategy.py`/`src/single_backtest.py` 기반(레거시) 흐름을 설명합니다.
 ![alt text](image/Untitled.png)
 각 주식은 `n`단계(`num_splits`)로 분할 매도 매수를 진행하며, 단계별 수익률은 다음과 같이 계산됩니다.
 
@@ -79,16 +115,28 @@
     * 예: [30, 45, 60]
 - **랜덤 시드 (`seed`)**: 백테스팅의 일관성을 유지하기 위해 랜덤 시드를 고정합니다.
 
+## 리팩토링 백테스트 파라미터(객체지향 엔진)
+- `initial_cash`: 초기 자본
+- `max_stocks`: 최대 보유 종목 수
+- `order_investment_ratio`: 한 번 주문 시 투자 비율
+- `additional_buy_drop_rate`: 추가 매수 트리거 하락률
+- `sell_profit_rate`: 목표 매도 수익률
+- `additional_buy_priority`: 추가 매수 우선순위(`lowest_order` 또는 `biggest_drop`)
+- `cooldown_period_days`: 재진입 쿨다운(거래일)
+- `stop_loss_rate`: 손절 기준 수익률
+- `max_splits_limit`: 추가 매수 최대 단계
+- `max_inactivity_period`: 비활성 기간 제한(거래일)
+- 예시 실행: `python -m src.main_backtest` (파라미터는 `src/main_backtest.py`에서 설정)
+
 ## 사용된 주요 라이브러리 및 툴
 - `pykrx`: 한국 거래소 데이터를 가져오기 위해 사용.
 - `pymysql`: MySQL 데이터베이스와의 연동을 위해 사용.
-- `pandas`: 데이터 조작 및 분석을 위해 사용.
-- `matplotlib`: 데이터 시각화를 위해 사용.
-- `configparser`: 설정 파일을 읽고 쓰기 위해 사용.
-- `numpy`: 수치 연산을 위해 사용.
-- `concurrent.futures`: 병렬 처리를 위해 사용.
-- `tqdm`: 프로세스 진행률을 표시하기 위해 사용.
-- `flask`: 웹 인터페이스를 생성하기 위해 사용.
+- `pandas`, `numpy`: 데이터 조작 및 수치 연산.
+- `matplotlib`, `seaborn`: 시각화.
+- `sqlalchemy`, `mysql-connector-python`: DB 연결 및 ORM.
+- `selenium`, `webdriver-manager`: 웹 자동화/스크래핑.
+- `configparser`, `cryptography`: 설정 및 보안 관련 유틸리티.
+- `tqdm`, `flask`: 진행률 표시 및 웹 인터페이스.
 
 ## 프로젝트 파일 설명
 
@@ -96,7 +144,8 @@
   - `src/ticker_collector.py`: 주식 티커 정보를 수집합니다.
   - `src/stock_data_collector.py`: 주식 가격 데이터를 수집합니다.
   - `src/etf_data_collector.py`: ETF 가격 데이터를 수집합니다.
-  - `src/data_pipeline.py`: 전체 데이터 수집 및 데이터베이스 설정 프로세스를 오케스트레이션합니다.
+  - `src/main_script.py`: 전체 데이터 수집 및 지표 계산 파이프라인을 오케스트레이션합니다.
+  - `src/data_pipeline.py`: 레거시 데이터 파이프라인 스크립트입니다.
 
 - **백테스팅**:
   - `src/backtest_strategy.py`: 핵심 백테스팅 전략 및 로직이 포함되어 있습니다.
@@ -124,21 +173,20 @@
     - 상장폐지 종목을 제외한 백테스팅 결과, 연평균 수익률 최대 16.5%.
 - **2024년 7월 24일**: 백테스팅을 구현할 수 있는 Flask 웹페이지 개발
 
-## 향후 계획
-# Project Roadmap
+## 향후 계획 (로드맵)
 
-This document outlines the development roadmap for the GPU-accelerated backtesting optimizer.
+GPU 가속 기반의 백테스팅 최적화 엔진 완성을 위한 개발 로드맵입니다.
 
 ---
 
-### ✅ Epic 0: Initial Setup & Data Pipeline (Completed)
+### ✅ 에픽 0: 초기 설정 및 데이터 파이프라인 (완료)
 - [x] #5 HTS 조건검색 결과 CSV 파일 파싱 로직 구현
 - [x] #8 OHLCV 데이터 수집 및 DailyStockPrice DB 적재 기능 개발
 - [x] #9 기술적/변동성 지표 계산 및 CalculatedIndicators DB 적재 기능 개발
 
 ---
 
-### 🚀 Epic 1: GPU Acceleration (In Progress)
+### 🚀 에픽 1: GPU 가속 (진행 중)
 *백테스팅 및 최적화 속도를 극적으로 향상시키기 위한 핵심 기반 작업입니다.*
 
 - [x] #41 GPU 개발 환경 구축
@@ -148,16 +196,16 @@ This document outlines the development roadmap for the GPU-accelerated backtesti
 
 ---
 
-### 📊 Epic 2: Analysis & Usability
+### 📊 에픽 2: 분석 및 사용성
 *GPU로 얻은 결과를 의미있게 분석하고, 프로젝트 사용성을 높입니다.*
 
 - [ ] #45 백테스트 성과 지표 상세 계산
 - [ ] #46 최적화 결과 저장 및 리포트 생성
-- [ ] #47 CLI (Command-Line Interface) 도입
+- [ ] #47 CLI(명령줄 인터페이스) 도입
 
 ---
 
-### 📚 Epic 3: Documentation & Maintainability
+### 📚 에픽 3: 문서화 및 유지보수
 *누구나 프로젝트를 이해하고 기여할 수 있도록 프로젝트의 완성도를 높입니다.*
 
 - [ ] #48 README.md 상세 문서화
@@ -165,7 +213,7 @@ This document outlines the development roadmap for the GPU-accelerated backtesti
 
 ---
 
-### 🧩 Epic 4: Strategy & Extensibility
+### 🧩 에픽 4: 전략 및 확장성
 *장기적으로 다양한 전략을 쉽게 추가하고 실험할 수 있는 유연한 구조를 만듭니다.*
 
 - [ ] #50 설정 기반 전략 로딩 구조로 리팩토링
