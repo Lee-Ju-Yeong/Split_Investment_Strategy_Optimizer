@@ -184,7 +184,7 @@ def main():
             print(f"\n[오류] 백테스팅 실행 중 문제가 발생했습니다: {result.get('error', '알 수 없는 오류')}")
 
     except FileNotFoundError:
-        print("\n[오류] 'config.yaml' 설정 파일을 찾을 수 없습니다. 프로젝트 루트 디렉토리에 파일을 생성해주세요.")
+        print("\n[오류] 'config/config.yaml' 설정 파일을 찾을 수 없습니다. 프로젝트 루트에 생성해주세요.")
     except Exception as e:
         import traceback
         traceback.print_exc()

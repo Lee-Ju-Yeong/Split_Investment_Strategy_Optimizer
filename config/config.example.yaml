@@ -1,0 +1,68 @@
+# 로컬에서 config/config.yaml로 복사 후 값을 수정하세요.
+
+database:
+  host: "127.0.0.1"
+  user: "root"
+  password: "CHANGE_ME"
+  database: "stocks"
+
+backtest_settings:
+  start_date: "2015-01-01"
+  end_date: "2020-12-31"
+  initial_cash: 10000000
+  save_full_trade_history: false
+
+strategy_params:
+  max_stocks: 20
+  order_investment_ratio: 0.02
+  additional_buy_drop_rate: 0.04
+  sell_profit_rate: 0.04
+  additional_buy_priority: "lowest_order"
+  cooldown_period_days: 5
+  stop_loss_rate: -0.15
+  max_splits_limit: 10
+  max_inactivity_period: 90
+
+execution_params:
+  buy_commission_rate: 0.00015
+  sell_commission_rate: 0.00015
+  sell_tax_rate: 0.0018
+
+paths:
+  results_dir: "results"
+
+parameter_space:
+  max_stocks:
+    type: "list"
+    values: [20, 30, 40]
+  order_investment_ratio:
+    type: "linspace"
+    start: 0.01
+    stop: 0.05
+    num: 5
+  additional_buy_drop_rate:
+    type: "linspace"
+    start: 0.02
+    stop: 0.06
+    num: 3
+  sell_profit_rate:
+    type: "linspace"
+    start: 0.02
+    stop: 0.06
+    num: 3
+  additional_buy_priority:
+    type: "list"
+    values: [0, 1]
+  stop_loss_rate:
+    type: "list"
+    values: [-0.15]
+  max_splits_limit:
+    type: "list"
+    values: [10, 15]
+  max_inactivity_period:
+    type: "list"
+    values: [90]
+
+walk_forward_settings:
+  total_folds: 6
+  period_length_days: 365

@@ -5,8 +5,8 @@ from flask_cors import CORS
 import os
 
 # --- 새로운 프레임워크의 컴포넌트 임포트 ---
-from main_backtest import run_backtest_from_config
-from config_loader import load_config
+from .main_backtest import run_backtest_from_config
+from .config_loader import load_config
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
@@ -24,9 +24,9 @@ def run_backtest_endpoint():
     # 1. 웹 UI에서 전송된 파라미터를 받음
     form_data = request.json
     
-    # 2. 기본 config.yaml 설정을 불러옴
+    # 2. 기본 config/config.yaml 설정을 불러옴
     try:
-        config = load_config('config.yaml')
+        config = load_config()
     except Exception as e:
         return jsonify({"error": f"설정 파일 로딩 실패: {e}"}), 500
 
