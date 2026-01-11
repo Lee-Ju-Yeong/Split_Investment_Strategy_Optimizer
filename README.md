@@ -68,6 +68,70 @@
 - 사전 준비: `DailyStockPrice`, `CalculatedIndicators`, `WeeklyFilteredStocks`, `CompanyInfo` 테이블이 채워져 있어야 합니다.
 - 결과 파일은 `results/run_*/`에 저장됩니다.
 
+## 기여 가이드 (Contributing)
+
+### 프로젝트 구조
+- `src/`: 핵심 Python 패키지
+- `tests/`: 단위/통합 테스트 (`test_*.py`)
+- `config/`: 설정 템플릿 (실제 설정은 gitignored)
+- `templates/`, `static/`: Flask UI
+
+### 코딩 스타일
+
+**Python:**
+- 4-space 들여쓰기
+- 파일/함수명: `snake_case`, 클래스명: `CamelCase`
+- 함수는 20줄 이내, 한 가지 일만 수행 (Single Responsibility)
+- 인자 3개 이하 (초과 시 객체로 묶기)
+
+**명명 규칙:**
+- 의도를 드러내는 이름: `elapsed_time_in_days` (O), `d` (X)
+- 무의미한 접두사/접미사, 약어 금지
+
+**주석:**
+- What이 아닌 Why 설명
+- 코드로 설명 가능하면 주석 제거
+
+### 테스트
+
+```bash
+# 전체 테스트
+python -m unittest discover -s tests -p 'test_*.py'
+
+# 단일 모듈 테스트
+python -m unittest tests.test_portfolio
+```
+
+- 테스트는 결정적(deterministic)이어야 함
+- DB/네트워크 접근은 가능한 mock 사용
+
+### 커밋 규칙
+
+Conventional Commits 형식:
+```
+<type>(<scope>): <description>
+
+# 예시
+feat(gpu): 메모리 기반 동적 배치 크기 계산 기능 추가
+fix(#43): 추가 매수 로직 병렬화 버그 수정
+docs: README.md 기여 가이드 추가
+refactor(backtester): 포트폴리오 상태 관리 로직 개선
+test: GPU 백테스터 단위 테스트 추가
+```
+
+**Type:** `feat`(새 기능), `fix`(버그 수정), `docs`(문서), `refactor`(리팩토링), `test`(테스트), `chore`(빌드/설정)
+
+### PR 규칙
+1. 명확한 설명 포함
+2. 관련 이슈 링크 (`#NN`)
+3. `config/` 또는 DB 스키마 변경 시 명시
+4. UI 변경 시 스크린샷 첨부
+
+### 보안
+- `config/config.yaml`, `config.ini`는 gitignored - 로컬에서만 관리
+- 결과물은 `results/`에 생성 (gitignored)
+- 민감 정보(API 키, 비밀번호)는 절대 커밋 금지
+
 ## 분할 투자 전략 설명
 
 분할 투자 전략은 주식이나 ETF의 가격이 일정 비율로 하락할 때 분할 매수하고, 일정 비율로 상승할 때 분할 매도하는 전략입니다. 이를 통해 리스크를 관리하고 일정한 수익을 목표로 합니다.
