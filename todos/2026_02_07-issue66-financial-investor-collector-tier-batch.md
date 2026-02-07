@@ -236,9 +236,13 @@ runner.run(mode="daily")
   - 백필: `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20260207 --skip-financial --skip-investor`
   - 일배치: `python -m src.pipeline_batch --mode daily --end-date 20260207 --skip-financial --skip-investor`
   - 결과: `DailyStockTier` `1,329,758`행 적재 완료
-- [x] 운영 블로커 식별
-  - `pykrx.get_market_fundamental`, `pykrx.get_market_trading_value_by_date`가 현재 환경에서 빈 DataFrame 반환
-  - 따라서 `FinancialData`, `InvestorTradingTrend`는 아직 `0`건 (별도 데이터 소스/우회 경로 필요)
+- [x] 운영 블로커 해소(재검증)
+  - `rapids-env` + `pykrx==1.2.3` 기준 `get_market_fundamental`, `get_market_trading_value_by_date` 응답 정상 확인
+  - 적재 현황(2026-02-07): `FinancialData=24,230`, `InvestorTradingTrend=7` (초기 적재 시작 상태)
+- [ ] 후속 TODO(우선): `FinancialData`/`InvestorTradingTrend` 전종목 백필 재실행
+  - 목적: API 응답 복구 이후 누락 구간을 채워 데이터 커버리지를 확보
+  - 실행: `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20260207 --skip-tier`
+  - 운영 권장: 반기 단위 분할 실행 후 `mode=daily`로 전환
 - [ ] 후속 TODO(보류): `DailyStockPrice` 전기간 재적재
   - 배경: `adjusted=True`/`adjusted=False` 혼재 가능성이 있어 장기 정합성 점검 후 KRX raw SSOT 기준으로 재적재 필요
   - 정책: 지금은 실행하지 않고 TODO로만 유지, `adj_close`/`adj_ratio` 설계 확정 후 별도 배치로 수행
