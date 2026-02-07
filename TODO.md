@@ -6,6 +6,7 @@
 
 ## 이슈별 상세 TODO 문서
 - [ ] 이슈 #64 PIT/룩어헤드 방지: `todos/2026_02_07-issue64-point-in-time-lookahead-bias.md`
+- [ ] 이슈 #65 스키마/인덱스 확장: `todos/2026_02_07-issue65-financial-investor-tier-schema-index.md`
 
 ## 전체 우선순위 (Global Backlog)
 

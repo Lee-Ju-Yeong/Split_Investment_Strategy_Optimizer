@@ -16,6 +16,20 @@ def get_db_connection():
 
 def create_tables(conn):
     cur = conn.cursor()
+    def ensure_index(table_name, index_name, column_expr):
+        cur.execute(
+            '''
+            SELECT 1
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND INDEX_NAME = %s
+            LIMIT 1
+            ''',
+            (table_name, index_name)
+        )
+        if cur.fetchone() is None:
+            cur.execute(f'CREATE INDEX {index_name} ON {table_name} ({column_expr})')
     cur.execute('''
     CREATE TABLE IF NOT EXISTS stock_data (
         ticker VARCHAR(10),
@@ -94,5 +108,49 @@ def create_tables(conn):
         PRIMARY KEY (stock_code, date)
     )
     ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS FinancialData (
+        stock_code VARCHAR(20),
+        date DATE,
+        per FLOAT NULL,
+        pbr FLOAT NULL,
+        eps FLOAT NULL,
+        bps FLOAT NULL,
+        dps FLOAT NULL,
+        div_yield FLOAT NULL,
+        roe FLOAT NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS InvestorTradingTrend (
+        stock_code VARCHAR(20),
+        date DATE,
+        individual_net_buy BIGINT DEFAULT 0,
+        foreigner_net_buy BIGINT DEFAULT 0,
+        institution_net_buy BIGINT DEFAULT 0,
+        total_net_buy BIGINT DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS DailyStockTier (
+        date DATE,
+        stock_code VARCHAR(20),
+        tier TINYINT NOT NULL,
+        reason VARCHAR(255),
+        liquidity_20d_avg_value BIGINT NULL,
+        computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (date, stock_code)
+    )
+    ''')
+    ensure_index('FinancialData', 'idx_financial_date_stock', 'date, stock_code')
+    ensure_index('InvestorTradingTrend', 'idx_investor_date_stock', 'date, stock_code')
+    ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')
+    ensure_index('DailyStockTier', 'idx_tier_stock_date', 'stock_code, date')
+    ensure_index('DailyStockTier', 'idx_tier_date_tier_stock', 'date, tier, stock_code')
     conn.commit()
     cur.close()
