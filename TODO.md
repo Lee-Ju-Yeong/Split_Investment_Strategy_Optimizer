@@ -2,6 +2,10 @@
 
 이 파일은 상위 수준의 리팩토링 목표를 정리합니다. 상세 범위와 논의는 GitHub 이슈에서 진행합니다.
 이슈가 닫히면 이 목록도 함께 갱신하세요.
+상세 실행 메모는 `todos/YYYY_MM_DD-issue<N>-<name>.md` 패턴으로 관리합니다.
+
+## 이슈별 상세 TODO 문서
+- [ ] 이슈 #64 PIT/룩어헤드 방지: `todos/2026_02_07-issue64-point-in-time-lookahead-bias.md`
 
 ## 전체 우선순위 (Global Backlog)
 

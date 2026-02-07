@@ -9,6 +9,11 @@ from datetime import timedelta
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
 
+
+class PointInTimeViolation(ValueError):
+    """Raised when a data row later than the requested as-of date is returned."""
+
+
 class DataHandler:
     def __init__(self, db_config):
         self.db_config = db_config
@@ -49,6 +54,21 @@ class DataHandler:
 
     def get_connection(self):
         return self.connection_pool.get_connection()
+
+    @staticmethod
+    def assert_point_in_time(row_date, as_of_date):
+        row_ts = pd.to_datetime(row_date)
+        as_of_ts = pd.to_datetime(as_of_date)
+        if row_ts > as_of_ts:
+            raise PointInTimeViolation(
+                f"PIT violation: row_date({row_ts.date()}) is newer than as_of_date({as_of_ts.date()})."
+            )
+
+    @staticmethod
+    def get_previous_trading_date(trading_dates, current_day_idx):
+        if current_day_idx is None or current_day_idx <= 0:
+            return None
+        return pd.to_datetime(trading_dates[current_day_idx - 1])
 
     def get_trading_dates(self, start_date, end_date):
         conn = self.get_connection()
@@ -95,32 +115,31 @@ class DataHandler:
 
 
     def get_latest_price(self, date, ticker, start_date, end_date):
-        stock_data = self.load_stock_data(ticker, start_date, end_date)
-        
-        if stock_data is None or stock_data.empty:
+        data_row = self.get_stock_row_as_of(ticker, date, start_date, end_date)
+        if data_row is None:
             return None
-        
         try:
-            target_date = pd.to_datetime(date)
-            # asof: date 또는 그 이전의 가장 마지막 데이터를 찾아줌
-            return stock_data.asof(target_date)['close_price']
-        except (KeyError, IndexError):
+            return data_row['close_price']
+        except KeyError:
             return None
 
-    def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
+    def get_stock_row_as_of(self, ticker, as_of_date, start_date, end_date):
         stock_data = self.load_stock_data(ticker, start_date, end_date)
         if stock_data is None or stock_data.empty:
             return None
-        
-        try:
-            target_date = pd.to_datetime(date)
-            # asof를 사용하여 해당 날짜 또는 그 이전의 가장 가까운 데이터를 Series로 반환
-            data_row = stock_data.asof(target_date)
-            if data_row is None or pd.isna(data_row.name):
-                return None
-            return data_row
-        except (KeyError, IndexError):
+
+        target_date = pd.to_datetime(as_of_date)
+        row_index = stock_data.index.asof(target_date)
+        if pd.isna(row_index):
             return None
+
+        self.assert_point_in_time(row_index, target_date)
+        data_row = stock_data.loc[row_index].copy()
+        data_row.name = row_index
+        return data_row
+
+    def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
+        return self.get_stock_row_as_of(ticker, date, start_date, end_date)
 
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()
