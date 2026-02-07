@@ -80,8 +80,8 @@ def normalize_fundamental_df(df_fundamental, ticker_code):
     div_col = _resolve_column(df, ["DIV", "DIV_YIELD", "DIVIDEND_YIELD"])
 
     output = pd.DataFrame()
-    output["stock_code"] = ticker_code
     output["date"] = pd.to_datetime(df[date_column]).dt.strftime("%Y-%m-%d")
+    output["stock_code"] = ticker_code
     output["per"] = df[per_col] if per_col else np.nan
     output["pbr"] = df[pbr_col] if pbr_col else np.nan
     output["eps"] = df[eps_col] if eps_col else np.nan

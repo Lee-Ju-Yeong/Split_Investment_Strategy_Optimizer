@@ -77,6 +77,12 @@
 - `docs/database/schema.md`에 신규 2개 테이블 설명이 누락되어 운영 인수인계 리스크가 존재
 - 배치 실패 복구 기준(`MAX(date)` 재시작, 최근 N일 재적재 옵션) 문서화가 필요
 
+### 4-5. 운영 적용 전 필수 점검(서브에이전트 검토)
+- `src/pipeline_batch.py`는 `start/end` 형식 검증은 있으나 `end < start`, `end > today` 차단이 없어 운영 실수 방지 가드 보강 필요
+- `src/financial_collector.py`, `src/investor_trading_collector.py`는 에러 건수 집계만 있어 실패 티커 추적/재시도 전략 문서화가 필요
+- `src/daily_stock_tier_batch.py`는 `DailyStockPrice` 데이터 부재 시 빈 결과로 종료하므로, 운영 모드에서는 하드 실패 옵션 여부를 결정해야 함
+- 운영 적용 시점에는 코드 변경보다 우선해서 SQL 검증 루틴(테이블/인덱스/미래데이터/커버리지)을 고정 체크리스트로 실행해야 함
+
 ## 5. (AI가) 파악한 이슈의 원인
 - 근본 원인은 **수집/계산 책임이 런타임과 단일 스크립트에 혼재**되어 있고, 배치 단위(백필/일배치)로 분리되지 않은 구조임
 - 두 번째 원인은 **스키마 준비와 실행 코드 간 단절**로, DB 확장이 실제 전략/백테스트 성능 개선으로 이어지지 못하는 상태임
@@ -130,6 +136,37 @@ runner.run(mode="daily")
 - `src/db_setup.py`/`docs/database/schema.md`: 신규 테이블 컬럼/인덱스/운영 규칙 동기화
 - `tests/`: Tier as-of 조회, PIT 위반 방지, Tier fallback(1->2) 동작 검증 테스트 추가
 
+### 6-5. 운영 적용 실행안 (서브에이전트 비교)
+- 방안 O1 (Safe): 최근 3개월만 백필 후 일배치 전환
+  - 명령: `python -m src.pipeline_batch --mode backfill --start-date 20251101 --end-date 20260207`
+  - 장점: 빠른 검증/낮은 리스크
+  - 단점: 과거 데이터 커버리지 부족
+- 방안 O2 (Balanced, 권장): 분기 단위 분할 백필 후 일배치 전환
+  - 명령 예시:
+    - `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20240630`
+    - `python -m src.pipeline_batch --mode backfill --start-date 20240701 --end-date 20241231`
+    - `python -m src.pipeline_batch --mode backfill --start-date 20250101 --end-date 20250630`
+    - `python -m src.pipeline_batch --mode backfill --start-date 20250701 --end-date 20260207`
+  - 장점: 장애 복구 범위 축소, 메모리/시간 리스크 완화
+  - 단점: 실행 횟수 증가
+- 방안 O3 (Aggressive): 전기간 일괄 백필 후 일배치 전환
+  - 명령: `python -m src.pipeline_batch --mode backfill --start-date 19800101 --end-date 20260207`
+  - 장점: 1회 실행으로 전체 적재
+  - 단점: 장시간 실행/메모리/외부 API 실패 리스크 큼
+
+### 6-6. 운영 검증/복구 절차 초안
+- 사전 검증:
+  - `python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"`
+  - `conda run -n rapids-env python -m unittest tests.test_pipeline_batch tests.test_daily_stock_tier_batch tests.test_data_handler_tier tests.test_point_in_time tests.test_db_setup -v`
+- 사후 검증(SQL):
+  - `SELECT MIN(date), MAX(date), COUNT(*) FROM FinancialData;`
+  - `SELECT MIN(date), MAX(date), COUNT(*) FROM InvestorTradingTrend;`
+  - `SELECT MIN(date), MAX(date), COUNT(*) FROM DailyStockTier;`
+  - `SELECT COUNT(*) FROM DailyStockTier WHERE tier NOT IN (1,2,3) OR tier IS NULL;`
+- 복구:
+  - 기간 삭제 후 재실행(`DELETE ... WHERE date BETWEEN ...`)
+  - 업서트 구조(`ON DUPLICATE KEY UPDATE`) 기반 동일 구간 재적재
+
 ---
 
 ## 7. 최종 결정된 수정 방안 (AI 가 자동 진행하면 안되고 **무조건**/**MUST** 사람에게 선택/결정을 맡겨야 한다)
@@ -174,11 +211,40 @@ runner.run(mode="daily")
 - [x] `tests/test_daily_stock_tier_batch.py:12` Tier 계산 로직(유동성 + financial risk) 테스트 추가
 - [x] `tests/test_data_handler_tier.py:13` Tier as-of API 테스트 추가
 - [x] `docs/database/schema.md:88` `InvestorTradingTrend`, `DailyStockTier` 섹션 및 인덱스 문서화
+- [x] `src/ohlcv_collector.py` 및 `src/stock_data_collector.py`에 OHLCV fallback 반영
+  - `adjusted=True` 우선 조회, 결과가 비어 있으면 `adjusted=False(KRX)`로 재시도
 
 ### 8-4. 운영 적용 체크리스트
-- [ ] 운영 DB에 스키마 반영: `python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"`
-- [ ] 초기 백필 실행: `python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`
-- [ ] 일배치 전환: `python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>`
+- [x] 운영 DB에 스키마 반영: `python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"`
+  - 실행일: 2026-02-07, 결과: `schema-ok`
+- [x] 초기 백필 실행(O2 분기 분할): `python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`
+  - 실행 구간:
+    - `20240101~20240630`
+    - `20240701~20241231`
+    - `20250101~20250630`
+    - `20250701~20260207`
+  - 결과: 모든 구간에서 `tickers_total=0`, `rows_saved=0`
+- [x] 일배치 전환: `python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>`
+  - 실행일: 2026-02-07, 결과: `tickers_total=0`, `rows_saved=0`
+- [x] 운영 검증(현황 점검)
+  - `CompanyInfo`, `WeeklyFilteredStocks`, `DailyStockPrice`가 모두 `0`건이라 수집 대상 유니버스가 비어 있음
+  - 따라서 Financial/Investor/Tier 적재가 0건으로 종료됨(파이프라인 오류 아님)
+- [x] 선행 데이터 재적재(2차 실행)
+  - `finance-datareader`로 KRX 상장 목록을 로드해 `CompanyInfo`/`WeeklyFilteredStocks` 시드 적재 완료
+  - `OHLCV` 재수집 완료: `DailyStockPrice` `1,329,758`행, `2721`종목, `2024-01-02 ~ 2026-02-06`
+- [x] Tier 백필/일배치 재실행(2차 실행)
+  - 백필: `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20260207 --skip-financial --skip-investor`
+  - 일배치: `python -m src.pipeline_batch --mode daily --end-date 20260207 --skip-financial --skip-investor`
+  - 결과: `DailyStockTier` `1,329,758`행 적재 완료
+- [x] 운영 블로커 식별
+  - `pykrx.get_market_fundamental`, `pykrx.get_market_trading_value_by_date`가 현재 환경에서 빈 DataFrame 반환
+  - 따라서 `FinancialData`, `InvestorTradingTrend`는 아직 `0`건 (별도 데이터 소스/우회 경로 필요)
+- [ ] 후속 TODO(보류): `DailyStockPrice` 전기간 재적재
+  - 배경: `adjusted=True`/`adjusted=False` 혼재 가능성이 있어 장기 정합성 점검 후 KRX raw SSOT 기준으로 재적재 필요
+  - 정책: 지금은 실행하지 않고 TODO로만 유지, `adj_close`/`adj_ratio` 설계 확정 후 별도 배치로 수행
+- [ ] 후속 TODO(보류): `adj_close`/`adj_ratio` 파생 계산 배치
+  - 배경: `DailyStockPrice` 스키마 확장 후 raw 기준으로 보정값을 채우는 전용 배치가 필요
+  - 정책: 이번 변경에서는 스키마/수집 기본값만 반영하고, 파생 계산 배치는 별도 이슈로 분리
 
 ---
 

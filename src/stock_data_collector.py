@@ -7,6 +7,12 @@ import numpy as np
 from pykrx import stock
 from db_setup import get_db_connection
 
+def get_market_ohlcv_with_fallback(start_date, end_date, ticker):
+    """
+    KRX 원본가 기준(adjusted=False)으로 OHLCV를 조회.
+    """
+    return stock.get_market_ohlcv(start_date, end_date, ticker, adjusted=False)
+
 def collect_stock_data(per_threshold=10, pbr_threshold=1, div_threshold=3.5):
     conn = get_db_connection()  # Establish a connection to the database
     cur = conn.cursor()  # Create a cursor object to interact with the database
@@ -62,7 +68,7 @@ def collect_stock_data(per_threshold=10, pbr_threshold=1, div_threshold=3.5):
             continue  # Skip if necessary columns are missing
 
         time.sleep(5.2)
-        df1 = stock.get_market_ohlcv(start_date, end_date, ticker)
+        df1 = get_market_ohlcv_with_fallback(start_date, end_date, ticker)
         if df1.empty or '고가' not in df1.columns:
             cur.execute(f"UPDATE ticker_status SET status = 'completed' WHERE ticker = '{ticker}'")
             conn.commit()

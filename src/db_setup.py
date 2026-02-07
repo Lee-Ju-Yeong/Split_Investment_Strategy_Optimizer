@@ -30,6 +30,22 @@ def create_tables(conn):
         )
         if cur.fetchone() is None:
             cur.execute(f'CREATE INDEX {index_name} ON {table_name} ({column_expr})')
+    def ensure_column(table_name, column_name, column_definition):
+        cur.execute(
+            '''
+            SELECT 1
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            LIMIT 1
+            ''',
+            (table_name, column_name)
+        )
+        if cur.fetchone() is None:
+            cur.execute(
+                f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}'
+            )
     cur.execute('''
     CREATE TABLE IF NOT EXISTS stock_data (
         ticker VARCHAR(10),
@@ -92,10 +108,14 @@ def create_tables(conn):
         high_price DECIMAL(20, 5),
         low_price DECIMAL(20, 5),
         close_price DECIMAL(20, 5),
+        adj_close DECIMAL(20, 5) NULL,
+        adj_ratio DECIMAL(20, 10) NULL,
         volume BIGINT,
         PRIMARY KEY (stock_code, date)
     )
     ''')
+    ensure_column('DailyStockPrice', 'adj_close', 'DECIMAL(20, 5) NULL')
+    ensure_column('DailyStockPrice', 'adj_ratio', 'DECIMAL(20, 10) NULL')
     cur.execute('''
     CREATE TABLE IF NOT EXISTS CalculatedIndicators (
         stock_code VARCHAR(6),

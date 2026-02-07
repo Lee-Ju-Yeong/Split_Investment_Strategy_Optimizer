@@ -71,8 +71,8 @@ def normalize_investor_df(df_trading, ticker_code):
     institution_col = _resolve_column(df, ["기관", "institution"])
 
     output = pd.DataFrame()
-    output["stock_code"] = ticker_code
     output["date"] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
+    output["stock_code"] = ticker_code
     output["individual_net_buy"] = pd.to_numeric(
         df[individual_col], errors="coerce"
     ).fillna(0) if individual_col else 0
@@ -209,4 +209,3 @@ def run_investor_trading_batch(
             continue
 
     return summary
-
