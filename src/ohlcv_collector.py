@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 # 설정값
 API_CALL_DELAY = 0.3
 DEFAULT_PYKRX_START_DATE_STR = "19800101"
+USE_ADJUSTED_OHLCV = False
 
 def get_latest_ohlcv_date_for_ticker(conn, ticker_code): # engine 대신 conn (MySQL connection)
     """
@@ -29,6 +30,19 @@ def get_latest_ohlcv_date_for_ticker(conn, ticker_code): # engine 대신 conn (M
     except Exception as e:
         print(f"    [오류] {ticker_code}의 마지막 OHLCV 날짜 조회 중: {e}")
         return None
+
+
+def get_market_ohlcv_with_fallback(start_date, end_date, ticker_code):
+    """
+    KRX 원본가 기준(adjusted=False)으로 OHLCV를 조회합니다.
+    """
+    time.sleep(API_CALL_DELAY)
+    return stock.get_market_ohlcv(
+        start_date,
+        end_date,
+        ticker_code,
+        adjusted=USE_ADJUSTED_OHLCV,
+    )
 
 def collect_and_save_ohlcv_for_filtered_stocks(conn, company_manager, overall_end_date_str, force_recollect=False):
     """
@@ -96,8 +110,11 @@ def collect_and_save_ohlcv_for_filtered_stocks(conn, company_manager, overall_en
             effective_start_date_pykrx = effective_start_dt.strftime("%Y%m%d")
         
         try:
-            time.sleep(API_CALL_DELAY)
-            df_ohlcv = stock.get_market_ohlcv(effective_start_date_pykrx, overall_end_date_str, ticker_code)
+            df_ohlcv = get_market_ohlcv_with_fallback(
+                effective_start_date_pykrx,
+                overall_end_date_str,
+                ticker_code,
+            )
 
             if df_ohlcv.empty:
                 print(f"    - {ticker_code}: {effective_start_date_pykrx} ~ {overall_end_date_str} 기간에 추가 데이터 없음.")
