@@ -69,6 +69,11 @@ class MagicSplitStrategy(Strategy):
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
 
+    def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
+        if current_day_idx is None:
+            return pd.to_datetime(current_date)
+        return data_handler.get_previous_trading_date(trading_dates, current_day_idx)
+
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
         current_month = current_date.month
@@ -88,6 +93,9 @@ class MagicSplitStrategy(Strategy):
         # 각 신호 생성 함수가 독립적으로 호출되므로, 투자금 계산 로직은 각 함수에 포함되어야 합니다.
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
+        signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
+        if signal_date is None:
+            return buy_signals
 
         # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
@@ -118,11 +126,21 @@ class MagicSplitStrategy(Strategy):
             
             candidate_atrs = []
             for ticker in active_candidates:
-                stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
-                if stock_data is not None and not stock_data.empty and "atr_14_ratio" in stock_data.columns and current_date in stock_data.index:
-                    latest_atr = stock_data.loc[current_date, "atr_14_ratio"]
-                    if pd.notna(latest_atr):
-                        candidate_atrs.append({"ticker": ticker, "atr_14_ratio": latest_atr})
+                signal_row = data_handler.get_stock_row_as_of(
+                    ticker, signal_date, self.backtest_start_date, self.backtest_end_date
+                )
+                if signal_row is None or "atr_14_ratio" not in signal_row.index:
+                    continue
+                latest_atr = signal_row["atr_14_ratio"]
+                signal_close = signal_row.get("close_price")
+                if pd.notna(latest_atr) and pd.notna(signal_close):
+                    candidate_atrs.append(
+                        {
+                            "ticker": ticker,
+                            "atr_14_ratio": latest_atr,
+                            "signal_close_price": signal_close,
+                        }
+                    )
                         
             # GPU와 동일한 정렬 기준 적용 (1. ATR 내림차순, 2. Ticker 오름차순)
             # Python의 stable sort 특성을 활용: 먼저 2차 기준으로 정렬 후, 1차 기준으로 정렬
@@ -133,13 +151,22 @@ class MagicSplitStrategy(Strategy):
             for candidate in sorted_candidates:
                 if num_new_entries >= available_slots: break
                 ticker = candidate["ticker"]
-                stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
-                current_price = stock_data.loc[current_date, "close_price"]
-                if current_price > 0:
-                    if self.investment_per_order > 0:
-                        new_pos = Position(current_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                        buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 1, -candidate["atr_14_ratio"], "신규 진입", current_price))
-                        num_new_entries += 1
+                signal_close_price = candidate["signal_close_price"]
+                if signal_close_price > 0 and self.investment_per_order > 0:
+                    new_pos = Position(signal_close_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    buy_signals.append(
+                        self._create_buy_signal(
+                            current_date,
+                            ticker,
+                            self.investment_per_order,
+                            new_pos,
+                            1,
+                            -candidate["atr_14_ratio"],
+                            "신규 진입",
+                            signal_close_price,
+                        )
+                    )
+                    num_new_entries += 1
 
         # 신규 매수 신호 내에서의 정렬
         buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))
@@ -155,6 +182,9 @@ class MagicSplitStrategy(Strategy):
         # 투자금 재계산은 신규 매수에서 이미 했을 수 있지만, 이 함수가 단독으로 사용될 수도 있으므로 여기서도 호출합니다.
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
+        signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
+        if signal_date is None:
+            return buy_signals
 
         # 추가 매수 신호 생성 로직
         for ticker in list(portfolio.positions.keys()):
@@ -169,8 +199,10 @@ class MagicSplitStrategy(Strategy):
             if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
                 continue
             
-            stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
-            if stock_data is None or stock_data.empty or current_date not in stock_data.index:
+            signal_row = data_handler.get_stock_row_as_of(
+                ticker, signal_date, self.backtest_start_date, self.backtest_end_date
+            )
+            if signal_row is None:
                 continue
 
             if not any(p.order == 1 for p in positions):
@@ -179,17 +211,18 @@ class MagicSplitStrategy(Strategy):
             if len(positions) >= self.max_splits_limit:
                 continue    
             
-            current_close = stock_data.loc[current_date, "close_price"]
-            current_low = stock_data.loc[current_date, "low_price"]
-            if current_close <= 0: continue
+            signal_close = signal_row["close_price"]
+            signal_low = signal_row["low_price"]
+            if signal_close <= 0:
+                continue
 
             last_pos = portfolio.positions[ticker][-1]
             buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
             
-            if current_low <= buy_trigger_price:
+            if signal_low <= buy_trigger_price:
                 if self.investment_per_order > 0:
-                    new_pos = Position(current_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - current_close) / last_pos.buy_price)
+                    new_pos = Position(signal_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - signal_close) / last_pos.buy_price)
                     buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
 
         # 추가 매수 신호 내에서의 정렬
@@ -212,12 +245,17 @@ class MagicSplitStrategy(Strategy):
     def generate_sell_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         signals = []
+        signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
+        if signal_date is None:
+            return signals
+
         for ticker in list(portfolio.positions.keys()):
-            stock_data = data_handler.load_stock_data(ticker, self.backtest_start_date, self.backtest_end_date)
-            if stock_data is None or stock_data.empty or current_date not in stock_data.index:
+            row = data_handler.get_stock_row_as_of(
+                ticker, signal_date, self.backtest_start_date, self.backtest_end_date
+            )
+            if row is None:
                 continue
 
-            row = stock_data.loc[current_date]
             current_price = row["close_price"]
             current_high = row["high_price"]
             if current_price <= 0: continue
