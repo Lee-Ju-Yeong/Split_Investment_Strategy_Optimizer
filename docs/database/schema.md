@@ -1,151 +1,124 @@
 # 데이터베이스 스키마 정의서
 
-## 1. `CompanyInfo` (종목 기본 정보 테이블)
+기준 코드: `src/db_setup.py`  
+이 문서는 코드의 실제 `CREATE TABLE`/인덱스와 일치하도록 유지합니다.
 
-*   **설명:** 국내 상장된 개별 종목의 기본 정보를 저장합니다. `company_info_manager.py`를 통해 주기적으로 업데이트됩니다.
-*   **컬럼 상세:**
+## 1. Core Backtest Tables
 
-| 컬럼명             | 데이터 타입      | 제약 조건                | 설명                                                                  |
-| :----------------- | :--------------- | :----------------------- | :-------------------------------------------------------------------- |
-| `stock_code`       | `VARCHAR(6)`     | `PRIMARY KEY, NOT NULL`  | 종목 코드 (예: "005930")                                              |
-| `company_name`     | `VARCHAR(255)`   | `NOT NULL`               | 종목명 (예: "삼성전자")                                                 |
-| `market_type`      | `VARCHAR(10)`    | `NULL`                   | 시장 구분 (예: "KOSPI", "KOSDAQ", "KONEX")                            |
-| `data_start_date`  | `DATE`           | `NULL`                   | `pykrx`에서 수집 가능한 가장 오래된 OHLCV 데이터의 날짜 (근사 상장일) |
-| `last_updated`     | `DATETIME`       | `NOT NULL`               | 해당 레코드의 마지막 업데이트 시각                                        |
+### 1-1. `CompanyInfo`
+종목 기본 정보 캐시 테이블.
 
-*   **인덱스:**
-    *   `idx_company_info_company_name` ON `company_name` (종목명으로 검색 시 효율 향상)
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `company_name` | `VARCHAR(255)` |  | 종목명 |
+| `market_type` | `VARCHAR(50)` |  | 시장 구분 |
+| `last_updated` | `DATETIME` |  | 마지막 갱신 시각 |
 
-## 2. `WeeklyFilteredStocks` (주간 조건검색 필터링 결과 테이블)
+### 1-2. `WeeklyFilteredStocks`
+주간 필터링 유니버스 저장 테이블.
 
-*   **설명:** 매주 금요일 HTS 조건검색을 통해 필터링된 종목 리스트를 저장합니다. `hts_csv_parser.py`를 통해 적재됩니다.
-*   **컬럼 상세:**
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `filter_date` | `DATE` | `PRIMARY KEY` | 필터 기준일 |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `company_name` | `VARCHAR(255)` |  | 종목명 |
 
-| 컬럼명             | 데이터 타입    | 제약 조건                                                              | 설명                                                                  |
-| :----------------- | :------------- | :--------------------------------------------------------------------- | :-------------------------------------------------------------------- |
-| `filter_date`      | `DATE`         | `PRIMARY KEY, NOT NULL`                                                | 필터링 기준일 (해당 주의 금요일 날짜, 예: "2014-11-17")                |
-| `condition_name`   | `VARCHAR(50)`  | `PRIMARY KEY, NOT NULL`                                                | 사용된 조건검색식 이름 (예: "FinancialSafetyFilter_v1")               |
-| `stock_code`       | `VARCHAR(6)`   | `PRIMARY KEY, NOT NULL, FOREIGN KEY REFERENCES CompanyInfo(stock_code)`  | 필터링된 종목 코드                                                      |
-| `company_name`     | `VARCHAR(255)` | `NOT NULL`                                                             | 필터링된 종목명 (참고용, 실제 조회 시 `CompanyInfo`와 조인 권장)       |
+### 1-3. `DailyStockPrice`
+일별 OHLCV 저장 테이블.
 
-*   **인덱스:** 없음 (복합 기본 키가 이미 인덱스 역할을 수행)
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `open_price` | `DECIMAL(20,5)` |  | 시가 |
+| `high_price` | `DECIMAL(20,5)` |  | 고가 |
+| `low_price` | `DECIMAL(20,5)` |  | 저가 |
+| `close_price` | `DECIMAL(20,5)` |  | 종가 |
+| `volume` | `BIGINT` |  | 거래량 |
 
-## 3. `DailyStockPrice` (일별 주가 데이터 테이블)
+### 1-4. `CalculatedIndicators`
+백테스트용 선계산 지표 테이블.
 
-*   **설명:** `WeeklyFilteredStocks`에 포함된 종목들의 과거 및 현재 일별 OHLCV 데이터를 `pykrx`를 통해 수집하여 저장합니다.
-*   **컬럼 상세:**
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(6)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `ma_5` | `FLOAT` | `NULL` | 5일 이동평균 |
+| `ma_20` | `FLOAT` | `NULL` | 20일 이동평균 |
+| `atr_14_ratio` | `FLOAT` | `NULL` | ATR 비율 |
+| `price_vs_5y_low_pct` | `FLOAT` | `NULL` | 5년 저점 대비 위치 |
+| `price_vs_10y_low_pct` | `FLOAT` | `NULL` | 10년 저점 대비 위치 |
 
-| 컬럼명             | 데이터 타입    | 제약 조건                                                              | 설명                                                        |
-| :----------------- | :------------- | :--------------------------------------------------------------------- | :---------------------------------------------------------- |
-| `stock_code`       | `VARCHAR(6)`   | `PRIMARY KEY, NOT NULL, FOREIGN KEY REFERENCES CompanyInfo(stock_code)`  | 종목 코드                                                   |
-| `date`             | `DATE`         | `PRIMARY KEY, NOT NULL`                                                | 기준일자                                                    |
-| `open_price`       | `INTEGER`      | `NOT NULL`                                                             | 시가                                                        |
-| `high_price`       | `INTEGER`      | `NOT NULL`                                                             | 고가                                                        |
-| `low_price`        | `INTEGER`      | `NOT NULL`                                                             | 저가                                                        |
-| `close_price`      | `INTEGER`      | `NOT NULL`                                                             | 종가                                                        |
-| `volume`           | `BIGINT`       | `NOT NULL`                                                             | 거래량                                                      |
-| `adj_close_price`  | `INTEGER`      | `NULL`                                                                 | 수정 종가 (액면분할/병합, 배당 등 반영 시. 초기에는 NULL 가능) |
+## 2. Strategy Expansion Tables
 
-*   **인덱스:** 없음 (복합 기본 키가 이미 인덱스 역할을 수행)
+### 2-1. `FinancialData`
+재무 팩터 저장 테이블(PER/PBR/EPS/BPS/DPS/DIV/ROE).
 
-## 4. `FinancialData` (일별 재무 지표 테이블)
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `per` | `FLOAT` | `NULL` | PER |
+| `pbr` | `FLOAT` | `NULL` | PBR |
+| `eps` | `FLOAT` | `NULL` | EPS |
+| `bps` | `FLOAT` | `NULL` | BPS |
+| `dps` | `FLOAT` | `NULL` | DPS |
+| `div_yield` | `FLOAT` | `NULL` | 배당수익률 |
+| `roe` | `FLOAT` | `NULL` | ROE |
+| `source` | `VARCHAR(50)` | `DEFAULT 'pykrx'` | 데이터 소스 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
 
-*   **설명:** `WeeklyFilteredStocks`에 포함된 종목들의 일별 주요 재무 지표를 `pykrx`를 통해 수집하여 저장합니다. (`get_market_fundamental` 함수 활용)
-*   **컬럼 상세:**
+인덱스:
+- `idx_financial_date_stock` ON `(date, stock_code)`
 
-| 컬럼명        | 데이터 타입    | 제약 조건                                                              | 설명                                                                  |
-| :------------ | :------------- | :--------------------------------------------------------------------- | :-------------------------------------------------------------------- |
-| `stock_code`  | `VARCHAR(6)`   | `PRIMARY KEY, NOT NULL, FOREIGN KEY REFERENCES CompanyInfo(stock_code)`  | 종목 코드                                                               |
-| `date`        | `DATE`         | `PRIMARY KEY, NOT NULL`                                                | 기준일자 (매일)                                                         |
-| `bps`         | `INTEGER`      | `NULL`                                                                 | BPS (주당순자산)                                                        |
-| `per`         | `FLOAT`        | `NULL`                                                                 | PER (주가수익비율)                                                      |
-| `pbr`         | `FLOAT`        | `NULL`                                                                 | PBR (주가순자산비율)                                                      |
-| `eps`         | `INTEGER`      | `NULL`                                                                 | EPS (주당순이익)                                                        |
-| `div_yield`   | `FLOAT`        | `NULL`                                                                 | DIV (배당수익률, `pykrx` 컬럼명: DIV)                                |
-| `dps`         | `INTEGER`      | `NULL`                                                                 | DPS (주당배당금, `pykrx` 컬럼명: DPS)                                 |
+### 2-2. `InvestorTradingTrend`
+투자자별 순매수 저장 테이블.
 
-*   **인덱스:** 없음 (복합 기본 키가 이미 인덱스 역할을 수행)
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `individual_net_buy` | `BIGINT` | `DEFAULT 0` | 개인 순매수 |
+| `foreigner_net_buy` | `BIGINT` | `DEFAULT 0` | 외국인 순매수 |
+| `institution_net_buy` | `BIGINT` | `DEFAULT 0` | 기관 순매수 |
+| `total_net_buy` | `BIGINT` | `DEFAULT 0` | 합계 순매수 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
 
-## 5. `CalculatedIndicators` (계산된 기술적/변동성 지표 테이블)
+인덱스:
+- `idx_investor_date_stock` ON `(date, stock_code)`
+- `idx_investor_date_flow` ON `(date, foreigner_net_buy, institution_net_buy)`
 
-*   **설명:** `DailyStockPrice` 데이터를 기반으로 백테스팅에 필요한 각종 기술적 지표 및 변동성 지표를 미리 계산하여 저장합니다.
-*   **컬럼 상세:**
+### 2-3. `DailyStockTier`
+사전 계산된 일별 종목 등급 저장 테이블.
 
-| 컬럼명                   | 데이터 타입   | 제약 조건                                                              | 설명                                                                          |
-| :----------------------- | :------------ | :--------------------------------------------------------------------- | :---------------------------------------------------------------------------- |
-| `stock_code`             | `VARCHAR(6)`  | `PRIMARY KEY, NOT NULL, FOREIGN KEY REFERENCES CompanyInfo(stock_code)`  | 종목 코드                                                                       |
-| `date`                   | `DATE`        | `PRIMARY KEY, NOT NULL`                                                | 기준일자                                                                        |
-| `ma_5`                   | `FLOAT`       | `NULL`                                                                 | 5일 이동평균 (종가 기준)                                                          |
-| `ma_20`                  | `FLOAT`       | `NULL`                                                                 | 20일 이동평균 (종가 기준)                                                         |
-| `atr_14`                 | `FLOAT`       | `NULL`                                                                 | 14일 ATR (Average True Range)                                                 |
-| `atr_14_pct`             | `FLOAT`       | `NULL`                                                                 | 14일 ATR 비율 (ATR / 종가 * 100)                                              |
-| `price_change_pct_5d`    | `FLOAT`       | `NULL`                                                                 | 최근 5일간 주가 변동률                                                            |
-| `price_vs_5y_low_pct`  | `FLOAT`       | `NULL`                                                                 | 5년(거래일 기준 약 1260일) 최저가 대비 현재 종가의 상대 위치 비율              |
-| `price_vs_10y_low_pct` | `FLOAT`       | `NULL`                                                                 | 10년(거래일 기준 약 2520일) 최저가 대비 현재 종가의 상대 위치 비율             |
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `tier` | `TINYINT` | `NOT NULL` | 1(Prime)/2(Normal)/3(Danger) |
+| `reason` | `VARCHAR(255)` |  | 등급 사유 |
+| `liquidity_20d_avg_value` | `BIGINT` | `NULL` | 20일 평균 거래대금 |
+| `computed_at` | `DATETIME` | `DEFAULT CURRENT_TIMESTAMP` | 계산 시각 |
 
-*   **인덱스:** 없음 (복합 기본 키가 이미 인덱스 역할을 수행)
+인덱스:
+- `idx_tier_stock_date` ON `(stock_code, date)`
+- `idx_tier_date_tier_stock` ON `(date, tier, stock_code)`
 
----
+## 3. Legacy Tables
 
-**ERD (Entity-Relationship Diagram) 참고:**
+아래 테이블은 레거시 파이프라인(`src/data_pipeline.py`, `src/stock_data_collector.py`)에서 사용합니다.
 
-(이 부분에는 `dbdiagram.io` 등으로 그린 ERD 이미지를 첨부하거나, Mermaid.js 코드를 삽입할 수 있습니다.)
+### 3-1. `stock_data`
+레거시 통합 가격/재무 저장 테이블.
 
-**Mermaid.js 코드 (간략화):**
+### 3-2. `ticker_list`
+레거시 티커 마스터 테이블.
 
-```mermaid
-erDiagram
-    CompanyInfo {
-        varchar(6) stock_code PK "종목코드"
-        varchar(255) company_name "회사명"
-        varchar(10) market_type "시장구분"
-        date data_start_date "데이터시작일"
-        datetime last_updated "최종수정일"
-    }
-    
-    WeeklyFilteredStocks {
-        date filter_date PK "필터링날짜"
-        varchar(50) condition_name PK "조건명"
-        varchar(6) stock_code PK "종목코드"
-        varchar(255) company_name "회사명"
-    }
-    
-    DailyStockPrice {
-        varchar(6) stock_code PK "종목코드"
-        date date PK "날짜"
-        int open_price "시가"
-        int high_price "고가"
-        int low_price "저가"
-        int close_price "종가"
-        bigint volume "거래량"
-        int adj_close_price "수정종가"
-    }
-    
-    FinancialData {
-        varchar(6) stock_code PK "종목코드"
-        date date PK "날짜"
-        int bps "주당순자산가치"
-        float per "주가수익비율"
-        float pbr "주가순자산비율"
-        int eps "주당순이익"
-        float div_yield "배당수익률"
-        int dps "주당배당금"
-    }
-    
-    CalculatedIndicators {
-        varchar(6) stock_code PK "종목코드"
-        date date PK "날짜"
-        float ma_5 "5일이동평균"
-        float ma_20 "20일이동평균"
-        float atr_14 "14일ATR"
-        float atr_14_pct "14일ATR비율"
-        float price_change_pct_5d "5일가격변화율"
-        float price_vs_5y_low_pct "5년최저가대비비율"
-        float price_vs_10y_low_pct "10년최저가대비비율"
-    }
+### 3-3. `ticker_status`
+레거시 수집 상태 테이블.
 
-    CompanyInfo ||--o{ WeeklyFilteredStocks : "has"
-    CompanyInfo ||--o{ DailyStockPrice : "has"
-    CompanyInfo ||--o{ FinancialData : "has"
-    CompanyInfo ||--o{ CalculatedIndicators : "has"
-```
+## 4. 배치 운용 메모
+- 스키마 반영: `python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"`
+- 백필/일배치: `python -m src.pipeline_batch --mode backfill|daily ...`
+- 운영 전후 검증: `SHOW TABLES`, `SHOW INDEX FROM <table>`로 인덱스 존재 확인

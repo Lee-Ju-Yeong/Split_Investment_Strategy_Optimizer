@@ -111,6 +111,14 @@ class MagicSplitStrategy(Strategy):
         
         if available_slots > 0:
             candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+            get_codes_with_tier = getattr(data_handler, "get_filtered_stock_codes_with_tier", None)
+            if callable(get_codes_with_tier):
+                try:
+                    tier_codes = get_codes_with_tier(signal_date, allowed_tiers=(1, 2))
+                    if isinstance(tier_codes, (list, tuple, set)):
+                        candidate_codes = list(tier_codes)
+                except Exception:
+                    candidate_codes = data_handler.get_filtered_stock_codes(current_date)
             
             active_candidates = []
             for code in candidate_codes:

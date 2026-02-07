@@ -156,3 +156,101 @@ class DataHandler:
             return df['stock_code'].tolist()
         finally:
             conn.close()
+
+    def get_stock_tier_as_of(self, ticker, as_of_date):
+        conn = self.get_connection()
+        as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
+        query = """
+            SELECT date, stock_code, tier, reason, liquidity_20d_avg_value
+            FROM DailyStockTier
+            WHERE stock_code = %s AND date <= %s
+            ORDER BY date DESC
+            LIMIT 1
+        """
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=[ticker, as_of_date_str])
+            if df.empty:
+                return None
+            row = df.iloc[0]
+            self.assert_point_in_time(row["date"], as_of_date)
+            return {
+                "stock_code": row["stock_code"],
+                "date": pd.to_datetime(row["date"]),
+                "tier": int(row["tier"]),
+                "reason": row.get("reason"),
+                "liquidity_20d_avg_value": row.get("liquidity_20d_avg_value"),
+            }
+        finally:
+            conn.close()
+
+    def get_tiers_as_of(self, as_of_date, tickers=None, allowed_tiers=None):
+        conn = self.get_connection()
+        as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
+
+        tickers = list(tickers) if tickers else []
+        allowed_tiers = list(allowed_tiers) if allowed_tiers else []
+
+        subquery_conditions = ["date <= %s"]
+        subquery_params = [as_of_date_str]
+        if tickers:
+            ticker_placeholders = ", ".join(["%s"] * len(tickers))
+            subquery_conditions.append(f"stock_code IN ({ticker_placeholders})")
+            subquery_params.extend(tickers)
+
+        subquery_where = " AND ".join(subquery_conditions)
+        main_where = ""
+        main_params = list(subquery_params)
+        if allowed_tiers:
+            tier_placeholders = ", ".join(["%s"] * len(allowed_tiers))
+            main_where = f"WHERE t.tier IN ({tier_placeholders})"
+            main_params.extend(allowed_tiers)
+
+        query = f"""
+            SELECT t.stock_code, t.date, t.tier, t.reason, t.liquidity_20d_avg_value
+            FROM DailyStockTier t
+            JOIN (
+                SELECT stock_code, MAX(date) AS max_date
+                FROM DailyStockTier
+                WHERE {subquery_where}
+                GROUP BY stock_code
+            ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
+            {main_where}
+            ORDER BY t.stock_code
+        """
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=main_params)
+            if df.empty:
+                return {}
+
+            for row_date in df["date"]:
+                self.assert_point_in_time(row_date, as_of_date)
+
+            result = {}
+            for _, row in df.iterrows():
+                result[row["stock_code"]] = {
+                    "stock_code": row["stock_code"],
+                    "date": pd.to_datetime(row["date"]),
+                    "tier": int(row["tier"]),
+                    "reason": row.get("reason"),
+                    "liquidity_20d_avg_value": row.get("liquidity_20d_avg_value"),
+                }
+            return result
+        finally:
+            conn.close()
+
+    def get_filtered_stock_codes_with_tier(self, date, allowed_tiers=(1, 2)):
+        candidate_codes = self.get_filtered_stock_codes(date)
+        if not candidate_codes:
+            return []
+        tier_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=candidate_codes,
+            allowed_tiers=allowed_tiers,
+        )
+        if not tier_map:
+            return []
+        return [code for code in candidate_codes if code in tier_map]
