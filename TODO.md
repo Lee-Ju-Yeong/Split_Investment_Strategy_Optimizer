@@ -5,15 +5,18 @@
 상세 실행 메모는 `todos/YYYY_MM_DD-issue<N>-<name>.md` 패턴으로 관리합니다.
 
 ## 이슈별 상세 TODO 문서
-- [ ] 이슈 #64 PIT/룩어헤드 방지: `todos/2026_02_07-issue64-point-in-time-lookahead-bias.md`
-- [ ] 이슈 #65 스키마/인덱스 확장: `todos/2026_02_07-issue65-financial-investor-tier-schema-index.md`
+- [x] 이슈 #64 PIT/룩어헤드 방지: `todos/done_2026_02_07-issue64-point-in-time-lookahead-bias.md`
+- [x] 이슈 #65 스키마/인덱스 확장: `todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md`
+- [ ] 이슈 #66 수집기 분리/사전계산 배치: `todos/2026_02_07-issue66-financial-investor-collector-tier-batch.md`
 
 ## 전체 우선순위 (Global Backlog)
 
 ### P0 (신뢰도/데이터 정합성 선행)
-- [ ] Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가 (이슈 #64): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64
-- [ ] `FinancialData`/`InvestorTradingTrend`/`DailyStockTier` 스키마 및 인덱스 추가 (이슈 #65): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65
+- [x] Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가 (이슈 #64): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64
+- [x] `FinancialData`/`InvestorTradingTrend`/`DailyStockTier` 스키마 및 인덱스 추가 (이슈 #65): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65
 - [ ] 재무·수급 수집기 분리 + Tier 사전계산 배치(백필/일배치) 도입 (이슈 #66): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66
+- [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`)
+- [ ] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
 
 ### P1 (실행 경로/운영 안정화)
 - [ ] `DataHandler` PIT 조인 확장 + `tier=1 -> tier<=2` fallback 조회 적용 (이슈 #67): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67
