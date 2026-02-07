@@ -14,6 +14,7 @@ import pandas as pd
 
 API_CALL_DELAY = 0.3
 DEFAULT_START_DATE_STR = "19800101"
+DEFAULT_LOG_INTERVAL = 50
 
 
 def get_financial_ticker_universe(conn, end_date=None):
@@ -145,6 +146,19 @@ def _resolve_start_date(conn, ticker_code, mode, start_date_str, end_date):
     return latest + timedelta(days=1)
 
 
+def _format_duration(seconds):
+    safe_seconds = max(int(seconds), 0)
+    return str(timedelta(seconds=safe_seconds))
+
+
+def _estimate_eta(elapsed_seconds, done_count, total_count):
+    if done_count <= 0 or total_count <= done_count:
+        return "00:00:00"
+    per_item = elapsed_seconds / done_count
+    remaining = total_count - done_count
+    return _format_duration(per_item * remaining)
+
+
 def run_financial_batch(
     conn,
     mode="daily",
@@ -152,6 +166,7 @@ def run_financial_batch(
     end_date_str=None,
     ticker_codes=None,
     api_call_delay=API_CALL_DELAY,
+    log_interval=DEFAULT_LOG_INTERVAL,
 ):
     """
     Executes financial data collection for the given mode.
@@ -170,6 +185,7 @@ def run_financial_batch(
     summary = {
         "tickers_total": len(ticker_codes),
         "tickers_processed": 0,
+        "tickers_skipped": 0,
         "rows_saved": 0,
         "errors": 0,
     }
@@ -177,9 +193,16 @@ def run_financial_batch(
     if not ticker_codes:
         return summary
 
+    started_at = time.time()
+    total_tickers = len(ticker_codes)
+    print(
+        f"[financial_collector] start mode={mode}, "
+        f"tickers={total_tickers}, end_date={end_date_str}"
+    )
+
     from pykrx import stock
 
-    for ticker_code in ticker_codes:
+    for index, ticker_code in enumerate(ticker_codes, start=1):
         try:
             effective_start = _resolve_start_date(
                 conn=conn,
@@ -189,6 +212,7 @@ def run_financial_batch(
                 end_date=end_date,
             )
             if effective_start is None or effective_start > end_date:
+                summary["tickers_skipped"] += 1
                 continue
 
             time.sleep(api_call_delay)
@@ -222,6 +246,31 @@ def run_financial_batch(
         except Exception:
             summary["errors"] += 1
             conn.rollback()
-            continue
+        finally:
+            if (
+                log_interval
+                and log_interval > 0
+                and (index % log_interval == 0 or index == total_tickers)
+            ):
+                elapsed = time.time() - started_at
+                print(
+                    f"[financial_collector] progress {index}/{total_tickers} "
+                    f"({index / total_tickers:.1%}) "
+                    f"processed={summary['tickers_processed']} "
+                    f"skipped={summary['tickers_skipped']} "
+                    f"rows_saved={summary['rows_saved']} "
+                    f"errors={summary['errors']} "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"eta={_estimate_eta(elapsed, index, total_tickers)}"
+                )
 
+    total_elapsed = time.time() - started_at
+    print(
+        f"[financial_collector] completed "
+        f"processed={summary['tickers_processed']} "
+        f"skipped={summary['tickers_skipped']} "
+        f"rows_saved={summary['rows_saved']} "
+        f"errors={summary['errors']} "
+        f"elapsed={_format_duration(total_elapsed)}"
+    )
     return summary

@@ -43,6 +43,7 @@ class TestPipelineBatch(unittest.TestCase):
             run_tier=True,
             lookback_days=30,
             financial_lag_days=45,
+            log_interval=25,
         )
 
         self.assertEqual(summary["financial"]["rows_saved"], 10)
@@ -53,12 +54,14 @@ class TestPipelineBatch(unittest.TestCase):
             mode="daily",
             start_date_str=None,
             end_date_str="20260207",
+            log_interval=25,
         )
         mock_run_investor.assert_called_once_with(
             conn=conn,
             mode="daily",
             start_date_str=None,
             end_date_str="20260207",
+            log_interval=25,
         )
         mock_run_tier.assert_called_once_with(
             conn=conn,
@@ -72,4 +75,3 @@ class TestPipelineBatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

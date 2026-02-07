@@ -9,6 +9,7 @@ Batch orchestrator for:
 
 import argparse
 from datetime import datetime
+import time
 
 from .db_setup import create_tables, get_db_connection
 from .daily_stock_tier_batch import run_daily_stock_tier_batch
@@ -26,6 +27,7 @@ def run_pipeline_batch(
     run_tier=True,
     lookback_days=20,
     financial_lag_days=45,
+    log_interval=50,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -42,6 +44,7 @@ def run_pipeline_batch(
             mode=mode,
             start_date_str=start_date_str,
             end_date_str=end_date_str,
+            log_interval=log_interval,
         )
 
     if run_investor:
@@ -50,6 +53,7 @@ def run_pipeline_batch(
             mode=mode,
             start_date_str=start_date_str,
             end_date_str=end_date_str,
+            log_interval=log_interval,
         )
 
     if run_tier:
@@ -112,6 +116,12 @@ def _build_arg_parser():
         default=45,
         help="Lag days for financial data alignment in tier calculation.",
     )
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=50,
+        help="Progress log interval by ticker for financial/investor collectors. Set 0 to disable.",
+    )
     return parser
 
 
@@ -123,6 +133,16 @@ def main():
         conn = get_db_connection()
         create_tables(conn)
 
+        started_at = time.time()
+        print(
+            "[pipeline_batch] start "
+            f"mode={args.mode}, start_date={args.start_date}, end_date={args.end_date}, "
+            f"run_financial={not args.skip_financial}, "
+            f"run_investor={not args.skip_investor}, "
+            f"run_tier={not args.skip_tier}, "
+            f"log_interval={args.log_interval}"
+        )
+
         summary = run_pipeline_batch(
             conn=conn,
             mode=args.mode,
@@ -133,8 +153,10 @@ def main():
             run_tier=not args.skip_tier,
             lookback_days=args.lookback_days,
             financial_lag_days=args.financial_lag_days,
+            log_interval=args.log_interval,
         )
-        print("[pipeline_batch] completed")
+        elapsed_seconds = int(time.time() - started_at)
+        print(f"[pipeline_batch] completed elapsed={elapsed_seconds}s")
         for key, value in summary.items():
             print(f"  - {key}: {value}")
     finally:
@@ -144,4 +166,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
