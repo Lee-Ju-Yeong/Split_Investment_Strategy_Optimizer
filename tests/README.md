@@ -22,6 +22,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 - `tests/test_data_handler_tier.py`
 - `tests/test_point_in_time.py`
 - `tests/test_db_setup.py`
+- `tests/test_collector_normalization.py`
 - `tests/test_pipeline_batch.py`
 - `tests/test_daily_stock_tier_batch.py`
 - `tests/test_indicator_calculator.py`
@@ -32,6 +33,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 conda run -n rapids-env python -m unittest \
   tests.test_data_handler \
   tests.test_data_handler_tier \
+  tests.test_collector_normalization \
   tests.test_point_in_time \
   tests.test_db_setup -v
 ```
@@ -66,6 +68,7 @@ conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu -v
 - `tests/test_pipeline_batch.py`: 배치 오케스트레이터 인자/호출 검증
 - `tests/test_daily_stock_tier_batch.py`: Tier 계산(유동성 + financial risk) 검증
 - `tests/test_data_handler_tier.py`: Tier as-of 조회 API 검증
+- `tests/test_collector_normalization.py`: Financial/Investor 정규화 시 `stock_code` 보존 검증
 
 권장 실행:
 ```bash
