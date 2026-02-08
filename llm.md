@@ -17,20 +17,38 @@
 
 ## 2. Quick Commands
 
+> Last Verified: 2026-02-08
+> 엔트리포인트/CLI 옵션 변경 시 이 섹션을 즉시 갱신합니다.
+
 ```bash
 # 환경 설정
-conda env create -f environment.yml && conda activate stock_optimizer_env  # CPU
-conda activate rapids-env                                                    # GPU (CuPy, cuDF)
+conda env create -f environment.yml
+conda activate stock_optimizer_env  # CPU
+conda activate rapids-env           # GPU (CuPy, cuDF)
 
 # 설정 파일
 cp config/config.example.yaml config/config.yaml  # 후 DB 정보 수정
 
-# 데이터 파이프라인
-python -m src.main_script                  # 데이터 수집 및 지표 계산
+# DB 스키마 반영
+python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"
+
+# 데이터 파이프라인 (Legacy/General)
+python -m src.main_script
+
+# 배치 오케스트레이터 (Financial/Investor/Tier)
+python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
+python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
+
+# Historical Universe 배치 (상폐 포함 PIT 유니버스)
+python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
+python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
+
+# OHLCV 장기 백필
+python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-interval 20
 
 # 백테스팅
-python -m src.main_backtest                # CPU 백테스트 (Source of Truth)
-python -m src.debug_gpu_single_run         # GPU 단일 파라미터 백테스트
+python -m src.main_backtest        # CPU 백테스트 (Source of Truth)
+python -m src.debug_gpu_single_run # GPU 단일 파라미터 백테스트
 
 # 파라미터 최적화
 python -m src.parameter_simulation_gpu     # GPU 대규모 파라미터 최적화
@@ -50,17 +68,20 @@ python -m src.app                          # Flask (localhost:5000)
 
 ## 3. Architecture
 
-### 4-Phase Pipeline
+### 5-Stage Pipeline
 
 ```
-Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer → Phase 4: WFO Analysis
-(ETL, pykrx, MySQL)          (Source of Truth)         (Parallel Simulation)     (Robustness Validation)
+Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Backtester → Stage 4: GPU Optimizer → Stage 5: WFO Analysis
+(OHLCV/Indicator ETL)        (Universe/Financial/Investor/Tier) (Source of Truth)       (Parallel Simulation)     (Robustness Validation)
 ```
 
 ### Core Modules (`src/`)
 
 **Orchestrators:**
-- `main_script.py`: 데이터 수집/지표 계산 파이프라인 총괄
+- `main_script.py`: 기본 데이터 수집/지표 계산 파이프라인 (Legacy/General)
+- `pipeline_batch.py`: Financial/Investor/Tier 백필·일배치 오케스트레이터
+- `ticker_universe_batch.py`: 상폐 포함 PIT 유니버스 스냅샷/히스토리 배치
+- `ohlcv_batch.py`: `DailyStockPrice` 장기 백필 배치
 - `main_backtest.py`: CPU 백테스트 실행 (결과 검증 기준)
 - `parameter_simulation_gpu.py`: GPU 대규모 파라미터 최적화
 - `walk_forward_analyzer.py`: WFO 전체 프로세스 제어
@@ -78,6 +99,9 @@ Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer
 **Data Layer:**
 - `data_handler.py`: DataHandler - DB 조회 및 캐싱
 - `db_setup.py`: 스키마 정의, 테이블 생성
+- `daily_stock_tier_batch.py`: Tier 사전 계산 워커
+- `financial_collector.py`: FinancialData 수집 워커
+- `investor_trading_collector.py`: InvestorTradingTrend 수집 워커
 - `config_loader.py`: `config/config.yaml` 로드
 
 ### Key Design Principles
@@ -98,15 +122,16 @@ Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer
 - `order_investment_ratio`: 1회 주문당 투자 비율
 - `additional_buy_drop_rate`: 추가 매수 트리거 하락률
 - `sell_profit_rate`: 목표 수익률
-- `additional_buy_priority`: 추가 매수 우선순위 (`lowest_order` | `biggest_drop`)
+- `additional_buy_priority`: 추가 매수 우선순위 (`lowest_order` | `highest_drop`)
 - `cooldown_period_days`: 재진입 쿨다운(거래일)
 - `stop_loss_rate`: 손절 기준 (음수)
 - `max_splits_limit`: 최대 분할 매수 단계
 - `max_inactivity_period`: 비활성 청산 기간(거래일)
 
 **Note (`additional_buy_priority`):**
-- CPU 엔진(`src/strategy.py`)은 `"lowest_order"` 또는 `"biggest_drop"`를 기대합니다.
-- 일부 GPU/최적화 스크립트는 내부적으로 `0/1`로 매핑합니다(0=`lowest_order`, 1=`biggest_drop`; 레거시로 `highest_drop` 표기가 있을 수 있음).
+- CPU 엔진(`src/strategy.py`)은 `lowest_order`가 아니면 하락폭 우선 분기로 처리합니다. 운영/문서 기본값은 `"highest_drop"`를 사용합니다.
+- GPU/최적화 스크립트는 내부적으로 `0/1`로 매핑합니다(0=`lowest_order`, 1=`highest_drop`).
+- `"biggest_drop"` 표기는 레거시 문서 표현으로 간주하며 신규 설정/문서에서는 사용하지 않습니다.
 
 **WFO Settings:**
 - `total_folds`: WFO Fold 수
@@ -116,8 +141,13 @@ Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer
 
 - `DailyStockPrice`: OHLCV 원본 데이터
 - `CalculatedIndicators`: MA, ATR 등 기술적 지표
-- `WeeklyFilteredStocks`: 주간 필터링된 종목 유니버스
+- `WeeklyFilteredStocks`: 주간 필터링된 종목 유니버스 (Legacy)
 - `CompanyInfo`: 종목코드-회사명 매핑
+- `FinancialData`: 재무 팩터(PER/PBR/EPS/BPS/DPS/DIV/ROE)
+- `InvestorTradingTrend`: 투자자별 순매수 데이터
+- `DailyStockTier`: 사전 계산된 종목 Tier/유동성 데이터
+- `TickerUniverseSnapshot`: 시점별 유니버스 스냅샷 (PIT)
+- `TickerUniverseHistory`: 상장/상폐 이력 집계 테이블
 
 ---
 
@@ -187,16 +217,23 @@ Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer
 
 ## 7. Current Mission
 
-### Immediate
-- **최종 검증**: GPU 백테스터가 CPU와 동일한 결과를 출력하는지 최종 비교 검증
+> 기준일: 2026-02-08
+> 단일 상태 소스: `TODO.md`
 
-### Next
-- **파라미터 최적화**: 강건성 중심 WFO로 골든 파라미터 도출
+### Immediate (P0: 운영 데이터 정합성)
+- `#66`: Financial/Investor/Tier 배치 운영 적용(백필 1회 + 일배치 전환)
+- 운영 DB 스키마 반영 및 인덱스 검증 (`create_tables`, `SHOW INDEX`)
+- `DailyStockPrice` 전기간 재적재 완료 + `docs/database/backfill_validation_runbook.md` 검증 실행
 
-### Future
-- WFO 결과 심층 분석
-- Web UI 고도화
-- 실시간 매매 신호 생성
+### Next (P1: 운영 안정화)
+- `#71`: pykrx 확장 데이터셋 + Tier v2 로드맵 실행
+- `#67`: PIT 조인 확장 + `tier<=2` fallback 조회
+- `#53/#54/#55`: 설정 소스 표준화, 파이프라인 모듈화, 구조화 로깅
+
+### Future (P2: 전략 고도화)
+- `#68`: 멀티팩터 랭킹 + WFO/Ablation
+- `#56`: CPU/GPU Parity 테스트 하네스 강화
+- WFO 결과 심층 분석, Web UI 고도화, 실시간 매매 신호 생성
 
 ---
 
@@ -205,3 +242,6 @@ Phase 1: Data Pipeline    → Phase 2: CPU Backtester → Phase 3: GPU Optimizer
 상세 설계/결정 배경은 다음 파일 참고:
 - `llm-context/_PROJECT_MASTER.md`: 프로젝트 전체 개요 및 롤링 요약
 - `llm-context/01_data_pipeline.md` ~ `05_robust_parameter_clustering.md`: 단계별 상세 설계
+- `TODO.md`: 최신 우선순위/이슈 상태 (single source)
+- `docs/database/schema.md`: 현재 DB 스키마 정의
+- `docs/database/backfill_validation_runbook.md`: 백필 검증 절차
