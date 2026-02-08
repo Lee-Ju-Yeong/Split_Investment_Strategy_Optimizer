@@ -276,8 +276,10 @@ runner.run(mode="daily")
 
 ## 10. 병렬 작업 산출물(백필 중)
 - `docs/database/backfill_validation_runbook.md`에 post-backfill 검증 SQL/모니터링/복구 원칙을 추가
-- `CalculatedIndicators` 재계산 실행안(전체/부분 재계산 커맨드) 추가
+- `CalculatedIndicators` 재계산 실행안(전체/부분 재계산 커맨드) + 선택 기준/롤백 기준 추가
 - Tier 튜닝 A/B/C 초안과 read-only 분포 비교 스크립트 추가
+- Tier v1 write 최종 게이트(read-only 편차 점검 + 통과 기준 + feature flag 기본 OFF 정책) 추가
+- 백필 종료 운영 로그 템플릿(elapsed/rows_saved/errors/throughput) 고정 포맷 추가
 - read-only 통계 스냅샷(2026-02-08 실행):
   - `DailyStockPrice`: `1,668,187` rows / `348` tickers (`1995-05-08 ~ 2026-02-06`, 백필 진행 중)
   - `FinancialData`: `1,675,118` rows / `2,671` tickers
