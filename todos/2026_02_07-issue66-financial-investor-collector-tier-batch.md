@@ -250,6 +250,12 @@ runner.run(mode="daily")
     - `financial_collector`: 약 `127.70 rows/s` (`1,586,317 / 12,422s`), 연환산 소요시간 약 `01:38:20 / year`
     - `investor_trading_collector`: 약 `258.11 rows/s` (`1,296,210 / 5,022s`), 연환산 소요시간 약 `00:39:45 / year`
     - `pipeline_batch`(금번 실행): 연환산 소요시간 약 `02:18:06 / year` (동일 API/유니버스/환경 가정)
+- [x] Tier read-only 튜닝(InvestorTradingTrend 포함) 및 v1 임계값 확정안 도출
+  - 다중 자문: Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 수행
+  - read-only 비교: A(`100m/1b + flow_ratio20`), B(`300m/1b + flow_ratio20`), C(`300m/1b + flow5`)
+  - v1 확정안: `lookback=20`, `financial_lag=45`, `danger=300,000,000`, `prime=1,000,000,000`
+  - 수급 최소 규칙: `tier2`에서 `flow5 < -500,000,000`일 때만 `tier3` 강등 (결측 시 미적용)
+  - 결과 기록: `docs/database/backfill_validation_runbook.md`의 "8) Investor 포함 read-only 검증 결과 (2026-02-08)"
 - [ ] 후속 TODO(진행중): `DailyStockPrice` 전기간 재적재
   - 목적: KRX raw(`adjusted=False`) 단일 SSOT로 가격 정합성 고정
   - 실행: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
