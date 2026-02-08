@@ -8,6 +8,7 @@
 - [x] 이슈 #64 PIT/룩어헤드 방지: `todos/done_2026_02_07-issue64-point-in-time-lookahead-bias.md`
 - [x] 이슈 #65 스키마/인덱스 확장: `todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md`
 - [ ] 이슈 #66 수집기 분리/사전계산 배치: `todos/2026_02_07-issue66-financial-investor-collector-tier-batch.md`
+- [x] 이슈 #70 상폐 포함 Historical Universe: `todos/2026_02_08-issue70-historical-ticker-universe-delisted.md`
 
 ## 전체 우선순위 (Global Backlog)
 
@@ -15,7 +16,11 @@
 - [x] Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가 (이슈 #64): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64
 - [x] `FinancialData`/`InvestorTradingTrend`/`DailyStockTier` 스키마 및 인덱스 추가 (이슈 #65): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65
 - [ ] 재무·수급 수집기 분리 + Tier 사전계산 배치(백필/일배치) 도입 (이슈 #66): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66
-- [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`)
+- [x] 상폐 포함 `TickerUniverseSnapshot`/`TickerUniverseHistory` 구축 (이슈 #70): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/70
+  - [x] Phase 1 코드 반영: 스키마/인덱스 + `ticker_universe_batch.py` + `pipeline_batch --run-universe` 옵션 추가
+  - [x] 운영 검증: 스냅샷/히스토리 백필 1회 실행 및 샘플 상폐 종목 검증
+  - [x] Phase 2 코드 반영: `ohlcv_batch` history 소스 + 수집 기간 교집합 적용
+- [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`, `TickerUniverseSnapshot`, `TickerUniverseHistory`)
 - [ ] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
 - [ ] `DailyStockPrice` 전기간 재적재(보류): KRX raw(`adjusted=False`)를 SSOT로 재정렬하고 `adj_close` 파생 경로 확정 후 실행
 - [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가(보류): raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
@@ -25,6 +30,7 @@
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [ ] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
+- [ ] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
 - [ ] 구조화된 로깅 도입 및 하드코딩 디버그 출력 제거 (이슈 #55): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55
 - [ ] DB 접근 계층 표준화(connector/engine) (이슈 #58): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58
 

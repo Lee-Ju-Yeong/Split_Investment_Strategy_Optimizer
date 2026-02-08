@@ -6,6 +6,7 @@
 - `PIT(Point-in-Time)` 보호 로직 적용: T-1 신호/룩어헤드 방지 (`src/data_handler.py`, `src/strategy.py`)
 - 재무/수급/Tier 스키마 확장 완료: `FinancialData`, `InvestorTradingTrend`, `DailyStockTier` (`src/db_setup.py`)
 - 배치 오케스트레이터 도입: 백필/일배치 분리 실행 (`src/pipeline_batch.py`)
+- Historical Universe Phase 1 추가: `TickerUniverseSnapshot`/`TickerUniverseHistory` 배치 (`src/ticker_universe_batch.py`)
 - 상세 로드맵과 진행 상태는 `TODO.md`를 기준으로 관리
 
 ## 아키텍처
@@ -58,6 +59,15 @@ python -m src.pipeline_batch --mode backfill --start-date 20150101 --end-date 20
 python -m src.pipeline_batch --mode daily --end-date 20260207
 ```
 
+### Historical Universe 배치 (신규, 상폐 포함 유니버스)
+```bash
+# Phase 1 백필 (권장: workers=1부터 시작)
+python -m src.ticker_universe_batch --mode backfill --start-date 20100101 --end-date 20260207 --step-days 7 --workers 1
+
+# 일배치 (당일 스냅샷 + history 갱신)
+python -m src.ticker_universe_batch --mode daily --end-date 20260207
+```
+
 ### 백테스트 / 최적화 / 분석
 ```bash
 # CPU 백테스트
@@ -79,6 +89,7 @@ python -m src.app
 - 가격: `DailyStockPrice`
 - 지표: `CalculatedIndicators`
 - 유니버스: `WeeklyFilteredStocks`, `CompanyInfo`
+- PIT 유니버스(신규): `TickerUniverseSnapshot`, `TickerUniverseHistory`
 - 재무: `FinancialData`
 - 수급: `InvestorTradingTrend`
 - 사전 계산 Tier: `DailyStockTier`
@@ -104,6 +115,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 - [x] #64 PIT 규칙 및 룩어헤드 방지
 - [x] #65 스키마/인덱스 확장
 - [ ] #66 재무·수급 수집기 분리 + Tier 사전 계산 배치 운영 적용(백필/일배치)
+- [ ] #70 상폐 포함 Historical Universe 구축 (Phase 1 완료, 운영 검증 진행)
 
 ### P1 (운영 안정화)
 - [ ] #67 Tier fallback/PIT 조인 고도화

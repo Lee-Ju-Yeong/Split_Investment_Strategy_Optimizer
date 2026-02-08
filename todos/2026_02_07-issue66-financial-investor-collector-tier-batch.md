@@ -239,10 +239,17 @@ runner.run(mode="daily")
 - [x] 운영 블로커 해소(재검증)
   - `rapids-env` + `pykrx==1.2.3` 기준 `get_market_fundamental`, `get_market_trading_value_by_date` 응답 정상 확인
   - 적재 현황(2026-02-07): `FinancialData=24,230`, `InvestorTradingTrend=7` (초기 적재 시작 상태)
-- [ ] 후속 TODO(우선): `FinancialData`/`InvestorTradingTrend` 전종목 백필 재실행
+- [x] 후속 TODO(우선): `FinancialData`/`InvestorTradingTrend` 전종목 백필 재실행
   - 목적: API 응답 복구 이후 누락 구간을 채워 데이터 커버리지를 확보
   - 실행: `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20260207 --skip-tier`
-  - 운영 권장: 반기 단위 분할 실행 후 `mode=daily`로 전환
+  - 결과(2026-02-07): `financial_collector` 완료 (`processed=2721`, `skipped=0`, `rows_saved=1,586,317`, `errors=0`, `elapsed=3:27:02`)
+  - 결과(2026-02-08): `investor_trading_collector` 완료 (`processed=2721`, `skipped=0`, `rows_saved=1,296,210`, `errors=0`, `elapsed=1:23:42`)
+  - 결과(2026-02-08): `pipeline_batch` 완료 (`elapsed=17,445s`, 약 `4:50:45`)
+  - 운영 메모: 재실행은 `ON DUPLICATE KEY UPDATE` 기반으로 동일 구간 멱등 처리
+  - 실행 벤치마크(기간 `2024-01-01~2026-02-07`, 총 `769일`, 약 `2.1054년`)
+    - `financial_collector`: 약 `127.70 rows/s` (`1,586,317 / 12,422s`), 연환산 소요시간 약 `01:38:20 / year`
+    - `investor_trading_collector`: 약 `258.11 rows/s` (`1,296,210 / 5,022s`), 연환산 소요시간 약 `00:39:45 / year`
+    - `pipeline_batch`(금번 실행): 연환산 소요시간 약 `02:18:06 / year` (동일 API/유니버스/환경 가정)
 - [ ] 후속 TODO(보류): `DailyStockPrice` 전기간 재적재
   - 배경: `adjusted=True`/`adjusted=False` 혼재 가능성이 있어 장기 정합성 점검 후 KRX raw SSOT 기준으로 재적재 필요
   - 정책: 지금은 실행하지 않고 TODO로만 유지, `adj_close`/`adj_ratio` 설계 확정 후 별도 배치로 수행

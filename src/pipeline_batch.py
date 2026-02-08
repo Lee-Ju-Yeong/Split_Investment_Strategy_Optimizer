@@ -2,6 +2,7 @@
 pipeline_batch.py
 
 Batch orchestrator for:
+- TickerUniverseSnapshot/History build
 - FinancialData collection
 - InvestorTradingTrend collection
 - DailyStockTier pre-calculation
@@ -15,6 +16,7 @@ from .db_setup import create_tables, get_db_connection
 from .daily_stock_tier_batch import run_daily_stock_tier_batch
 from .financial_collector import run_financial_batch
 from .investor_trading_collector import run_investor_trading_batch
+from .ticker_universe_batch import run_ticker_universe_batch
 
 
 def run_pipeline_batch(
@@ -22,9 +24,16 @@ def run_pipeline_batch(
     mode="daily",
     start_date_str=None,
     end_date_str=None,
+    run_universe=False,
     run_financial=True,
     run_investor=True,
     run_tier=True,
+    universe_markets=None,
+    universe_step_days=7,
+    universe_workers=1,
+    universe_resume=True,
+    universe_with_names=False,
+    universe_api_call_delay=0.2,
     lookback_days=20,
     financial_lag_days=45,
     log_interval=50,
@@ -38,6 +47,21 @@ def run_pipeline_batch(
         end_date_str = datetime.today().strftime("%Y%m%d")
 
     summary = {}
+    if run_universe:
+        summary["universe"] = run_ticker_universe_batch(
+            conn=conn,
+            mode=mode,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+            markets=universe_markets,
+            step_days=universe_step_days,
+            workers=universe_workers,
+            resume=universe_resume,
+            include_names=universe_with_names,
+            api_call_delay=universe_api_call_delay,
+            log_interval=log_interval,
+        )
+
     if run_financial:
         summary["financial"] = run_financial_batch(
             conn=conn,
@@ -90,6 +114,44 @@ def _build_arg_parser():
         help="End date in YYYYMMDD.",
     )
     parser.add_argument(
+        "--run-universe",
+        action="store_true",
+        help="Run TickerUniverseSnapshot/History batch before other collectors.",
+    )
+    parser.add_argument(
+        "--universe-markets",
+        default="KOSPI,KOSDAQ",
+        help="Comma-separated market list for ticker universe batch.",
+    )
+    parser.add_argument(
+        "--universe-step-days",
+        type=int,
+        default=7,
+        help="Snapshot interval in days for universe backfill.",
+    )
+    parser.add_argument(
+        "--universe-workers",
+        type=int,
+        default=1,
+        help="Worker count for parallel universe snapshot fetch.",
+    )
+    parser.add_argument(
+        "--universe-api-call-delay",
+        type=float,
+        default=0.2,
+        help="Sleep seconds between universe API calls.",
+    )
+    parser.add_argument(
+        "--universe-with-names",
+        action="store_true",
+        help="Fetch company names in universe snapshots.",
+    )
+    parser.add_argument(
+        "--universe-no-resume",
+        action="store_true",
+        help="Force recollect universe snapshot dates even when already stored.",
+    )
+    parser.add_argument(
         "--skip-financial",
         action="store_true",
         help="Skip FinancialData collection.",
@@ -137,6 +199,7 @@ def main():
         print(
             "[pipeline_batch] start "
             f"mode={args.mode}, start_date={args.start_date}, end_date={args.end_date}, "
+            f"run_universe={args.run_universe}, "
             f"run_financial={not args.skip_financial}, "
             f"run_investor={not args.skip_investor}, "
             f"run_tier={not args.skip_tier}, "
@@ -148,9 +211,20 @@ def main():
             mode=args.mode,
             start_date_str=args.start_date,
             end_date_str=args.end_date,
+            run_universe=args.run_universe,
             run_financial=not args.skip_financial,
             run_investor=not args.skip_investor,
             run_tier=not args.skip_tier,
+            universe_markets=[
+                market.strip().upper()
+                for market in args.universe_markets.split(",")
+                if market.strip()
+            ],
+            universe_step_days=args.universe_step_days,
+            universe_workers=max(int(args.universe_workers), 1),
+            universe_resume=not args.universe_no_resume,
+            universe_with_names=args.universe_with_names,
+            universe_api_call_delay=max(float(args.universe_api_call_delay), 0.0),
             lookback_days=args.lookback_days,
             financial_lag_days=args.financial_lag_days,
             log_interval=args.log_interval,
