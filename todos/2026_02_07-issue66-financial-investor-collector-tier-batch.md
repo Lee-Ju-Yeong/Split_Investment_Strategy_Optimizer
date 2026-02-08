@@ -250,9 +250,11 @@ runner.run(mode="daily")
     - `financial_collector`: 약 `127.70 rows/s` (`1,586,317 / 12,422s`), 연환산 소요시간 약 `01:38:20 / year`
     - `investor_trading_collector`: 약 `258.11 rows/s` (`1,296,210 / 5,022s`), 연환산 소요시간 약 `00:39:45 / year`
     - `pipeline_batch`(금번 실행): 연환산 소요시간 약 `02:18:06 / year` (동일 API/유니버스/환경 가정)
-- [ ] 후속 TODO(보류): `DailyStockPrice` 전기간 재적재
-  - 배경: `adjusted=True`/`adjusted=False` 혼재 가능성이 있어 장기 정합성 점검 후 KRX raw SSOT 기준으로 재적재 필요
-  - 정책: 지금은 실행하지 않고 TODO로만 유지, `adj_close`/`adj_ratio` 설계 확정 후 별도 배치로 수행
+- [ ] 후속 TODO(진행중): `DailyStockPrice` 전기간 재적재
+  - 목적: KRX raw(`adjusted=False`) 단일 SSOT로 가격 정합성 고정
+  - 실행: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
+  - 운영 원칙: `resume=True`로 중단 재개, `--allow-legacy-fallback` 미사용 유지
+  - 완료 기준: `docs/database/backfill_validation_runbook.md`의 사후 검증(SQL/커버리지/중복) 통과
 - [ ] 후속 TODO(보류): `adj_close`/`adj_ratio` 파생 계산 배치
   - 배경: `DailyStockPrice` 스키마 확장 후 raw 기준으로 보정값을 채우는 전용 배치가 필요
   - 정책: 이번 변경에서는 스키마/수집 기본값만 반영하고, 파생 계산 배치는 별도 이슈로 분리
