@@ -8,7 +8,7 @@
 - [x] 이슈 #64 PIT/룩어헤드 방지: `todos/done_2026_02_07-issue64-point-in-time-lookahead-bias.md`
 - [x] 이슈 #65 스키마/인덱스 확장: `todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md`
 - [ ] 이슈 #66 수집기 분리/사전계산 배치: `todos/2026_02_07-issue66-financial-investor-collector-tier-batch.md`
-- [x] 이슈 #70 상폐 포함 Historical Universe: `todos/2026_02_08-issue70-historical-ticker-universe-delisted.md`
+- [x] 이슈 #70 상폐 포함 Historical Universe: `todos/done_2026_02_08-issue70-historical-ticker-universe-delisted.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 
 ## 전체 우선순위 (Global Backlog)
