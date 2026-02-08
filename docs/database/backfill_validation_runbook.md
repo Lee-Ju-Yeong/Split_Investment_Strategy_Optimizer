@@ -78,11 +78,22 @@ WHERE date > CURDATE();
 - 재현성 검증이 필요하면 해당 구간만 삭제 후 재실행
 - `--allow-legacy-fallback`은 운영 안정화 전까지 기본 비활성 유지
 
-## 6) `CalculatedIndicators` 재계산 실행안
+## 6) `CalculatedIndicators` 재계산 실행안 (즉시 실행용)
 
 `DailyStockPrice`를 KRX raw 기준으로 재적재한 뒤에는 기존 `CalculatedIndicators`가 stale일 수 있으므로 재계산이 필요하다.
 
-### 6-1) 권장: 전체 재계산 (정합성 우선)
+### 6-1) 실행 기준 (전체 vs 구간)
+
+- 전체 재계산 선택:
+  - `DailyStockPrice` 재적재 시작일이 기존 지표 최소일보다 과거로 확장됨
+  - 티커 유니버스가 크게 변함(상폐 포함 신규/과거 티커 대량 유입)
+  - 부분 재계산 후 검증 실패(중복/누락/지표 불연속) 발생
+- 구간 재계산 선택:
+  - 재적재 범위가 명확하고 최근 구간으로 제한됨
+  - 과거 구간 원본 데이터 변경이 없음을 확인함
+  - 빠른 운영 복구가 우선이고, 이후 전체 재계산 슬롯이 따로 있음
+
+### 6-2) 권장: 전체 재계산 (정합성 우선)
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
@@ -100,7 +111,7 @@ finally:
 PY
 ```
 
-### 6-2) 대안: 최근 구간만 재계산 (시간 단축)
+### 6-3) 대안: 최근 구간만 재계산 (시간 단축)
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
@@ -115,6 +126,50 @@ try:
         cur.execute("DELETE FROM CalculatedIndicators WHERE date >= %s", (DELETE_FROM,))
     conn.commit()
     indicator_calculator.calculate_and_store_indicators_for_all(conn, use_gpu=True)
+finally:
+    conn.close()
+PY
+```
+
+### 6-4) 롤백 기준/명령
+
+- 롤백 트리거(둘 중 하나라도 충족):
+  - 검증 SQL에서 `future_rows > 0` 또는 PK 유사 중복(`duplicate_like_rows > 0`)
+  - 재계산 후 샘플 지표가 비정상(예: 특정 티커에서 최근 N일 `ma_20` 전부 NULL)
+- 롤백 원칙:
+  - 구간 재계산 실패 시: 동일 구간 재삭제 후 `6-2) 전체 재계산`으로 즉시 전환
+  - 전체 재계산 실패 시: 원인 수정 후 전체 재계산 재실행(멱등 보장)
+- 재실행용 점검 명령:
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
+from src.db_setup import get_db_connection
+
+conn = get_db_connection()
+try:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM CalculatedIndicators")
+        total = cur.fetchone()[0]
+        cur.execute(
+            """
+            SELECT COUNT(*) - COUNT(DISTINCT CONCAT(stock_code, ':', date))
+            FROM CalculatedIndicators
+            """
+        )
+        dup_like = cur.fetchone()[0]
+        cur.execute(
+            "SELECT MIN(date), MAX(date), COUNT(DISTINCT stock_code) FROM CalculatedIndicators"
+        )
+        min_date, max_date, tickers = cur.fetchone()
+    print(
+        {
+            "rows_total": total,
+            "duplicate_like_rows": dup_like,
+            "min_date": min_date,
+            "max_date": max_date,
+            "tickers": tickers,
+        }
+    )
 finally:
     conn.close()
 PY
@@ -224,3 +279,119 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 1. 위 파라미터로 read-only shadow를 1주간 유지
 2. `flow_impact`, `tier churn`, `tier distribution` 일별 점검
 3. 이상 없으면 `daily_stock_tier_batch`에 수급 규칙을 write 경로로 반영
+
+## 9) Tier v1 write 최종 게이트 (feature flag 기본 OFF)
+
+기본 정책: `pipeline_batch`의 Tier v1 write 플래그는 기본 비활성(`off`)이며, 게이트 통과 전에는 활성화하지 않는다.
+
+### 9-1) read-only 편차 점검 명령
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
+from src.db_setup import get_db_connection
+from src.daily_stock_tier_batch import (
+    fetch_price_history,
+    fetch_financial_history,
+    fetch_investor_history,
+    build_daily_stock_tier_frame,
+)
+
+START = "2024-01-01"
+END = "2026-02-06"
+LOOKBACK = 20
+LAG = 45
+DANGER = 300_000_000
+PRIME = 1_000_000_000
+FLOW5_THRESHOLD = -500_000_000
+
+conn = get_db_connection()
+try:
+    price = fetch_price_history(conn, START, END)
+    fin = fetch_financial_history(conn, END)
+    inv = fetch_investor_history(conn, START, END)
+
+    baseline = build_daily_stock_tier_frame(
+        price_df=price,
+        financial_df=fin,
+        investor_df=inv,
+        lookback_days=LOOKBACK,
+        financial_lag_days=LAG,
+        danger_liquidity=DANGER,
+        prime_liquidity=PRIME,
+        enable_investor_v1_write=False,
+        investor_flow5_threshold=FLOW5_THRESHOLD,
+    )
+    candidate = build_daily_stock_tier_frame(
+        price_df=price,
+        financial_df=fin,
+        investor_df=inv,
+        lookback_days=LOOKBACK,
+        financial_lag_days=LAG,
+        danger_liquidity=DANGER,
+        prime_liquidity=PRIME,
+        enable_investor_v1_write=True,
+        investor_flow5_threshold=FLOW5_THRESHOLD,
+    )
+
+    merged = baseline[["date", "stock_code", "tier"]].merge(
+        candidate[["date", "stock_code", "tier", "reason"]],
+        on=["date", "stock_code"],
+        suffixes=("_base", "_cand"),
+    )
+    diff = merged[merged["tier_base"] != merged["tier_cand"]]
+    flow_rows = int(candidate["reason"].astype(str).str.contains("investor_flow5", na=False).sum())
+    total = len(merged)
+    print(
+        {
+            "rows_total": total,
+            "diff_rows": len(diff),
+            "flow_overlay_rows": flow_rows,
+            "flow_impact_pct": round((flow_rows / total * 100), 4) if total else 0.0,
+            "churn_pct": round((len(diff) / total * 100), 4) if total else 0.0,
+        }
+    )
+finally:
+    conn.close()
+PY
+```
+
+### 9-2) 통과 기준 (v1)
+
+- `flow_impact_pct <= 3.0`
+- `churn_pct <= 3.5`
+- 점검 기간의 `tier` 분포 급변 없음(전일 대비 이상치 변동 없음)
+
+### 9-3) write 적용 명령 (게이트 통과 후에만)
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u -m src.pipeline_batch \
+  --mode daily \
+  --end-date <YYYYMMDD> \
+  --skip-financial \
+  --skip-investor \
+  --enable-tier-v1-write \
+  --tier-v1-flow5-threshold -500000000
+```
+
+운영 기본값 유지:
+- `--enable-tier-v1-write`를 전달하지 않으면 v1 write는 비활성(OFF)
+
+## 10) 백필 종료 운영 로그 템플릿 (고정 포맷)
+
+백필 종료 시 아래 포맷으로 운영노트/이슈 코멘트에 고정 기록한다.
+
+```text
+[backfill_final]
+run_id=<YYYYMMDD-HHMMSS>
+mode=backfill
+range=<start_date>~<end_date>
+processed=<tickers_processed>
+skipped=<tickers_skipped>
+rows_saved=<rows_saved>
+errors=<errors>
+elapsed=<HH:MM:SS>
+throughput_rows_per_sec=<rows_per_sec>
+throughput_tickers_per_sec=<tickers_per_sec>
+universe_source=<history|legacy>
+legacy_fallback_used=<0|1>
+```

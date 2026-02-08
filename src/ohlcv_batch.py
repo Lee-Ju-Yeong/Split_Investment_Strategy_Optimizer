@@ -368,13 +368,23 @@ def run_ohlcv_batch(
                 )
 
     total_elapsed = time.time() - started_at
+    rows_per_sec = 0.0
+    tickers_per_sec = 0.0
+    if total_elapsed > 0:
+        rows_per_sec = summary["rows_saved"] / total_elapsed
+        tickers_per_sec = summary["tickers_processed"] / total_elapsed
+    summary["elapsed_seconds"] = int(total_elapsed)
+    summary["rows_per_sec"] = round(rows_per_sec, 2)
+    summary["tickers_per_sec"] = round(tickers_per_sec, 4)
     print(
         f"[ohlcv_batch] completed "
         f"processed={summary['tickers_processed']} "
         f"skipped={summary['tickers_skipped']} "
         f"rows_saved={summary['rows_saved']} "
         f"errors={summary['errors']} "
-        f"elapsed={_format_duration(total_elapsed)}"
+        f"elapsed={_format_duration(total_elapsed)} "
+        f"throughput_rows_per_sec={summary['rows_per_sec']} "
+        f"throughput_tickers_per_sec={summary['tickers_per_sec']}"
     )
     print(
         "[ohlcv_batch] fallback_report "

@@ -16,6 +16,8 @@ DEFAULT_LOOKBACK_DAYS = 20
 DEFAULT_FINANCIAL_LAG_DAYS = 45
 DEFAULT_DANGER_LIQUIDITY = 300_000_000
 DEFAULT_PRIME_LIQUIDITY = 1_000_000_000
+DEFAULT_ENABLE_INVESTOR_V1_WRITE = False
+DEFAULT_INVESTOR_FLOW5_THRESHOLD = -500_000_000
 
 
 def get_tier_ticker_universe(conn, end_date=None):
@@ -96,6 +98,23 @@ def fetch_financial_history(conn, end_date, ticker_codes=None):
         return pd.read_sql(query, conn, params=params)
 
 
+def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
+    params = [start_date, end_date]
+    query = """
+        SELECT stock_code, date, foreigner_net_buy, institution_net_buy
+        FROM InvestorTradingTrend
+        WHERE date BETWEEN %s AND %s
+    """
+    if ticker_codes:
+        in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+        query += in_sql
+        params.extend(in_params)
+    query += " ORDER BY stock_code, date"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return pd.read_sql(query, conn, params=params)
+
+
 def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     if financial_df is None or financial_df.empty:
         output = price_df.copy()
@@ -138,13 +157,61 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     return pd.concat(output_groups, ignore_index=True)
 
 
+def _append_reason(base_reason, suffix):
+    if suffix in str(base_reason):
+        return str(base_reason)
+    return f"{base_reason}+{suffix}"
+
+
+def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_threshold):
+    if investor_df is None or investor_df.empty:
+        return with_financial
+
+    investor = investor_df.copy()
+    investor["date"] = pd.to_datetime(investor["date"])
+    investor["foreigner_net_buy"] = pd.to_numeric(
+        investor["foreigner_net_buy"], errors="coerce"
+    ).fillna(0)
+    investor["institution_net_buy"] = pd.to_numeric(
+        investor["institution_net_buy"], errors="coerce"
+    ).fillna(0)
+    investor.sort_values(["stock_code", "date"], inplace=True)
+    investor["flow"] = investor["foreigner_net_buy"] + investor["institution_net_buy"]
+    investor["flow5"] = (
+        investor.groupby("stock_code")["flow"]
+        .rolling(window=5, min_periods=5)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+
+    merged = with_financial.merge(
+        investor[["stock_code", "date", "flow5"]],
+        on=["stock_code", "date"],
+        how="left",
+    )
+    flow5 = pd.to_numeric(merged["flow5"], errors="coerce")
+    flow_mask = (
+        (merged["tier"] == 2)
+        & flow5.notna()
+        & (flow5 < int(investor_flow5_threshold))
+    )
+    merged.loc[flow_mask, "tier"] = 3
+    merged.loc[flow_mask, "reason"] = merged.loc[flow_mask, "reason"].apply(
+        lambda reason: _append_reason(reason, "investor_flow5")
+    )
+    return merged.drop(columns=["flow5"], errors="ignore")
+
+
 def build_daily_stock_tier_frame(
     price_df,
     financial_df=None,
+    investor_df=None,
     lookback_days=DEFAULT_LOOKBACK_DAYS,
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
     danger_liquidity=DEFAULT_DANGER_LIQUIDITY,
     prime_liquidity=DEFAULT_PRIME_LIQUIDITY,
+    enable_investor_v1_write=DEFAULT_ENABLE_INVESTOR_V1_WRITE,
+    investor_flow5_threshold=DEFAULT_INVESTOR_FLOW5_THRESHOLD,
 ):
     if price_df is None or price_df.empty:
         return pd.DataFrame(
@@ -187,10 +254,14 @@ def build_daily_stock_tier_frame(
     risk_mask = with_financial["financial_risk"].fillna(False)
     with_financial.loc[risk_mask, "tier"] = 3
     with_financial.loc[risk_mask, "reason"] = with_financial.loc[risk_mask, "reason"].apply(
-        lambda reason: f"{reason}+financial_risk"
-        if "financial_risk" not in str(reason)
-        else reason
+        lambda reason: _append_reason(reason, "financial_risk")
     )
+    if enable_investor_v1_write:
+        with_financial = _apply_investor_flow_overlay(
+            with_financial=with_financial,
+            investor_df=investor_df,
+            investor_flow5_threshold=investor_flow5_threshold,
+        )
 
     output = with_financial[
         ["date", "stock_code", "tier", "reason", "liquidity_20d_avg_value"]
@@ -251,6 +322,8 @@ def run_daily_stock_tier_batch(
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
     danger_liquidity=DEFAULT_DANGER_LIQUIDITY,
     prime_liquidity=DEFAULT_PRIME_LIQUIDITY,
+    enable_investor_v1_write=DEFAULT_ENABLE_INVESTOR_V1_WRITE,
+    investor_flow5_threshold=DEFAULT_INVESTOR_FLOW5_THRESHOLD,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -291,13 +364,24 @@ def run_daily_stock_tier_batch(
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
+    investor_df = None
+    if enable_investor_v1_write:
+        investor_df = fetch_investor_history(
+            conn=conn,
+            start_date=query_start.strftime("%Y-%m-%d"),
+            end_date=end_date.strftime("%Y-%m-%d"),
+            ticker_codes=ticker_codes,
+        )
     calculated = build_daily_stock_tier_frame(
         price_df=price_df,
         financial_df=financial_df,
+        investor_df=investor_df,
         lookback_days=lookback_days,
         financial_lag_days=financial_lag_days,
         danger_liquidity=danger_liquidity,
         prime_liquidity=prime_liquidity,
+        enable_investor_v1_write=enable_investor_v1_write,
+        investor_flow5_threshold=investor_flow5_threshold,
     )
     if calculated.empty:
         return {
@@ -315,11 +399,20 @@ def run_daily_stock_tier_batch(
         ["date", "stock_code", "tier", "reason", "liquidity_20d_avg_value"]
     ].to_records(index=False).tolist()
     saved = upsert_daily_stock_tier(conn, rows)
+    investor_overlay_rows = 0
+    if enable_investor_v1_write:
+        investor_overlay_rows = int(
+            in_range["reason"].astype(str).str.contains("investor_flow5", na=False).sum()
+        )
 
     return {
         "rows_saved": max(saved, 0),
         "rows_calculated": len(in_range),
+        "tier_v1_write_enabled": bool(enable_investor_v1_write),
+        "investor_overlay_rows": investor_overlay_rows,
+        "investor_flow5_threshold": (
+            int(investor_flow5_threshold) if enable_investor_v1_write else None
+        ),
         "start_date": start_date.strftime("%Y-%m-%d"),
         "end_date": end_date.strftime("%Y-%m-%d"),
     }
-

@@ -36,6 +36,8 @@ def run_pipeline_batch(
     universe_api_call_delay=0.2,
     lookback_days=20,
     financial_lag_days=45,
+    tier_v1_write_enabled=False,
+    tier_v1_flow5_threshold=-500_000_000,
     log_interval=50,
 ):
     if mode not in {"daily", "backfill"}:
@@ -88,6 +90,8 @@ def run_pipeline_batch(
             end_date_str=end_date_str,
             lookback_days=lookback_days,
             financial_lag_days=financial_lag_days,
+            enable_investor_v1_write=tier_v1_write_enabled,
+            investor_flow5_threshold=tier_v1_flow5_threshold,
         )
 
     return summary
@@ -179,6 +183,20 @@ def _build_arg_parser():
         help="Lag days for financial data alignment in tier calculation.",
     )
     parser.add_argument(
+        "--enable-tier-v1-write",
+        action="store_true",
+        help=(
+            "Enable Tier v1 investor overlay write "
+            "(tier2 + flow5<threshold => tier3). Default is OFF."
+        ),
+    )
+    parser.add_argument(
+        "--tier-v1-flow5-threshold",
+        type=int,
+        default=-500_000_000,
+        help="Investor flow5 threshold used when --enable-tier-v1-write is enabled.",
+    )
+    parser.add_argument(
         "--log-interval",
         type=int,
         default=50,
@@ -203,6 +221,7 @@ def main():
             f"run_financial={not args.skip_financial}, "
             f"run_investor={not args.skip_investor}, "
             f"run_tier={not args.skip_tier}, "
+            f"tier_v1_write_enabled={args.enable_tier_v1_write}, "
             f"log_interval={args.log_interval}"
         )
 
@@ -227,6 +246,8 @@ def main():
             universe_api_call_delay=max(float(args.universe_api_call_delay), 0.0),
             lookback_days=args.lookback_days,
             financial_lag_days=args.financial_lag_days,
+            tier_v1_write_enabled=args.enable_tier_v1_write,
+            tier_v1_flow5_threshold=args.tier_v1_flow5_threshold,
             log_interval=args.log_interval,
         )
         elapsed_seconds = int(time.time() - started_at)
