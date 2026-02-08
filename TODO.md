@@ -22,7 +22,10 @@
   - [x] Phase 2 코드 반영: `ohlcv_batch` history 소스 + 수집 기간 교집합 적용
 - [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`, `TickerUniverseSnapshot`, `TickerUniverseHistory`)
 - [ ] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
-- [ ] `DailyStockPrice` 전기간 재적재(보류): KRX raw(`adjusted=False`)를 SSOT로 재정렬하고 `adj_close` 파생 경로 확정 후 실행
+- [ ] `DailyStockPrice` 전기간 재적재(진행중): KRX raw(`adjusted=False`)를 SSOT로 재정렬
+  - 실행 커맨드: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
+  - 운영 원칙: `resume=True` 유지(중단 후 동일 명령 재실행), `allow_legacy_fallback=False` 유지
+  - 완료 후 필수: `docs/database/backfill_validation_runbook.md`의 SQL/커버리지 점검 실행
 - [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가(보류): raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
 
 ### P1 (실행 경로/운영 안정화)
