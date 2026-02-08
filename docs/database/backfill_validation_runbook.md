@@ -77,3 +77,113 @@ WHERE date > CURDATE();
 - 기본은 `resume=True` 재실행 (동일 명령 재사용)
 - 재현성 검증이 필요하면 해당 구간만 삭제 후 재실행
 - `--allow-legacy-fallback`은 운영 안정화 전까지 기본 비활성 유지
+
+## 6) `CalculatedIndicators` 재계산 실행안
+
+`DailyStockPrice`를 KRX raw 기준으로 재적재한 뒤에는 기존 `CalculatedIndicators`가 stale일 수 있으므로 재계산이 필요하다.
+
+### 6-1) 권장: 전체 재계산 (정합성 우선)
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
+from src.db_setup import get_db_connection
+from src import indicator_calculator
+
+conn = get_db_connection()
+try:
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE CalculatedIndicators")
+    conn.commit()
+    indicator_calculator.calculate_and_store_indicators_for_all(conn, use_gpu=True)
+finally:
+    conn.close()
+PY
+```
+
+### 6-2) 대안: 최근 구간만 재계산 (시간 단축)
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
+from src.db_setup import get_db_connection
+from src import indicator_calculator
+
+DELETE_FROM = "2024-01-01"
+
+conn = get_db_connection()
+try:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM CalculatedIndicators WHERE date >= %s", (DELETE_FROM,))
+    conn.commit()
+    indicator_calculator.calculate_and_store_indicators_for_all(conn, use_gpu=True)
+finally:
+    conn.close()
+PY
+```
+
+## 7) Tier 규칙 튜닝 초안 (read-only)
+
+아래 초안은 현재 통계(최근 20거래일 평균 거래대금 분위수, 재무 위험 비율, 수급 양수 비율) 기반이다.
+
+### 7-1) 변수 의미
+
+- `lookback_days`
+  - 의미: 평균 거래대금 계산에 사용하는 롤링 윈도우(거래일 수)
+  - 기본값: `20`
+  - 영향: 값이 크면 안정적(완만), 값이 작으면 최근 급변에 민감
+
+- `financial_lag_days`
+  - 의미: 재무 데이터의 공시 지연(PIT)을 반영하기 위한 lag 일수
+  - 기본값: `45`
+  - 영향: 값이 작으면 룩어헤드 위험 증가, 값이 크면 반영 속도 저하
+
+- `danger_liquidity`
+  - 의미: 20일 평균 거래대금이 이 값 미만이면 기본 Tier를 `3 (Danger)`로 분류
+  - 기본값: `300,000,000`
+  - 영향: 값을 높이면 보수적(제외 종목 증가), 낮추면 유니버스 확대
+
+- `prime_liquidity`
+  - 의미: 20일 평균 거래대금이 이 값 이상이면 기본 Tier를 `1 (Prime)`로 분류
+  - 기본값: `1,000,000,000`
+  - 영향: 값을 높이면 Prime이 줄고, 낮추면 Prime이 늘어남
+
+- 현재 Tier 산정 규칙
+  - `avg_20d_value >= prime_liquidity` → `tier=1`
+  - `avg_20d_value < danger_liquidity` → `tier=3`
+  - 그 외 → `tier=2`
+  - 추가로 `bps <= 0` 또는 `roe < 0`이면 `tier=3`으로 override
+
+### 7-2) 임계값 후보(A/B/C)
+
+- A안(보수): `danger_liquidity=500,000,000`, `prime_liquidity=2,000,000,000`
+- B안(기본): `danger_liquidity=300,000,000`, `prime_liquidity=1,000,000,000`
+- C안(완화): `danger_liquidity=100,000,000`, `prime_liquidity=800,000,000`
+
+`DailyStockTier`에 쓰기 전, read-only로 tier 분포를 비교한다.
+
+```bash
+PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
+from src.db_setup import get_db_connection
+from src.daily_stock_tier_batch import fetch_price_history, fetch_financial_history, build_daily_stock_tier_frame
+
+START = "2024-01-01"
+END = "2026-02-06"
+SCENARIOS = {
+    "A_conservative": {"lookback_days": 20, "financial_lag_days": 45, "danger_liquidity": 500_000_000, "prime_liquidity": 2_000_000_000},
+    "B_baseline": {"lookback_days": 20, "financial_lag_days": 45, "danger_liquidity": 300_000_000, "prime_liquidity": 1_000_000_000},
+    "C_relaxed": {"lookback_days": 20, "financial_lag_days": 45, "danger_liquidity": 100_000_000, "prime_liquidity": 800_000_000},
+}
+
+conn = get_db_connection()
+try:
+    price = fetch_price_history(conn, START, END)
+    fin = fetch_financial_history(conn, END)
+    for name, cfg in SCENARIOS.items():
+        df = build_daily_stock_tier_frame(price_df=price, financial_df=fin, **cfg)
+        dist = (df["tier"].value_counts(normalize=True).sort_index() * 100).round(2).to_dict()
+        print(name, {"rows": len(df), "tier_pct": dist})
+finally:
+    conn.close()
+PY
+```
+
+분포 비교 후 최종안을 고르면 그때 `pipeline_batch`로 실제 재적재한다.

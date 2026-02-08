@@ -267,3 +267,15 @@ runner.run(mode="daily")
 - issue: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64`
 - issue: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65`
 - issue: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66`
+
+## 10. 병렬 작업 산출물(백필 중)
+- `docs/database/backfill_validation_runbook.md`에 post-backfill 검증 SQL/모니터링/복구 원칙을 추가
+- `CalculatedIndicators` 재계산 실행안(전체/부분 재계산 커맨드) 추가
+- Tier 튜닝 A/B/C 초안과 read-only 분포 비교 스크립트 추가
+- read-only 통계 스냅샷(2026-02-08 실행):
+  - `DailyStockPrice`: `1,668,187` rows / `348` tickers (`1995-05-08 ~ 2026-02-06`, 백필 진행 중)
+  - `FinancialData`: `1,675,118` rows / `2,671` tickers
+  - `InvestorTradingTrend`: `1,296,203` rows / `2,710` tickers
+  - 20일 평균 거래대금 분위수: p25 `15,663,860`, p50 `192,474,435`, p75 `1,154,819,607`, p90 `8,156,161,147`
+  - 최신 재무 위험 비율(`bps<=0` 또는 `roe<0`): `8.39%`
+  - 최근 20거래일 외국인+기관 순매수 양수 비율: `55.28%`
