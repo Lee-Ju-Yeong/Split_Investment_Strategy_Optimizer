@@ -167,10 +167,38 @@ def create_tables(conn):
         PRIMARY KEY (date, stock_code)
     )
     ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS TickerUniverseSnapshot (
+        snapshot_date DATE,
+        stock_code VARCHAR(20),
+        market_type VARCHAR(20),
+        company_name VARCHAR(255) NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (snapshot_date, stock_code)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS TickerUniverseHistory (
+        stock_code VARCHAR(20) PRIMARY KEY,
+        listed_date DATE NOT NULL,
+        last_seen_date DATE NOT NULL,
+        delisted_date DATE NULL,
+        latest_market_type VARCHAR(20) NULL,
+        latest_company_name VARCHAR(255) NULL,
+        source VARCHAR(50) DEFAULT 'snapshot_agg',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+    ''')
     ensure_index('FinancialData', 'idx_financial_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')
     ensure_index('DailyStockTier', 'idx_tier_stock_date', 'stock_code, date')
     ensure_index('DailyStockTier', 'idx_tier_date_tier_stock', 'date, tier, stock_code')
+    ensure_index('TickerUniverseSnapshot', 'idx_tus_stock_date', 'stock_code, snapshot_date')
+    ensure_index('TickerUniverseSnapshot', 'idx_tus_date_market_stock', 'snapshot_date, market_type, stock_code')
+    ensure_index('TickerUniverseHistory', 'idx_tuh_listed_date', 'listed_date')
+    ensure_index('TickerUniverseHistory', 'idx_tuh_last_seen_date', 'last_seen_date')
+    ensure_index('TickerUniverseHistory', 'idx_tuh_delisted_date', 'delisted_date')
     conn.commit()
     cur.close()
