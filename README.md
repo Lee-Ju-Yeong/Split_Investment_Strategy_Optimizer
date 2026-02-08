@@ -26,8 +26,11 @@
 
 ### 1) 환경 구성
 ```bash
-# conda 권장
+# conda 권장 (CPU 기본 환경: environment.yml)
 conda env create -f environment.yml
+conda activate stock_optimizer_env
+
+# GPU 실행 시 (별도 RAPIDS 환경)
 conda activate rapids-env
 
 # 또는 pip
@@ -45,6 +48,8 @@ python -c "from src.db_setup import get_db_connection, create_tables; conn=get_d
 
 ## 실행 명령
 
+> Last Verified: 2026-02-08
+
 ### 데이터 파이프라인(OHLCV/지표)
 ```bash
 python -m src.main_script
@@ -53,19 +58,19 @@ python -m src.main_script
 ### 재무·수급·Tier 배치 (신규)
 ```bash
 # 초기 백필
-python -m src.pipeline_batch --mode backfill --start-date 20150101 --end-date 20260207
+python -m src.pipeline_batch --mode backfill --start-date 20150101 --end-date <YYYYMMDD>
 
 # 일배치
-python -m src.pipeline_batch --mode daily --end-date 20260207
+python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
 ```
 
 ### Historical Universe 배치 (신규, 상폐 포함 유니버스)
 ```bash
 # Phase 1 백필 (권장: workers=1부터 시작)
-python -m src.ticker_universe_batch --mode backfill --start-date 20100101 --end-date 20260207 --step-days 7 --workers 1
+python -m src.ticker_universe_batch --mode backfill --start-date 20100101 --end-date <YYYYMMDD> --step-days 7 --workers 1
 
 # 일배치 (당일 스냅샷 + history 갱신)
-python -m src.ticker_universe_batch --mode daily --end-date 20260207
+python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
 ```
 
 ### 백테스트 / 최적화 / 분석
@@ -74,10 +79,10 @@ python -m src.ticker_universe_batch --mode daily --end-date 20260207
 python -m src.main_backtest
 
 # GPU 파라미터 시뮬레이션
-python src/parameter_simulation_gpu.py
+python -m src.parameter_simulation_gpu
 
 # WFO 분석
-python src/walk_forward_analyzer.py
+python -m src.walk_forward_analyzer
 ```
 
 ### Web UI
@@ -115,7 +120,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 - [x] #64 PIT 규칙 및 룩어헤드 방지
 - [x] #65 스키마/인덱스 확장
 - [ ] #66 재무·수급 수집기 분리 + Tier 사전 계산 배치 운영 적용(백필/일배치)
-- [ ] #70 상폐 포함 Historical Universe 구축 (Phase 1 완료, 운영 검증 진행)
+- [x] #70 상폐 포함 Historical Universe 구축 (Phase 1/2 코드 반영 및 운영 검증 완료)
 
 ### P1 (운영 안정화)
 - [ ] #67 Tier fallback/PIT 조인 고도화
