@@ -187,3 +187,40 @@ PY
 ```
 
 분포 비교 후 최종안을 고르면 그때 `pipeline_batch`로 실제 재적재한다.
+
+## 8) Investor 포함 read-only 검증 결과 (2026-02-08)
+
+Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시나리오를 read-only로 비교했다.
+
+### 8-1) 비교 시나리오
+
+- A안: `danger=100m`, `prime=1b` + `tier1`에서 `flow_ratio20 < -0.02`이면 `tier2` 강등
+- B안: `danger=300m`, `prime=1b` + `flow_ratio20 <= -0.03`이면 `tier`를 1단계 강등
+- C안: `danger=300m`, `prime=1b` + `tier2`에서 `flow5 < -500,000,000`이면 `tier3` 강등
+
+### 8-2) read-only 결과 요약
+
+- A안: `tier1=22.23%`, `tier2=45.38%`, `tier3=32.39%`, `flow_impact=9.79%`, `churn=2.90%`
+- B안: `tier1=23.76%`, `tier2=23.45%`, `tier3=52.79%`, `flow_impact=13.77%`, `churn=3.82%`
+- C안: `tier1=32.03%`, `tier2=18.80%`, `tier3=49.17%`, `flow_impact=1.88%`, `churn=2.59%`
+
+관찰:
+- A/B는 수급 규칙 영향도가 커서(`flow_impact` 과다) v1 최소 규칙으로는 보수적이지 않다.
+- C는 영향도가 낮고(`1.88%`) 분포 교란이 작아 v1 운영 안정성에 유리하다.
+- 현재 데이터 구간에서 `forward 20d downside monotonicity`는 모든 시나리오에서 미충족이었고, 이는 임계값 문제와 별개로 데이터 커버리지/구조 영향이 크므로 참고 지표로만 사용한다.
+
+### 8-3) v1 확정안 (운영 기준)
+
+- `lookback_days = 20`
+- `financial_lag_days = 45`
+- `danger_liquidity = 300,000,000`
+- `prime_liquidity = 1,000,000,000`
+- 재무 위험 override: `bps <= 0 OR roe < 0 => tier=3`
+- 수급 최소 규칙(v1): `tier2`에서만 `flow5 < -500,000,000`이면 `tier3` 강등
+- 결측 규칙: `InvestorTradingTrend` 미존재 날짜/종목은 수급 규칙 미적용(기본 tier 유지)
+
+### 8-4) 적용 순서
+
+1. 위 파라미터로 read-only shadow를 1주간 유지
+2. `flow_impact`, `tier churn`, `tier distribution` 일별 점검
+3. 이상 없으면 `daily_stock_tier_batch`에 수급 규칙을 write 경로로 반영
