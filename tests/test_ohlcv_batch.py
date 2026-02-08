@@ -13,6 +13,7 @@ from src.ohlcv_batch import (
     _resolve_effective_collection_window,
     get_ohlcv_ticker_universe,
     normalize_ohlcv_df,
+    run_ohlcv_batch,
 )
 
 
@@ -116,10 +117,75 @@ class TestOhlcvBatch(unittest.TestCase):
             conn=conn,
             requested_start_date=date(2010, 1, 1),
             requested_end_date=date(2026, 2, 7),
+            allow_legacy_fallback=True,
         )
         self.assertEqual(source, "legacy")
         self.assertEqual(ranges, [("005930", date(2010, 1, 1), date(2026, 2, 7))])
         mock_fetch_legacy.assert_called_once()
+
+    @patch("src.ohlcv_batch._fetch_legacy_universe_ranges")
+    @patch("src.ohlcv_batch._fetch_history_universe_ranges")
+    def test_get_ohlcv_ticker_universe_raises_when_history_empty_without_fallback(
+        self,
+        mock_fetch_history,
+        mock_fetch_legacy,
+    ):
+        mock_fetch_history.return_value = []
+        mock_fetch_legacy.return_value = [
+            ("005930", date(2010, 1, 1), date(2026, 2, 7))
+        ]
+        conn = MagicMock()
+
+        with self.assertRaises(RuntimeError):
+            get_ohlcv_ticker_universe(
+                conn=conn,
+                requested_start_date=date(2010, 1, 1),
+                requested_end_date=date(2026, 2, 7),
+            )
+        mock_fetch_legacy.assert_not_called()
+
+    @patch("src.ohlcv_batch.upsert_ohlcv_rows", return_value=2)
+    @patch("src.ohlcv_batch._resolve_effective_collection_window")
+    @patch("src.ohlcv_batch.get_ohlcv_ticker_universe")
+    @patch("src.ohlcv_batch.ohlcv_collector.get_market_ohlcv_with_fallback")
+    def test_run_ohlcv_batch_tracks_legacy_fallback_counter(
+        self,
+        mock_get_ohlcv,
+        mock_get_universe,
+        mock_resolve_window,
+        _mock_upsert,
+    ):
+        conn = MagicMock()
+        mock_get_universe.return_value = (
+            [("005930", date(2024, 1, 1), date(2024, 1, 31))],
+            "legacy",
+        )
+        mock_resolve_window.return_value = (date(2024, 1, 2), date(2024, 1, 31))
+        idx = pd.to_datetime(["2024-01-02"])
+        df = pd.DataFrame(
+            {
+                "시가": [100],
+                "고가": [110],
+                "저가": [90],
+                "종가": [105],
+                "거래량": [1000],
+            },
+            index=idx,
+        )
+        df.index.name = "날짜"
+        mock_get_ohlcv.return_value = df
+
+        summary = run_ohlcv_batch(
+            conn=conn,
+            start_date_str="20240101",
+            end_date_str="20240131",
+            allow_legacy_fallback=True,
+            log_interval=0,
+            api_call_delay=0.0,
+        )
+        self.assertTrue(summary["legacy_fallback_used"])
+        self.assertEqual(summary["legacy_fallback_tickers"], 1)
+        self.assertEqual(summary["legacy_fallback_runs"], 1)
 
     def test_normalize_ohlcv_df_maps_expected_columns(self):
         idx = pd.to_datetime(["2024-01-02", "2024-01-03"])

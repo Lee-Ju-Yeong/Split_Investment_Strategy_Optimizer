@@ -50,8 +50,22 @@
 
 ## 8. Phase 2 반영 메모
 - `src/ohlcv_batch.py`:
-  - `TickerUniverseHistory` 우선 조회(`listed_date`, `last_seen_date`, `delisted_date`) + legacy fallback(`WeeklyFilteredStocks`/`CompanyInfo`)
+  - 기본 동작은 `TickerUniverseHistory` strict 조회(`listed_date`, `last_seen_date`, `delisted_date`)이며, 결과가 비면 즉시 실패(fail-fast)
+  - 비상 운영 시에만 `--allow-legacy-fallback` 옵션으로 legacy source(`WeeklyFilteredStocks`/`CompanyInfo`) 허용
+  - 실행 요약에 fallback 카운터 기록: `legacy_fallback_used`, `legacy_fallback_tickers`, `legacy_fallback_runs`
+  - 종료 시 `fallback_report` 로그 출력으로 운영 점검 가능
   - 티커별 lifetime과 요청 구간 `[start_date, end_date]` 교집합으로 수집 범위 산정
   - `resume` 시 교집합 범위 내에서 `latest_saved_date + 1`부터 이어받기
 - `tests/test_ohlcv_batch.py`:
-  - 교집합 산정, history 우선 선택, legacy fallback, resume window 테스트 추가
+  - 교집합 산정, history 우선 선택, strict 모드 예외, 명시 fallback, resume window 테스트 추가
+
+## 9. Legacy fallback 제거 기준(후속)
+- 목표: `ohlcv_batch`에서 legacy source 분기 제거
+- 관측 조건(모두 충족):
+  - 1~2주 일배치 무장애
+  - `--allow-legacy-fallback` 사용 횟수 0회
+  - `TickerUniverseHistory` 일배치 최신성/행수 모니터링 정상
+- 실행 계획:
+  1. 운영 기간 동안 fallback 사용 여부를 로그/운영노트에 기록
+  2. 조건 충족 시 `src/ohlcv_batch.py`의 legacy 조회 함수/옵션 제거
+  3. 관련 테스트(`legacy fallback` 케이스) 정리 및 문서 업데이트
