@@ -7,9 +7,36 @@ import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.daily_stock_tier_batch import build_daily_stock_tier_frame
+from src.daily_stock_tier_batch import upsert_daily_stock_tier
 
 
 class TestDailyStockTierBatch(unittest.TestCase):
+    class _FakeCursor:
+        def __init__(self):
+            self.executed_chunks = []
+            self.rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def executemany(self, _sql, chunk):
+            self.executed_chunks.append(len(chunk))
+            self.rowcount = len(chunk)
+
+    class _FakeConn:
+        def __init__(self):
+            self.cursor_obj = TestDailyStockTierBatch._FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
     def _build_price_df(self):
         dates = pd.date_range("2024-01-01", periods=5, freq="D")
         rows = []
@@ -135,6 +162,28 @@ class TestDailyStockTierBatch(unittest.TestCase):
         ].iloc[0]
         self.assertEqual(latest["tier"], 3)
         self.assertIn("financial_risk", str(latest["reason"]))
+
+    def test_upsert_daily_stock_tier_uses_chunked_batches(self):
+        conn = self._FakeConn()
+        rows = pd.DataFrame(
+            [
+                ("2024-01-01", f"A{i:05d}", 2, "normal_liquidity", 1000)
+                for i in range(25_001)
+            ],
+            columns=[
+                "date",
+                "stock_code",
+                "tier",
+                "reason",
+                "liquidity_20d_avg_value",
+            ],
+        )
+
+        affected = upsert_daily_stock_tier(conn, rows, batch_size=10_000)
+
+        self.assertEqual(affected, 25_001)
+        self.assertEqual(conn.cursor_obj.executed_chunks, [10_000, 10_000, 5_001])
+        self.assertTrue(conn.committed)
 
 
 if __name__ == "__main__":

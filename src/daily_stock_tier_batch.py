@@ -20,8 +20,75 @@ DEFAULT_ENABLE_INVESTOR_V1_WRITE = False
 DEFAULT_INVESTOR_FLOW5_THRESHOLD = -500_000_000
 
 
-def get_tier_ticker_universe(conn, end_date=None):
+def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
     with conn.cursor() as cur:
+        if mode == "backfill":
+            if end_date is None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    ORDER BY listed_date, stock_code
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    WHERE listed_date <= %s
+                    ORDER BY listed_date, stock_code
+                    """,
+                    (end_date,),
+                )
+            rows = cur.fetchall()
+            if rows:
+                return [row[0] for row in rows]
+        else:
+            if end_date is None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date = (
+                        SELECT MAX(snapshot_date) FROM TickerUniverseSnapshot
+                    )
+                    ORDER BY stock_code
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date = (
+                        SELECT MAX(snapshot_date)
+                        FROM TickerUniverseSnapshot
+                        WHERE snapshot_date <= %s
+                    )
+                    ORDER BY stock_code
+                    """,
+                    (end_date,),
+                )
+            rows = cur.fetchall()
+            if rows:
+                return [row[0] for row in rows]
+
+            if end_date is not None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    WHERE listed_date <= %s
+                      AND COALESCE(delisted_date, last_seen_date) >= %s
+                    ORDER BY stock_code
+                    """,
+                    (end_date, end_date),
+                )
+                rows = cur.fetchall()
+                if rows:
+                    return [row[0] for row in rows]
+
         if end_date is None:
             cur.execute("SELECT DISTINCT stock_code FROM WeeklyFilteredStocks")
         else:
@@ -276,8 +343,8 @@ def build_daily_stock_tier_frame(
     return output
 
 
-def upsert_daily_stock_tier(conn, rows):
-    if not rows:
+def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
+    if rows_df.empty:
         return 0
 
     sql = """
@@ -291,11 +358,16 @@ def upsert_daily_stock_tier(conn, rows):
             liquidity_20d_avg_value = VALUES(liquidity_20d_avg_value),
             computed_at = CURRENT_TIMESTAMP
     """
+    total_affected = 0
     with conn.cursor() as cur:
-        cur.executemany(sql, rows)
-        affected = cur.rowcount
-    conn.commit()
-    return affected
+        for offset in range(0, len(rows_df), batch_size):
+            chunk_df = rows_df.iloc[offset : offset + batch_size]
+            chunk_rows = list(chunk_df.itertuples(index=False, name=None))
+            cur.executemany(sql, chunk_rows)
+            chunk_affected = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            total_affected += chunk_affected
+        conn.commit()
+    return total_affected
 
 
 def _resolve_start_date(conn, mode, start_date_str, lookback_days):
@@ -333,7 +405,7 @@ def run_daily_stock_tier_batch(
     end_date = datetime.strptime(end_date_str, "%Y%m%d").date()
 
     if ticker_codes is None:
-        ticker_codes = get_tier_ticker_universe(conn, end_date=end_date)
+        ticker_codes = get_tier_ticker_universe(conn, end_date=end_date, mode=mode)
 
     start_date = _resolve_start_date(conn, mode, start_date_str, lookback_days)
     if start_date is None or start_date > end_date:
@@ -395,10 +467,10 @@ def run_daily_stock_tier_batch(
         (pd.to_datetime(calculated["date"]).dt.date >= start_date)
         & (pd.to_datetime(calculated["date"]).dt.date <= end_date)
     ]
-    rows = in_range[
+    rows_df = in_range[
         ["date", "stock_code", "tier", "reason", "liquidity_20d_avg_value"]
-    ].to_records(index=False).tolist()
-    saved = upsert_daily_stock_tier(conn, rows)
+    ]
+    saved = upsert_daily_stock_tier(conn, rows_df)
     investor_overlay_rows = 0
     if enable_investor_v1_write:
         investor_overlay_rows = int(

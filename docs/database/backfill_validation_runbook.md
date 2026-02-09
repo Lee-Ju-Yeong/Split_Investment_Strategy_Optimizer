@@ -243,6 +243,39 @@ PY
 
 분포 비교 후 최종안을 고르면 그때 `pipeline_batch`로 실제 재적재한다.
 
+### 7-3) 0값/결측값 의미 정책 (수집기 반영, 2026-02-09)
+
+- 원칙: `NULL`은 미관측/미수집, `0`은 관측된 실제 값으로 취급
+- `FinancialData`
+  - `per <= 0`, `pbr <= 0`은 `NULL`로 정규화
+  - 모든 팩터(`per,pbr,eps,bps,dps,div_yield,roe`)가 `NULL`인 row는 저장하지 않음
+- `InvestorTradingTrend`
+  - 투자자 컬럼 미탐지/미관측은 `NULL` 유지
+  - 개인/외국인/기관 값이 모두 0인 row는 무의미 row로 간주해 저장하지 않음
+
+운영 점검 SQL:
+
+```sql
+SELECT SUM(per = 0) AS per_zero_rows, SUM(pbr = 0) AS pbr_zero_rows
+FROM FinancialData;
+```
+
+```sql
+SELECT COUNT(*) AS empty_rows
+FROM FinancialData
+WHERE per IS NULL AND pbr IS NULL AND eps IS NULL AND bps IS NULL
+  AND dps IS NULL AND div_yield IS NULL AND roe IS NULL;
+```
+
+```sql
+SELECT COUNT(*) AS all_zero_rows
+FROM InvestorTradingTrend
+WHERE COALESCE(individual_net_buy, 0)=0
+  AND COALESCE(foreigner_net_buy, 0)=0
+  AND COALESCE(institution_net_buy, 0)=0
+  AND COALESCE(total_net_buy, 0)=0;
+```
+
 ## 8) Investor 포함 read-only 검증 결과 (2026-02-08)
 
 Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시나리오를 read-only로 비교했다.
@@ -279,6 +312,19 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 1. 위 파라미터로 read-only shadow를 1주간 유지
 2. `flow_impact`, `tier churn`, `tier distribution` 일별 점검
 3. 이상 없으면 `daily_stock_tier_batch`에 수급 규칙을 write 경로로 반영
+
+### 8-5) `lookback_days` / `financial_lag_days` 운영 권고
+
+- 교차 검토 결론:
+  - `lookback_days=20`은 유지(월 단위 유동성 안정성과 반응성 균형)
+  - `financial_lag_days`는 데이터 완성 전에는 보수값(`60`)을 우선 권고
+  - `InvestorTradingTrend` 전기간 백필 완료 후 WFO 기반 재튜닝에서 `45/60` 재평가
+
+튜닝 프로토콜(룩어헤드 방지):
+
+1. Anchored WFO로 train/validation/test 분리
+2. 후보 그리드: `lookback {20,30}`, `lag {45,60}`, `danger {100m,300m,500m}`, `prime {800m,1b,2b}`
+3. 단일 fold 최고값 채택 금지, fold median/majority 기반 확정
 
 ## 9) Tier v1 write 최종 게이트 (feature flag 기본 OFF)
 
