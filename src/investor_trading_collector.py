@@ -387,6 +387,7 @@ def run_investor_trading_batch(
         }
 
         for future in as_completed(future_map):
+            ticker_code = future_map[future]
             try:
                 rows = future.result()
                 if rows:
@@ -394,7 +395,8 @@ def run_investor_trading_batch(
                     if len(row_buffer) >= batch_size:
                         _flush_buffer()
                 summary["tickers_processed"] += 1
-            except Exception:
+            except Exception as e:
+                print(f"[investor_trading_collector] Error processing {ticker_code}: {e}")
                 summary["errors"] += 1
             finally:
                 completed_count += 1
