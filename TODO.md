@@ -62,9 +62,16 @@
   - Phase P0: `MarketCapDaily`, `ShortSellingDaily` 우선 적재 및 PIT 규칙 반영
   - Phase P1: `ForeignOwnershipDaily`, `SectorClassificationHistory` 추가
   - Phase P2: `IndexDaily`, `IndexConstituentHistory` 및 Tier v2 멀티팩터 고도화
+  - Phase P3: `Optuna` 후행 적용(범위 제한)
+    - Allowed: Tier v2 수치 임계값/가중치, `#68` robust selection 계층 수치 파라미터
+    - Forbidden: `candidate_source_mode`, execution/fee/tick/lag 규칙, WFO fold 분할 규칙
+    - Preflight: `#67` 모드 고정 + `#56` parity mismatch `0건` + `#68` hard gate 설정 완료
+    - Promotion: feature flag canary 통과 + 재현성(seed/기간/모드) 증적 확보 시에만 운영 반영
 - [ ] `DataHandler` PIT 조인 확장 + `tier=1 -> tier<=2` fallback 조회 적용 (이슈 #67): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67
   - [ ] 후보군 조회 정책 플래그 도입: `weekly | tier | hybrid_transition`
   - [ ] `tier=1` 우선, 빈 경우 `tier<=2` fallback 규칙을 CPU/GPU 동일 로직으로 고정
+  - [ ] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
+  - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
   - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
   - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
   - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
@@ -80,13 +87,17 @@
 - [ ] ATR 단일 랭킹을 멀티팩터 랭킹으로 전환 + WFO/Ablation 검증 (이슈 #68): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68
   - [ ] `walk_forward_analyzer` 강건 점수 함수 도입: `robust_score = (mean - k*std) * log1p(cluster_size)` 형태 실험/고정
   - [ ] WFO 하드 게이트 도입: `median(OOS/IS) >= 0.60`, `fold pass rate >= 70%`, `OOS MDD p95 <= 25%`
+  - [ ] 검증 체계 고정: `deterministic baseline` + `seeded_stress` + `jackknife_drop_topN`
+  - [ ] 집중도 리스크 지표(`max_single_stock_contribution`, `HHI`)를 승격 게이트에 포함
   - [ ] 클러스터링 feature 확장: 파라미터 4종 + 행동지표(`trade_count`, `avg_hold_days`) 비교
   - [ ] 민감도 테스트 추가: 선택 파라미터 주변(±10%) perturbation 성능 저하율 측정(목표 `<= 15%`)
   - [ ] `robust_selection_enabled` feature flag와 `legacy` rollback 경로 추가
   - [ ] Ablation 매트릭스 고정: `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+BehaviorFeature`
 - [ ] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
   - [ ] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`debug_gpu_single_run` 기반)
+  - [ ] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
   - [ ] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장
+  - [ ] 스냅샷 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
   - [ ] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
   - [ ] 하드 게이트: parity mismatch `0건`만 pass
   - [ ] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
@@ -101,3 +112,10 @@
 - 운영 반영은 `feature flag`로 점진 전환(문제 시 즉시 legacy 복귀)
 - 데이터 플로우 최종안은 `A안(KRX PIT + Tier)`, 전환기에는 `C안(Hybrid)`를 제한적으로 허용
 - `A안 전환 구현/병합은 main 직접 작업 금지`, 반드시 별도 기능 브랜치 + PR로 진행
+
+### P2-Notes (2026-02-09, Optuna Scope v1 합의)
+- Optuna는 `파라미터 탐색 엔진`으로만 사용하고, 전략 로직/체결 규칙 생성 도구로 사용하지 않음
+- Tier는 safety gate 역할을 유지하고, 수익 최적화 objective는 `#68 robust score` 계층에 한정
+- `random-only` 선택은 운영 기준으로 금지, 결정론적 baseline + seeded stress test로 강건성 검증
+- Trial 채택 하드게이트: parity(`#56`) + OOS/IS + fold pass rate + OOS MDD p95 동시 통과
+- 하나라도 fail이면 `STOP` (채택 금지), 모두 pass일 때만 `GO` (canary 후 승격)

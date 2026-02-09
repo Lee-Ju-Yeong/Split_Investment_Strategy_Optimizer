@@ -39,16 +39,26 @@
 - [ ] 커버리지 미달 임계값(설정 기반) 시 fail-fast
 - [ ] 모드별 실행 요약(`weekly/hybrid/tier`) 로그에 명시
 
+### 3-5. 후보군 선택 강건성 규칙(결정론 baseline)
+- [ ] `random-only` 후보군 선택 금지(운영/최적화 기준)
+- [ ] 동일 입력일 때 동일 `Top-K`가 재현되도록 점수식/정렬 키/동점 규칙 고정
+- [ ] Entry/Hold hysteresis 규칙 명문화:
+  - Entry: `tier=1` 우선(`empty -> tier<=2 fallback`)
+  - Hold: `tier=1/2` 유지 허용, `tier=3`만 강한 리스크 대응 경로 사용
+- [ ] `Top-K` 구성 로그에 `score`, `rank`, `tie_break_key` 저장(실험 재현용)
+
 ## 4. 테스트 범위
 - [ ] `tests/test_data_handler_tier.py` 확장: mode별 후보군 조회 테스트
 - [ ] `tests/test_strategy.py`(또는 신규): `tier=1 -> <=2 fallback` 분기 테스트
 - [ ] `tests/test_backtest_universe_mode.py` 신규: 동일 날짜 CPU 후보군 정합성
+- [ ] `tests/test_backtest_universe_mode.py` 확장: 동일 입력/시드에서 `Top-K` 결정론 재현성 테스트
 - [ ] GPU smoke: `debug_gpu_single_run` 모드별 1회 실행
 
 ## 5. 완료 기준 (Definition of Done)
 - [ ] `candidate_source_mode=tier`에서 CPU/GPU 후보군 로직 동일
 - [ ] `candidate_source_mode=hybrid_transition`에서 정책이 문서와 일치
 - [ ] `#56` top-k parity가 `tier` 모드에서 mismatch `0건`
+- [ ] 후보군 선택 경로가 결정론 baseline으로 고정(`random-only` 경로 없음)
 - [ ] 운영 문서(`TODO.md`, 이슈 본문, 실행 커맨드) 갱신 완료
 
 ## 6. 제외 범위

@@ -22,9 +22,14 @@
   - `weekly`
   - `hybrid_transition`
   - `tier`
+- [ ] scenario pack parity 검증:
+  - `baseline_deterministic`
+  - `seeded_stress`(권장 50~100 seed)
+  - `jackknife_drop_topN`(상위 기여 1~3종목 제거)
 - [ ] mismatch 리포트 표준화: first mismatch index + cash/positions/value dump
 - [ ] snapshot 메타데이터 저장: 기간, 파라미터, 코드 버전, 생성시각
 - [ ] snapshot 메타데이터에 `candidate_source_mode`, `use_weekly_alpha_gate` 필드 추가
+- [ ] snapshot 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
 - [ ] GPU 미사용 환경 skip 처리 유지
 - [ ] CI/로컬 실행 명령 문서화
 
@@ -34,6 +39,7 @@
 
 ## 5. 완료 기준
 - top-k parity mismatch `0건`만 통과
+- scenario pack(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`) parity mismatch `0건`
 - 스냅샷 갱신 기준/절차가 문서화
 - 실패 시 재현 가능한 리포트 자동 생성
 
