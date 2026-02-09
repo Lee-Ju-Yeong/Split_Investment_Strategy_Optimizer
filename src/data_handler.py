@@ -1,5 +1,3 @@
-# data_handler.py (수정된 최종본)
-
 import pandas as pd
 import warnings
 from mysql.connector import pooling
@@ -254,3 +252,44 @@ class DataHandler:
         if not tier_map:
             return []
         return [code for code in candidate_codes if code in tier_map]
+
+    def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
+        query = """
+            SELECT t.stock_code
+            FROM DailyStockTier t
+            JOIN (
+                SELECT stock_code, MAX(date) AS max_date
+                FROM DailyStockTier
+                WHERE date <= %s
+                GROUP BY stock_code
+            ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
+            WHERE t.tier <= %s
+            ORDER BY t.stock_code
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            df = pd.read_sql(query, conn, params=[as_of_date_str, max_tier])
+        if df.empty:
+            return []
+        return df["stock_code"].tolist()
+
+    def get_candidates_with_tier_fallback(self, date):
+        """
+        Issue #67: Tier 1 우선, 없으면 Tier <= 2로 fallback.
+        Returns:
+            (candidates_list, tier_used_str)
+        """
+        conn = self.get_connection()
+        date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
+        try:
+            tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
+            if tier1_codes:
+                return tier1_codes, "TIER_1"
+
+            tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
+            if tier12_codes:
+                return tier12_codes, "TIER_2_FALLBACK"
+
+            return [], "NO_CANDIDATES"
+        finally:
+            conn.close()

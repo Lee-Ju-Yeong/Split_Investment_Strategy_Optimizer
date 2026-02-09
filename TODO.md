@@ -54,10 +54,10 @@
 
 ### P1 (실행 경로/운영 안정화)
 - [ ] 데이터 플로우 의사결정(2026-02-09): 최종 `A안(KRX PIT + DailyStockTier)`로 전환
-  - [ ] Phase 1(전환기): `C안(Hybrid)` 허용 (`weekly`는 선택 alpha gate로만 사용)
+  - [x] Phase 1(전환기): `C안(Hybrid)` 허용 (`weekly`는 선택 alpha gate로만 사용)
   - [ ] Phase 2(고정): `A안`을 기본값으로 승격, `weekly` 기본 후보군 경로 제거
-  - [ ] 브랜치 규칙: `A안 전환 코드는 main 직접 작업 금지`, 기능 브랜치에서만 진행
-  - [ ] 권장 브랜치명: `feature/issue67-a-universe-tier-phase1`, `feature/issue67-a-universe-tier-phase2`
+  - [x] 브랜치 규칙: `A안 전환 코드는 main 직접 작업 금지`, 기능 브랜치에서만 진행
+  - [x] 권장 브랜치명: `feature/issue67-a-universe-tier-phase1`, `feature/issue67-a-universe-tier-phase2`
 - [ ] pykrx 확장 데이터셋 도입 로드맵 실행 (이슈 #71): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71
   - Phase P0: `MarketCapDaily`, `ShortSellingDaily` 우선 적재 및 PIT 규칙 반영
   - Phase P1: `ForeignOwnershipDaily`, `SectorClassificationHistory` 추가
@@ -68,9 +68,10 @@
     - Preflight: `#67` 모드 고정 + `#56` parity mismatch `0건` + `#68` hard gate 설정 완료
     - Promotion: feature flag canary 통과 + 재현성(seed/기간/모드) 증적 확보 시에만 운영 반영
 - [ ] `DataHandler` PIT 조인 확장 + `tier=1 -> tier<=2` fallback 조회 적용 (이슈 #67): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67
-  - [ ] 후보군 조회 정책 플래그 도입: `weekly | tier | hybrid_transition`
-  - [ ] `tier=1` 우선, 빈 경우 `tier<=2` fallback 규칙을 CPU/GPU 동일 로직으로 고정
-  - [ ] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
+  - [x] 후보군 조회 정책 플래그 도입: `weekly | tier | hybrid_transition`
+  - [x] `tier=1` 우선, 빈 경우 `tier<=2` fallback 규칙을 CPU/GPU 동일 로직으로 고정
+  - [x] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
+  - [x] Phase A parity hardening: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거) 반영
   - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
   - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
   - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
@@ -94,6 +95,7 @@
   - [ ] `robust_selection_enabled` feature flag와 `legacy` rollback 경로 추가
   - [ ] Ablation 매트릭스 고정: `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+BehaviorFeature`
 - [ ] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
+  - [x] `#67` Phase A parity blocker 선반영: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거)
   - [ ] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`debug_gpu_single_run` 기반)
   - [ ] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
   - [ ] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장

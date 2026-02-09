@@ -1,5 +1,3 @@
-# debug_gpu_single_run.py (수정된 최종본)
-
 """
 This script is used to debug the GPU single run.
 It is used to test the GPU single run with the parameters from the config.yaml file.
@@ -137,6 +135,51 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
     print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s")
     return gdf
 
+def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
+    """
+    Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.
+    Performs forward-fill to ensure PIT compliance (latest <= date).
+    """
+    print("⏳ Loading DailyStockTier data to GPU tensor...")
+    start_time = time.time()
+    
+    start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+    end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+    query = f"""
+        SELECT date, stock_code as ticker, tier
+        FROM DailyStockTier
+        WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
+        UNION ALL
+        SELECT t.date, t.stock_code as ticker, t.tier
+        FROM DailyStockTier t
+        JOIN (
+            SELECT stock_code, MAX(date) AS max_date
+            FROM DailyStockTier
+            WHERE date < '{start_date_str}'
+            GROUP BY stock_code
+        ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
+    """
+    sql_engine = create_engine(engine)
+    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
+    
+    if df_pd.empty:
+        print("⚠️ No Tier data found. Returning empty tensor.")
+        return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
+
+    # Pivot to (date, ticker) -> tier
+    # index=date, columns=ticker, values=tier
+    df_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    
+    # Reindex to full trading dates and all tickers
+    # Forward fill to propagate the latest tier
+    df_reindexed = df_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    
+    # Convert to CuPy
+    tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
+    
+    print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
+    return tier_tensor
+
 # -----------------------------------------------------------------------------
 # 3. GPU Backtesting Kernel
 # -----------------------------------------------------------------------------
@@ -148,6 +191,7 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
                          initial_cash_value,
                          exec_params: dict,
                          debug_mode: bool = False,
+                         tier_tensor: cp.ndarray = None # [Issue #67]
                          ):
     """
     GPU-accelerated 백테스팅 커널을 직접 실행합니다.
@@ -165,6 +209,7 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
         max_splits_limit=20,
         execution_params=exec_params,
         debug_mode=debug_mode,
+        tier_tensor=tier_tensor
     )
     
     print("🎉 GPU backtesting kernel finished.")
@@ -217,8 +262,17 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     print(f"  - Tickers for period: {len(all_tickers)}")
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
+    # [Issue #67] Preload Tier Tensor
+    tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+
     # 3. 백테스팅 커널 실행
     start_time_kernel = time.time()
+    
+    # exec_params에 모드 정보 추가
+    execution_params = execution_params.copy()
+    execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'weekly')
+    execution_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
+    
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
         all_data_gpu, 
@@ -229,6 +283,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         initial_cash,
         execution_params,
         debug_mode=debug_mode,
+        tier_tensor=tier_tensor
     )
     end_time_kernel = time.time()
     print(f"  - GPU Kernel Execution Time: {end_time_kernel - start_time_kernel:.2f}s")

@@ -3,6 +3,15 @@
 - 작성일: 2026-02-09
 - 목적: 단일 파라미터 검증을 넘어, 최적화 상위 후보(top-k) 전수 parity 검증으로 회귀 리스크 차단
 
+## 0. 진행 현황 (2026-02-09)
+- 선행 완료(`#67` Phase A):
+  - GPU 후보 기준일 `signal_date(T-1)` 정렬
+  - ATR 조회 `as-of(<=)` 정렬
+  - Tier preload를 `start 이전 latest 1행 + 기간 데이터`로 보강(30일 가정 제거)
+- 현재 상태:
+  - parity 하네스 본체(`top-k`, scenario pack, mismatch report)는 아직 미구현
+  - 즉, `#56`은 선행 블로커 해소 완료, 본작업은 다음 단계
+
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙
 - 현재 단일 실행 비교만으로는 대규모 조합의 edge case drift를 놓칠 수 있음
