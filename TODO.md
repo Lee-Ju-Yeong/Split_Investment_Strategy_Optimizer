@@ -24,11 +24,30 @@
   - [x] Phase 2 코드 반영: `ohlcv_batch` history 소스 + 수집 기간 교집합 적용
 - [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`, `TickerUniverseSnapshot`, `TickerUniverseHistory`)
 - [ ] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
-- [ ] `DailyStockPrice` 전기간 재적재(진행중): KRX raw(`adjusted=False`)를 SSOT로 재정렬
+- [ ] `InvestorTradingTrend` 전기간 백필(1995~현재) 재실행
+  - 실행 정책: `TickerUniverseHistory`(상폐 포함) 기준 유니버스 사용, 기존 적재 구간의 최소일 이전만 API 호출
+  - 실행 중(2026-02-09): `python -m src.pipeline_batch --mode backfill --start-date 19950101 --end-date <today> --skip-financial --skip-tier --log-interval 20`
+  - 로그: `logs/investor_backfill_1995_*.log`
+- [x] `DailyStockPrice` 전기간 재적재: KRX raw(`adjusted=False`)를 SSOT로 재정렬
   - 실행 커맨드: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
   - 운영 원칙: `resume=True` 유지(중단 후 동일 명령 재실행), `allow_legacy_fallback=False` 유지
-  - 완료 후 필수: `docs/database/backfill_validation_runbook.md`의 SQL/커버리지 점검 실행
+  - 검증 결과(2026-02-08): `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
 - [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가(보류): raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
+- [x] `FinancialData`/`InvestorTradingTrend` 0값 의미 정리(수집기 정책 반영)
+  - `FinancialData`: `per<=0`, `pbr<=0`은 `NULL`로 정규화(기존 누적 데이터 포함)
+  - `InvestorTradingTrend`: 컬럼 미탐지/미관측은 `NULL`, all-zero 무의미 row는 저장 제외
+- [x] `CalculatedIndicators` 재계산 완료 및 검증 통과
+  - 기준: `docs/database/backfill_validation_runbook.md`의 6장(전체/구간 기준, 롤백 기준) 준수
+- [x] `DailyStockTier` 재계산 완료 및 커버리지 검증
+  - 기준: runbook 3장 후속 순서 + 9장(`flow_impact_pct`, `churn_pct`) 게이트 점검
+  - 적용 구간: 운영 기준 `2024-01-01 ~ 2026-02-08` (`rows_total=1,329,758`, `invalid_tier_rows=0`)
+- [x] P0 Exit Gate 증적 저장(SQL 통과 스냅샷)
+  - 필수 증적: `rows_total`, `tickers_total`, `min_date/max_date`, `duplicate_like_rows=0`, `future_rows=0`
+  - 저장 위치: 운영 이슈 코멘트 또는 `todos/` 실행 로그 섹션에 명령/결과 함께 기록
+  - 최신 증적(2026-02-08):
+    - `DailyStockPrice`: `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
+    - `DailyStockTier`: `rows_total=1,329,758`, `tickers_total=2,721`, `min_date=2024-01-02`, `max_date=2026-02-06`, `invalid_tier_rows=0`
+    - `CalculatedIndicators`: `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`
 
 ### P1 (실행 경로/운영 안정화)
 - [ ] pykrx 확장 데이터셋 도입 로드맵 실행 (이슈 #71): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71

@@ -6,6 +6,8 @@ Supports both backfill and daily incremental modes.
 """
 
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import time
 
 import numpy as np
@@ -15,14 +17,85 @@ import pandas as pd
 API_CALL_DELAY = 0.3
 DEFAULT_START_DATE_STR = "19800101"
 DEFAULT_LOG_INTERVAL = 50
+DEFAULT_WORKERS = 4
+DEFAULT_WRITE_BATCH_SIZE = 20000
 
 
-def get_financial_ticker_universe(conn, end_date=None):
+def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
     """
-    Returns distinct stock codes from WeeklyFilteredStocks.
-    Falls back to CompanyInfo when WeeklyFilteredStocks is empty.
+    Resolves ticker universe consistently by mode.
+    - backfill: TickerUniverseHistory
+    - daily: TickerUniverseSnapshot(as-of end_date) -> active history(as-of) fallback
+    - legacy fallback: WeeklyFilteredStocks -> CompanyInfo
     """
     with conn.cursor() as cur:
+        if mode == "backfill":
+            if end_date is None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    ORDER BY listed_date, stock_code
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    WHERE listed_date <= %s
+                    ORDER BY listed_date, stock_code
+                    """,
+                    (end_date,),
+                )
+            rows = cur.fetchall()
+            if rows:
+                return [row[0] for row in rows]
+        else:
+            if end_date is None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date = (
+                        SELECT MAX(snapshot_date) FROM TickerUniverseSnapshot
+                    )
+                    ORDER BY stock_code
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date = (
+                        SELECT MAX(snapshot_date)
+                        FROM TickerUniverseSnapshot
+                        WHERE snapshot_date <= %s
+                    )
+                    ORDER BY stock_code
+                    """,
+                    (end_date,),
+                )
+            rows = cur.fetchall()
+            if rows:
+                return [row[0] for row in rows]
+
+            if end_date is not None:
+                cur.execute(
+                    """
+                    SELECT stock_code
+                    FROM TickerUniverseHistory
+                    WHERE listed_date <= %s
+                      AND COALESCE(delisted_date, last_seen_date) >= %s
+                    ORDER BY stock_code
+                    """,
+                    (end_date, end_date),
+                )
+                rows = cur.fetchall()
+                if rows:
+                    return [row[0] for row in rows]
+
         if end_date is None:
             cur.execute("SELECT DISTINCT stock_code FROM WeeklyFilteredStocks")
         else:
@@ -42,16 +115,28 @@ def get_financial_ticker_universe(conn, end_date=None):
         return [row[0] for row in cur.fetchall()]
 
 
-def get_latest_financial_date_for_ticker(conn, ticker_code):
+def get_latest_financial_dates(conn, ticker_codes, chunk_size=1000):
+    if not ticker_codes:
+        return {}
+
+    latest_dates = {}
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT MAX(date) FROM FinancialData WHERE stock_code = %s",
-            (ticker_code,),
-        )
-        result = cur.fetchone()
-    if result and result[0]:
-        return pd.to_datetime(result[0]).date()
-    return None
+        for start_index in range(0, len(ticker_codes), chunk_size):
+            chunk = ticker_codes[start_index : start_index + chunk_size]
+            placeholders = ", ".join(["%s"] * len(chunk))
+            cur.execute(
+                f"""
+                SELECT stock_code, MAX(date)
+                FROM FinancialData
+                WHERE stock_code IN ({placeholders})
+                GROUP BY stock_code
+                """,
+                chunk,
+            )
+            for stock_code, latest_date in cur.fetchall():
+                if latest_date:
+                    latest_dates[stock_code] = pd.to_datetime(latest_date).date()
+    return latest_dates
 
 
 def _resolve_column(df, candidates):
@@ -90,6 +175,10 @@ def normalize_fundamental_df(df_fundamental, ticker_code):
     output["dps"] = df[dps_col] if dps_col else np.nan
     output["div_yield"] = df[div_col] if div_col else np.nan
 
+    numeric_cols = ["per", "pbr", "eps", "bps", "dps", "div_yield"]
+    for col in numeric_cols:
+        output[col] = pd.to_numeric(output[col], errors="coerce")
+
     eps_numeric = pd.to_numeric(output["eps"], errors="coerce")
     bps_numeric = pd.to_numeric(output["bps"], errors="coerce")
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -99,6 +188,13 @@ def normalize_fundamental_df(df_fundamental, ticker_code):
             np.nan,
         )
     output["roe"] = roe
+    output.replace([np.inf, -np.inf], np.nan, inplace=True)
+    value_cols = ["per", "pbr", "eps", "bps", "dps", "div_yield", "roe"]
+    all_zero_mask = output[value_cols].fillna(0).eq(0).all(axis=1)
+    output.loc[all_zero_mask, value_cols] = np.nan
+    output = output.loc[output[value_cols].notna().any(axis=1)].copy()
+    if output.empty:
+        return pd.DataFrame()
     output["source"] = "pykrx"
     output.replace({np.nan: None}, inplace=True)
     return output
@@ -131,21 +227,6 @@ def upsert_financial_rows(conn, rows):
     return affected
 
 
-def _resolve_start_date(conn, ticker_code, mode, start_date_str, end_date):
-    if start_date_str:
-        return datetime.strptime(start_date_str, "%Y%m%d").date()
-
-    if mode == "backfill":
-        return datetime.strptime(DEFAULT_START_DATE_STR, "%Y%m%d").date()
-
-    latest = get_latest_financial_date_for_ticker(conn, ticker_code)
-    if latest is None:
-        return datetime.strptime(DEFAULT_START_DATE_STR, "%Y%m%d").date()
-    if latest >= end_date:
-        return None
-    return latest + timedelta(days=1)
-
-
 def _format_duration(seconds):
     safe_seconds = max(int(seconds), 0)
     return str(timedelta(seconds=safe_seconds))
@@ -159,6 +240,90 @@ def _estimate_eta(elapsed_seconds, done_count, total_count):
     return _format_duration(per_item * remaining)
 
 
+def _resolve_effective_starts(conn, ticker_codes, mode, start_date_str, end_date):
+    effective_starts = {}
+    skipped = 0
+
+    if start_date_str:
+        start_date = datetime.strptime(start_date_str, "%Y%m%d").date()
+        for ticker_code in ticker_codes:
+            if start_date > end_date:
+                skipped += 1
+                continue
+            effective_starts[ticker_code] = start_date
+        return effective_starts, skipped
+
+    if mode == "backfill":
+        start_date = datetime.strptime(DEFAULT_START_DATE_STR, "%Y%m%d").date()
+        for ticker_code in ticker_codes:
+            if start_date > end_date:
+                skipped += 1
+                continue
+            effective_starts[ticker_code] = start_date
+        return effective_starts, skipped
+
+    latest_by_ticker = get_latest_financial_dates(conn, ticker_codes)
+    min_start_date = datetime.strptime(DEFAULT_START_DATE_STR, "%Y%m%d").date()
+    for ticker_code in ticker_codes:
+        latest = latest_by_ticker.get(ticker_code)
+        if latest is None:
+            effective_starts[ticker_code] = min_start_date
+            continue
+        if latest >= end_date:
+            skipped += 1
+            continue
+        effective_starts[ticker_code] = latest + timedelta(days=1)
+    return effective_starts, skipped
+
+
+def _build_rate_limiter(api_call_delay):
+    if api_call_delay <= 0:
+        return lambda: None
+
+    lock = threading.Lock()
+    next_allowed = [0.0]
+
+    def _wait_slot():
+        wait_seconds = 0.0
+        with lock:
+            now = time.monotonic()
+            if now < next_allowed[0]:
+                wait_seconds = next_allowed[0] - now
+            next_allowed[0] = max(now, next_allowed[0]) + api_call_delay
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+    return _wait_slot
+
+
+def _fetch_and_normalize_fundamental(ticker_code, effective_start, end_date_str, wait_slot):
+    from pykrx import stock
+
+    wait_slot()
+    df_fundamental = stock.get_market_fundamental(
+        effective_start.strftime("%Y%m%d"),
+        end_date_str,
+        ticker_code,
+    )
+    normalized = normalize_fundamental_df(df_fundamental, ticker_code)
+    if normalized.empty:
+        return []
+    return normalized[
+        [
+            "stock_code",
+            "date",
+            "per",
+            "pbr",
+            "eps",
+            "bps",
+            "dps",
+            "div_yield",
+            "roe",
+            "source",
+        ]
+    ].to_records(index=False).tolist()
+
+
 def run_financial_batch(
     conn,
     mode="daily",
@@ -166,6 +331,8 @@ def run_financial_batch(
     end_date_str=None,
     ticker_codes=None,
     api_call_delay=API_CALL_DELAY,
+    workers=DEFAULT_WORKERS,
+    write_batch_size=DEFAULT_WRITE_BATCH_SIZE,
     log_interval=DEFAULT_LOG_INTERVAL,
 ):
     """
@@ -180,7 +347,11 @@ def run_financial_batch(
     end_date = datetime.strptime(end_date_str, "%Y%m%d").date()
 
     if ticker_codes is None:
-        ticker_codes = get_financial_ticker_universe(conn, end_date=end_date)
+        ticker_codes = get_financial_ticker_universe(
+            conn,
+            end_date=end_date,
+            mode=mode,
+        )
 
     summary = {
         "tickers_total": len(ticker_codes),
@@ -193,76 +364,87 @@ def run_financial_batch(
     if not ticker_codes:
         return summary
 
+    effective_starts, skipped_count = _resolve_effective_starts(
+        conn=conn,
+        ticker_codes=ticker_codes,
+        mode=mode,
+        start_date_str=start_date_str,
+        end_date=end_date,
+    )
+    summary["tickers_skipped"] = skipped_count
+    target_items = list(effective_starts.items())
+    if not target_items:
+        return summary
+
     started_at = time.time()
     total_tickers = len(ticker_codes)
     print(
         f"[financial_collector] start mode={mode}, "
-        f"tickers={total_tickers}, end_date={end_date_str}"
+        f"tickers={total_tickers}, target_tickers={len(target_items)}, "
+        f"workers={max(int(workers), 1)}, write_batch_size={max(int(write_batch_size), 1)}, "
+        f"end_date={end_date_str}"
     )
 
-    from pykrx import stock
+    row_buffer = []
+    completed_count = summary["tickers_skipped"]
+    wait_slot = _build_rate_limiter(max(float(api_call_delay), 0.0))
+    worker_count = max(int(workers), 1)
+    batch_size = max(int(write_batch_size), 1)
 
-    for index, ticker_code in enumerate(ticker_codes, start=1):
-        try:
-            effective_start = _resolve_start_date(
-                conn=conn,
-                ticker_code=ticker_code,
-                mode=mode,
-                start_date_str=start_date_str,
-                end_date=end_date,
-            )
-            if effective_start is None or effective_start > end_date:
-                summary["tickers_skipped"] += 1
-                continue
+    def _flush_buffer():
+        nonlocal row_buffer
+        if not row_buffer:
+            return
+        saved = upsert_financial_rows(conn, row_buffer)
+        summary["rows_saved"] += max(saved, 0)
+        row_buffer = []
 
-            time.sleep(api_call_delay)
-            df_fundamental = stock.get_market_fundamental(
-                effective_start.strftime("%Y%m%d"),
-                end_date_str,
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                _fetch_and_normalize_fundamental,
                 ticker_code,
-            )
-            normalized = normalize_fundamental_df(df_fundamental, ticker_code)
-            if normalized.empty:
-                summary["tickers_processed"] += 1
-                continue
+                effective_start,
+                end_date_str,
+                wait_slot,
+            ): ticker_code
+            for ticker_code, effective_start in target_items
+        }
 
-            rows = normalized[
-                [
-                    "stock_code",
-                    "date",
-                    "per",
-                    "pbr",
-                    "eps",
-                    "bps",
-                    "dps",
-                    "div_yield",
-                    "roe",
-                    "source",
-                ]
-            ].to_records(index=False).tolist()
-            saved = upsert_financial_rows(conn, rows)
-            summary["rows_saved"] += max(saved, 0)
-            summary["tickers_processed"] += 1
-        except Exception:
-            summary["errors"] += 1
-            conn.rollback()
-        finally:
-            if (
-                log_interval
-                and log_interval > 0
-                and (index % log_interval == 0 or index == total_tickers)
-            ):
-                elapsed = time.time() - started_at
-                print(
-                    f"[financial_collector] progress {index}/{total_tickers} "
-                    f"({index / total_tickers:.1%}) "
-                    f"processed={summary['tickers_processed']} "
-                    f"skipped={summary['tickers_skipped']} "
-                    f"rows_saved={summary['rows_saved']} "
-                    f"errors={summary['errors']} "
-                    f"elapsed={_format_duration(elapsed)} "
-                    f"eta={_estimate_eta(elapsed, index, total_tickers)}"
-                )
+        for future in as_completed(future_map):
+            try:
+                rows = future.result()
+                if rows:
+                    row_buffer.extend(rows)
+                    if len(row_buffer) >= batch_size:
+                        _flush_buffer()
+                summary["tickers_processed"] += 1
+            except Exception:
+                summary["errors"] += 1
+            finally:
+                completed_count += 1
+                if (
+                    log_interval
+                    and log_interval > 0
+                    and (completed_count % log_interval == 0 or completed_count == total_tickers)
+                ):
+                    elapsed = time.time() - started_at
+                    print(
+                        f"[financial_collector] progress {completed_count}/{total_tickers} "
+                        f"({completed_count / total_tickers:.1%}) "
+                        f"processed={summary['tickers_processed']} "
+                        f"skipped={summary['tickers_skipped']} "
+                        f"rows_saved={summary['rows_saved']} "
+                        f"errors={summary['errors']} "
+                        f"elapsed={_format_duration(elapsed)} "
+                        f"eta={_estimate_eta(elapsed, completed_count, total_tickers)}"
+                    )
+
+    try:
+        _flush_buffer()
+    except Exception:
+        summary["errors"] += 1
+        conn.rollback()
 
     total_elapsed = time.time() - started_at
     print(

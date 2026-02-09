@@ -256,14 +256,48 @@ runner.run(mode="daily")
   - v1 확정안: `lookback=20`, `financial_lag=45`, `danger=300,000,000`, `prime=1,000,000,000`
   - 수급 최소 규칙: `tier2`에서 `flow5 < -500,000,000`일 때만 `tier3` 강등 (결측 시 미적용)
   - 결과 기록: `docs/database/backfill_validation_runbook.md`의 "8) Investor 포함 read-only 검증 결과 (2026-02-08)"
-- [ ] 후속 TODO(진행중): `DailyStockPrice` 전기간 재적재
+- [x] 후속 TODO: `DailyStockPrice` 전기간 재적재
   - 목적: KRX raw(`adjusted=False`) 단일 SSOT로 가격 정합성 고정
   - 실행: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
   - 운영 원칙: `resume=True`로 중단 재개, `--allow-legacy-fallback` 미사용 유지
-  - 완료 기준: `docs/database/backfill_validation_runbook.md`의 사후 검증(SQL/커버리지/중복) 통과
+  - 실행 결과(2026-02-08): `processed=5216`, `rows_saved=14,750,953`, `errors=0`, `elapsed=10:17:35`, `legacy_fallback_used=0`
+  - 사후 검증(2026-02-08): `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
 - [ ] 후속 TODO(보류): `adj_close`/`adj_ratio` 파생 계산 배치
   - 배경: `DailyStockPrice` 스키마 확장 후 raw 기준으로 보정값을 채우는 전용 배치가 필요
   - 정책: 이번 변경에서는 스키마/수집 기본값만 반영하고, 파생 계산 배치는 별도 이슈로 분리
+- [x] `CalculatedIndicators` 전체 재계산 및 검증 완료
+  - 실행: runbook 6장 전체 재계산 커맨드(`TRUNCATE` 후 `calculate_and_store_indicators_for_all(use_gpu=True)`)
+  - 결과(2026-02-08): `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`
+  - 실행 시간: `1705.33s` (약 `28m 25s`)
+- [x] `DailyStockTier` 재계산 및 검증 완료(운영 구간 `2024-01-01~2026-02-08`)
+  - 실행: `python -m src.pipeline_batch --mode backfill --start-date 20240101 --end-date 20260208 --skip-financial --skip-investor`
+  - 결과(2026-02-08): `rows_calculated=1,327,495`, `rows_saved=2,654,990`, `tier_v1_write_enabled=False`
+  - 사후 검증: `rows_total=1,329,758`, `tickers_total=2,721`, `min_date=2024-01-02`, `max_date=2026-02-06`, `invalid_tier_rows=0`
+- [x] Tier 적재 병목/락 이슈 조치
+  - 코드 수정: `src/daily_stock_tier_batch.py`의 전량 리스트화 업서트를 청크 스트리밍 업서트로 전환
+  - 테스트 추가: `tests/test_daily_stock_tier_batch.py`에 청크 업서트 동작 검증 케이스 추가
+  - 운영 이슈: 이전 중단 트랜잭션 `ROLLING BACK`으로 인한 `1205 Lock wait timeout` 재현/해소 확인
+- [x] 수집기 정규화 정책 보강(2026-02-09)
+  - `src/financial_collector.py`: `PER/PBR` 비양수 값은 보존, `per~roe` 전 팩터 all-zero row만 비정보 행으로 제외
+  - `src/investor_trading_collector.py`: 컬럼 미탐지/미관측 `NULL` 유지, all-zero row 저장 제외
+  - 단위테스트: `tests/test_collector_normalization.py` 신규 케이스 추가/통과
+- [x] 수집기 유니버스 소스 일관화(2026-02-09)
+  - 적용 대상: `financial_collector`, `investor_trading_collector`, `daily_stock_tier_batch`
+  - 정책: `backfill -> TickerUniverseHistory`, `daily -> TickerUniverseSnapshot(as-of)` 우선, 미존재 시 active history as-of fallback
+  - 기존 `WeeklyFilteredStocks/CompanyInfo`는 최후 fallback으로만 유지
+  - 검증(운영 DB): `daily=2,773`, `backfill=5,216` (세 수집기 동일)
+- [x] 수집기 처리량 개선(2026-02-09)
+  - `financial_collector`: 병렬 fetch/normalize + batch upsert + 티커별 MAX(date) preload
+  - `investor_trading_collector`: 병렬 fetch/normalize + batch upsert + 티커별 MIN/MAX(date) preload
+  - `pipeline_batch` 옵션 추가:
+    - `--financial-workers`, `--financial-write-batch-size`
+    - `--investor-workers`, `--investor-write-batch-size`
+  - 단위테스트: `tests/test_pipeline_batch.py` 갱신 및 통과
+- [ ] `FinancialData`/`InvestorTradingTrend` 1995~ 전기간 재백필(개선 로직 적용) 실행
+  - 실행(레포 루트에서):
+    - `PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -m src.pipeline_batch --mode backfill --start-date 19950101 --end-date 20260209 --skip-tier --log-interval 20 --financial-workers 4 --financial-write-batch-size 20000 --investor-workers 4 --investor-write-batch-size 20000`
+  - 유니버스: `TickerUniverseHistory` (`tickers=5,216`)
+  - 비고: 이전 `per=0/pbr=0 -> NULL` 수동 정리는 개선 백필 결과로 자연 복원(업서트) 예정
 
 ---
 

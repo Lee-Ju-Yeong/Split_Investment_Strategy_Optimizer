@@ -78,6 +78,8 @@ class TestPipelineBatch(unittest.TestCase):
             mode="daily",
             start_date_str=None,
             end_date_str="20260207",
+            workers=4,
+            write_batch_size=20000,
             log_interval=25,
         )
         mock_run_investor.assert_called_once_with(
@@ -85,6 +87,8 @@ class TestPipelineBatch(unittest.TestCase):
             mode="daily",
             start_date_str=None,
             end_date_str="20260207",
+            workers=4,
+            write_batch_size=20000,
             log_interval=25,
         )
         mock_run_tier.assert_called_once_with(
@@ -94,6 +98,8 @@ class TestPipelineBatch(unittest.TestCase):
             end_date_str="20260207",
             lookback_days=30,
             financial_lag_days=45,
+            enable_investor_v1_write=False,
+            investor_flow5_threshold=-500_000_000,
         )
 
 

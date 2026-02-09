@@ -28,6 +28,10 @@ def run_pipeline_batch(
     run_financial=True,
     run_investor=True,
     run_tier=True,
+    financial_workers=4,
+    financial_write_batch_size=20000,
+    investor_workers=4,
+    investor_write_batch_size=20000,
     universe_markets=None,
     universe_step_days=7,
     universe_workers=1,
@@ -70,6 +74,8 @@ def run_pipeline_batch(
             mode=mode,
             start_date_str=start_date_str,
             end_date_str=end_date_str,
+            workers=financial_workers,
+            write_batch_size=financial_write_batch_size,
             log_interval=log_interval,
         )
 
@@ -79,6 +85,8 @@ def run_pipeline_batch(
             mode=mode,
             start_date_str=start_date_str,
             end_date_str=end_date_str,
+            workers=investor_workers,
+            write_batch_size=investor_write_batch_size,
             log_interval=log_interval,
         )
 
@@ -156,6 +164,30 @@ def _build_arg_parser():
         help="Force recollect universe snapshot dates even when already stored.",
     )
     parser.add_argument(
+        "--financial-workers",
+        type=int,
+        default=4,
+        help="Worker count for FinancialData API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--financial-write-batch-size",
+        type=int,
+        default=20000,
+        help="Row batch size for FinancialData upsert commits.",
+    )
+    parser.add_argument(
+        "--investor-workers",
+        type=int,
+        default=4,
+        help="Worker count for InvestorTradingTrend API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--investor-write-batch-size",
+        type=int,
+        default=20000,
+        help="Row batch size for InvestorTradingTrend upsert commits.",
+    )
+    parser.add_argument(
         "--skip-financial",
         action="store_true",
         help="Skip FinancialData collection.",
@@ -221,6 +253,10 @@ def main():
             f"run_financial={not args.skip_financial}, "
             f"run_investor={not args.skip_investor}, "
             f"run_tier={not args.skip_tier}, "
+            f"financial_workers={args.financial_workers}, "
+            f"financial_write_batch_size={args.financial_write_batch_size}, "
+            f"investor_workers={args.investor_workers}, "
+            f"investor_write_batch_size={args.investor_write_batch_size}, "
             f"tier_v1_write_enabled={args.enable_tier_v1_write}, "
             f"log_interval={args.log_interval}"
         )
@@ -234,6 +270,10 @@ def main():
             run_financial=not args.skip_financial,
             run_investor=not args.skip_investor,
             run_tier=not args.skip_tier,
+            financial_workers=max(int(args.financial_workers), 1),
+            financial_write_batch_size=max(int(args.financial_write_batch_size), 1),
+            investor_workers=max(int(args.investor_workers), 1),
+            investor_write_batch_size=max(int(args.investor_write_batch_size), 1),
             universe_markets=[
                 market.strip().upper()
                 for market in args.universe_markets.split(",")
