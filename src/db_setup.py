@@ -190,6 +190,22 @@ def create_tables(conn):
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
     ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS CorporateMajorChanges (
+        stock_code VARCHAR(20),
+        change_date DATE,
+        prev_company_name VARCHAR(255),
+        new_company_name VARCHAR(255),
+        prev_sector VARCHAR(255),
+        new_sector VARCHAR(255),
+        prev_par_value DECIMAL(20, 5),
+        new_par_value DECIMAL(20, 5),
+        prev_ceo TEXT,
+        new_ceo TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, change_date)
+    )
+    ''')
     ensure_index('FinancialData', 'idx_financial_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')

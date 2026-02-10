@@ -13,6 +13,8 @@ import time
 import numpy as np
 import pandas as pd
 
+# Suppress FutureWarning: Downcasting behavior in `replace` is deprecated
+pd.set_option('future.no_silent_downcasting', True)
 
 API_CALL_DELAY = 0.3
 DEFAULT_START_DATE_STR = "19800101"
