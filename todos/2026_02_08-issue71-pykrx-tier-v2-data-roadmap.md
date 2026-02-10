@@ -71,6 +71,9 @@
 - 재무/분류 데이터는 lag 반영 후 신호 계산
 - 결측 시 가중치 재정규화, 핵심 신호 다중 결측 시 `Tier3` 강등
 - 배치 실패는 부분성공 플래그 + 최근 N일 재수집으로 복구
+- pykrx source health-check preflight를 수집 배치 공통 가드로 고정
+  - 최소 체크: `get_market_ticker_list(<date>) > 0`, 샘플 `get_stock_major_changes(<largecap>)` 응답 확인
+  - fail 조건: 전량 empty 응답 패턴 감지 시 해당 배치 `blocked/skip` 처리(무의미한 full run 방지)
 - Optuna는 lookahead 방지 규칙을 동일 적용하고, 학습/검증 구간 분리(WFO fold 단위)로만 실행
 - Optuna 결과 운영 반영은 feature flag로 점진 전환하고, 이상 징후 시 legacy 설정으로 즉시 롤백
 
@@ -86,6 +89,7 @@
 - [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
 - [ ] Tier v2 read-only 실험 스크립트 추가
 - [ ] PIT/왜곡 방지 검증 항목 테스트화
+- [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
 - [ ] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정)
 - [ ] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가
 - [ ] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`)

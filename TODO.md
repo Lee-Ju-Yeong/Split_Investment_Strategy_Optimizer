@@ -19,23 +19,35 @@
 ### P0 (신뢰도/데이터 정합성 선행)
 - [x] Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가 (이슈 #64): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64
 - [x] `FinancialData`/`InvestorTradingTrend`/`DailyStockTier` 스키마 및 인덱스 추가 (이슈 #65): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65
-- [ ] 재무·수급 수집기 분리 + Tier 사전계산 배치(백필/일배치) 도입 (이슈 #66): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66
+- [x] 재무·수급 수집기 분리 + Tier 사전계산 배치(백필/일배치) 도입 (이슈 #66): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66
   - [x] InvestorTradingTrend 포함 Tier v1 read-only 튜닝 및 임계값 확정안 도출
 - [x] 상폐 포함 `TickerUniverseSnapshot`/`TickerUniverseHistory` 구축 (이슈 #70): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/70
   - [x] Phase 1 코드 반영: 스키마/인덱스 + `ticker_universe_batch.py` + `pipeline_batch --run-universe` 옵션 추가
   - [x] 운영 검증: 스냅샷/히스토리 백필 1회 실행 및 샘플 상폐 종목 검증
   - [x] Phase 2 코드 반영: `ohlcv_batch` history 소스 + 수집 기간 교집합 적용
-- [ ] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`, `TickerUniverseSnapshot`, `TickerUniverseHistory`)
-- [ ] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
-- [ ] `InvestorTradingTrend` 전기간 백필(1995~현재) 재실행
+- [x] 운영 DB 스키마 반영 실행 (`create_tables`) 및 테이블/인덱스 검증 (`FinancialData`, `InvestorTradingTrend`, `DailyStockTier`, `TickerUniverseSnapshot`, `TickerUniverseHistory`)
+- [x] 초기 1회 백필 실행 (`python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>`) 후 일배치 전환
+- [x] `InvestorTradingTrend` 전기간 백필(1995~현재) 재실행
   - 실행 정책: `TickerUniverseHistory`(상폐 포함) 기준 유니버스 사용, 기존 적재 구간의 최소일 이전만 API 호출
   - 실행 중(2026-02-09): `python -m src.pipeline_batch --mode backfill --start-date 19950101 --end-date <today> --skip-financial --skip-tier --log-interval 20`
   - 로그: `logs/investor_backfill_1995_*.log`
+  - 결과(2026-02-10): 완료 (processed=5216, rows_saved=9,261,970)
 - [x] `DailyStockPrice` 전기간 재적재: KRX raw(`adjusted=False`)를 SSOT로 재정렬
   - 실행 커맨드: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
   - 운영 원칙: `resume=True` 유지(중단 후 동일 명령 재실행), `allow_legacy_fallback=False` 유지
   - 검증 결과(2026-02-08): `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
-- [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가(보류): raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
+- [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가: raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
+  - [x] Step 1: `CorporateMajorChanges` 스키마 추가 및 `DailyStockPrice` 컬럼 검증
+  - [x] Step 2: `corporate_event_collector.py` 구현 및 백필 준비
+  - [x] Step 2-1: `corporate_event_collector.py` 관측성/동시성 보강
+    - fetch 결과를 `fetch_errors | empty_results | nonempty_results | normalize_empty`로 분리 계측
+    - write buffer flush 경로에서 중첩 lock 제거(잠재 deadlock 리스크 완화)
+  - [ ] Step 2-2: pykrx 원천 응답 정상화 확인(운영 블로커)
+    - 2026-02-10 full run: `processed=5216`, `saved_rows=0`, `fetch_errors=0`, `empty=5216`
+    - 상태 해석: 수집기 오류보다 `pykrx` major-changes endpoint 전량 empty 응답 가능성이 높음
+    - 운영 가드: preflight health-check(`ticker_count`, 샘플 major_changes) fail 시 배치 skip/blocked 처리
+  - [x] Step 3: `ohlcv_adjusted_updater.py` 구현 및 테스트(5종) 통과
+  - [ ] Step 4: 수정 주가 기반 `CalculatedIndicators` 전체 재계산 (보류/대기)
 - [x] `FinancialData`/`InvestorTradingTrend` 0값 의미 정리(수집기 정책 반영)
   - `FinancialData`: `per<=0`, `pbr<=0`은 `NULL`로 정규화(기존 누적 데이터 포함)
   - `InvestorTradingTrend`: 컬럼 미탐지/미관측은 `NULL`, all-zero 무의미 row는 저장 제외
@@ -47,10 +59,13 @@
 - [x] P0 Exit Gate 증적 저장(SQL 통과 스냅샷)
   - 필수 증적: `rows_total`, `tickers_total`, `min_date/max_date`, `duplicate_like_rows=0`, `future_rows=0`
   - 저장 위치: 운영 이슈 코멘트 또는 `todos/` 실행 로그 섹션에 명령/결과 함께 기록
-  - 최신 증적(2026-02-08):
-    - `DailyStockPrice`: `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
-    - `DailyStockTier`: `rows_total=1,329,758`, `tickers_total=2,721`, `min_date=2024-01-02`, `max_date=2026-02-06`, `invalid_tier_rows=0`
-    - `CalculatedIndicators`: `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`
+  - 최신 증적(2026-02-10):
+    - `DailyStockPrice`: `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`
+    - `FinancialData`: `rows_total=11,792,617`, `tickers_total=3,785`, `min_date=1995-05-02`, `max_date=2026-02-06`
+    - `InvestorTradingTrend`: `rows_total=11,065,013`, `tickers_total=4,397`, `min_date=1999-01-04`, `max_date=2026-02-06`
+    - `DailyStockTier`: `rows_total=1,329,758`, `tickers_total=2,721`, `min_date=2024-01-02`, `max_date=2026-02-06`
+    - `CalculatedIndicators`: `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`
+    - `duplicates=0`, `future_rows=0` (All tables ok)
 
 ### P1 (실행 경로/운영 안정화)
 - [ ] 데이터 플로우 의사결정(2026-02-09): 최종 `A안(KRX PIT + DailyStockTier)`로 전환
