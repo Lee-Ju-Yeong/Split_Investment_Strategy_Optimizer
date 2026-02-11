@@ -13,6 +13,8 @@ import time
 import numpy as np
 import pandas as pd
 
+# Suppress FutureWarning: Downcasting behavior in `replace` is deprecated
+pd.set_option('future.no_silent_downcasting', True)
 
 API_CALL_DELAY = 0.3
 DEFAULT_START_DATE_STR = "19800101"
@@ -412,6 +414,7 @@ def run_financial_batch(
         }
 
         for future in as_completed(future_map):
+            ticker_code = future_map[future]
             try:
                 rows = future.result()
                 if rows:
@@ -419,7 +422,8 @@ def run_financial_batch(
                     if len(row_buffer) >= batch_size:
                         _flush_buffer()
                 summary["tickers_processed"] += 1
-            except Exception:
+            except Exception as e:
+                print(f"[financial_collector] Error processing {ticker_code}: {e}")
                 summary["errors"] += 1
             finally:
                 completed_count += 1

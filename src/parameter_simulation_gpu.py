@@ -27,7 +27,6 @@ db_config = config["database"]
 backtest_settings = config["backtest_settings"]
 strategy_params = config["strategy_params"]
 execution_params['cooldown_period_days'] = strategy_params.get('cooldown_period_days', 5)
-strategy_params = config["strategy_params"]
 db_pass_encoded = urllib.parse.quote_plus(db_config["password"])
 db_connection_str = f"mysql+pymysql://{db_config['user']}:{db_pass_encoded}@{db_config['host']}/{db_config['database']}"
 
@@ -58,8 +57,6 @@ param_combinations = cp.vstack([item.flatten() for item in grid]).T
 num_combinations = param_combinations.shape[0]
 
 print(f"✅ Dynamically generated {num_combinations} parameter combinations from config.yaml.")
-# [추가] 변경사항 확인을 위한 검증용 print문
-print(f"✅ [VERIFICATION] Newly compiled code is running. Num combinations: {num_combinations}")
 
 
 # 2. GPU Data Pre-loader
@@ -100,8 +97,53 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
     print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
+def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
+    """
+    Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.
+    Performs forward-fill to ensure PIT compliance (latest <= date).
+    """
+    print("⏳ Loading DailyStockTier data to GPU tensor...")
+    start_time = time.time()
+    
+    start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+    end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+    query = f"""
+        SELECT date, stock_code as ticker, tier
+        FROM DailyStockTier
+        WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
+        UNION ALL
+        SELECT t.date, t.stock_code as ticker, t.tier
+        FROM DailyStockTier t
+        JOIN (
+            SELECT stock_code, MAX(date) AS max_date
+            FROM DailyStockTier
+            WHERE date < '{start_date_str}'
+            GROUP BY stock_code
+        ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
+    """
+    sql_engine = create_engine(engine)
+    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
+    
+    if df_pd.empty:
+        print("⚠️ No Tier data found. Returning empty tensor.")
+        return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
+
+    # Pivot to (date, ticker) -> tier
+    # index=date, columns=ticker, values=tier
+    df_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    
+    # Reindex to full trading dates and all tickers
+    # Forward fill to propagate the latest tier
+    df_reindexed = df_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    
+    # Convert to CuPy
+    tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
+    
+    print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
+    return tier_tensor
+
 # 3. GPU Backtesting Kernel Orchestrator
-def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value, exec_params):
+def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers, trading_date_indices_gpu, trading_dates_pd, initial_cash_value, exec_params, tier_tensor=None):
     print("🚀 Starting GPU backtesting kernel...")
     max_splits_from_params = int(cp.max(params_gpu[:, 6]).get())
     daily_portfolio_values = run_magic_split_strategy_on_gpu(
@@ -113,7 +155,8 @@ def run_gpu_optimization(params_gpu, data_gpu, weekly_filtered_gpu, all_tickers,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
         execution_params=exec_params,
-        max_splits_limit=max_splits_from_params
+        max_splits_limit=max_splits_from_params,
+        tier_tensor=tier_tensor
     )
     print("🎉 GPU backtesting kernel finished.")
     return daily_portfolio_values
@@ -177,7 +220,6 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
     
     return best_params_dict, sorted_df # [추가] 전체 결과 DF도 반환
 import subprocess
-import re
 
 # ... (기존 import 구문들)
 
@@ -273,9 +315,20 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     print(f"  - Tickers for period: {len(all_tickers)}")
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
+    # [Issue #67] Preload Tier Tensor
+    tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+    
+    # Update execution params with mode
+    # Note: strategy_params is global here, loaded from config
+    execution_params['candidate_source_mode'] = strategy_params.get('candidate_source_mode', 'weekly')
+    execution_params['use_weekly_alpha_gate'] = strategy_params.get('use_weekly_alpha_gate', False)
+
     #  배치 처리 로직 (자동 계산 기능 추가)
     # --------------------------------------------------------------------------
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
+    # Add tier_tensor memory usage (approx)
+    fixed_mem += int(tier_tensor.nbytes)
+    
     optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
     
     if optimal_batch_size:
@@ -303,7 +356,8 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         start_time_kernel = time.time()
         daily_values_batch = run_gpu_optimization(
             param_batch, all_data_gpu, weekly_filtered_gpu, all_tickers, 
-            trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params
+            trading_date_indices_gpu, trading_dates_pd, initial_cash, execution_params,
+            tier_tensor=tier_tensor
         )
         end_time_kernel = time.time()
         
@@ -382,5 +436,3 @@ if __name__ == "__main__":
     filepath = os.path.join(output_dir, f'standalone_simulation_results_{timestamp}.csv')
     all_results_df.to_csv(filepath, index=False, float_format='%.4f')
     print(f"\n✅ Full simulation analysis saved to: {filepath}")
-
-

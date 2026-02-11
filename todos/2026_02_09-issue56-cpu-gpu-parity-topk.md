@@ -3,6 +3,15 @@
 - 작성일: 2026-02-09
 - 목적: 단일 파라미터 검증을 넘어, 최적화 상위 후보(top-k) 전수 parity 검증으로 회귀 리스크 차단
 
+## 0. 진행 현황 (2026-02-09)
+- 선행 완료(`#67` Phase A):
+  - GPU 후보 기준일 `signal_date(T-1)` 정렬
+  - ATR 조회 `as-of(<=)` 정렬
+  - Tier preload를 `start 이전 latest 1행 + 기간 데이터`로 보강(30일 가정 제거)
+- 현재 상태:
+  - parity 하네스 본체(`top-k`, scenario pack, mismatch report)는 아직 미구현
+  - 즉, `#56`은 선행 블로커 해소 완료, 본작업은 다음 단계
+
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙
 - 현재 단일 실행 비교만으로는 대규모 조합의 edge case drift를 놓칠 수 있음
@@ -22,9 +31,14 @@
   - `weekly`
   - `hybrid_transition`
   - `tier`
+- [ ] scenario pack parity 검증:
+  - `baseline_deterministic`
+  - `seeded_stress`(권장 50~100 seed)
+  - `jackknife_drop_topN`(상위 기여 1~3종목 제거)
 - [ ] mismatch 리포트 표준화: first mismatch index + cash/positions/value dump
 - [ ] snapshot 메타데이터 저장: 기간, 파라미터, 코드 버전, 생성시각
 - [ ] snapshot 메타데이터에 `candidate_source_mode`, `use_weekly_alpha_gate` 필드 추가
+- [ ] snapshot 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
 - [ ] GPU 미사용 환경 skip 처리 유지
 - [ ] CI/로컬 실행 명령 문서화
 
@@ -34,6 +48,7 @@
 
 ## 5. 완료 기준
 - top-k parity mismatch `0건`만 통과
+- scenario pack(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`) parity mismatch `0건`
 - 스냅샷 갱신 기준/절차가 문서화
 - 실패 시 재현 가능한 리포트 자동 생성
 
