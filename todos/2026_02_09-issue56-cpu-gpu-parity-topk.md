@@ -12,6 +12,13 @@
   - parity 하네스 본체(`top-k`, scenario pack, mismatch report)는 아직 미구현
   - 즉, `#56`은 선행 블로커 해소 완료, 본작업은 다음 단계
 
+## 0-1. 진행 현황 업데이트 (2026-02-11)
+- [x] `tier-only` parity gate 추가:
+  - `python -m src.debug_gpu_single_run --parity-gate`
+  - 절대 오차 `--parity-tolerance` 기준 mismatch 카운트 산출
+  - mismatch `> 0`이면 즉시 `AssertionError`로 fail-fast
+- [ ] top-k/scenario pack parity는 후속 구현 필요
+
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙
 - 현재 단일 실행 비교만으로는 대규모 조합의 edge case drift를 놓칠 수 있음

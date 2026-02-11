@@ -98,8 +98,8 @@
   - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
   - [x] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
   - [x] `WeeklyFilteredStocks` 후보군 경로 제거(A안 단일 경로 고정)
-  - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
-- [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
+  - [x] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
+- [x] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [ ] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
 - [ ] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
@@ -119,6 +119,7 @@
   - [ ] Ablation 매트릭스 고정: `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+BehaviorFeature`
 - [ ] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
   - [x] `#67` Phase A parity blocker 선반영: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거)
+  - [x] tier-only parity gate 추가: `python -m src.debug_gpu_single_run --parity-gate`
   - [ ] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`debug_gpu_single_run` 기반)
   - [ ] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
   - [ ] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장

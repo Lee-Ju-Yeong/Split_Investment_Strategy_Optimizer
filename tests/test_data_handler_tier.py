@@ -125,7 +125,14 @@ class TestDataHandlerTierApis(unittest.TestCase):
             self.handler,
             "get_tiers_as_of",
             side_effect=[
-                {"A": {"tier": 1}, "C": {"tier": 1}},
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 100},
+                    "C": {"tier": 1, "liquidity_20d_avg_value": 200},
+                },
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 100},
+                    "C": {"tier": 1, "liquidity_20d_avg_value": 200},
+                },
             ],
         ):
             codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
@@ -143,13 +150,61 @@ class TestDataHandlerTierApis(unittest.TestCase):
             "get_tiers_as_of",
             side_effect=[
                 {},
-                {"B": {"tier": 2}},
+                {"B": {"tier": 2, "liquidity_20d_avg_value": 150}},
             ],
         ):
             codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
 
         self.assertEqual(codes, ["B"])
         self.assertEqual(source, "TIER_2_FALLBACK_SNAPSHOT_ASOF")
+
+    def test_get_candidates_with_tier_fallback_pit_applies_min_liquidity(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B"], "SNAPSHOT_ASOF"),
+        ), patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 80},
+                    "B": {"tier": 1, "liquidity_20d_avg_value": 120},
+                },
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 80},
+                    "B": {"tier": 1, "liquidity_20d_avg_value": 120},
+                },
+            ],
+        ):
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=None,
+            )
+
+        self.assertEqual(codes, ["B"])
+        self.assertEqual(source, "TIER_1_SNAPSHOT_ASOF")
+
+    def test_get_candidates_with_tier_fallback_pit_coverage_gate_fail_fast(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B", "C", "D"], "SNAPSHOT_ASOF"),
+        ), patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
+            ],
+        ):
+            with self.assertRaises(ValueError):
+                self.handler.get_candidates_with_tier_fallback_pit_gated(
+                    date="2024-01-04",
+                    min_liquidity_20d_avg_value=0,
+                    min_tier12_coverage_ratio=0.6,
+                )
 
 
 if __name__ == "__main__":

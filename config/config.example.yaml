@@ -26,6 +26,8 @@ strategy_params:
   # [Issue #67] Candidate Selection Mode (A-path only)
   # tier: PIT universe + DailyStockTier (Tier 1 -> Fallback Tier 2)
   candidate_source_mode: "tier"
+  min_liquidity_20d_avg_value: 0
+  min_tier12_coverage_ratio: 0.0
 
 execution_params:
   buy_commission_rate: 0.00015

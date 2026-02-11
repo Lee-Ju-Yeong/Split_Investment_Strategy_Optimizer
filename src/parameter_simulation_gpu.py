@@ -108,11 +108,11 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
     start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
     end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
     query = f"""
-        SELECT date, stock_code as ticker, tier
+        SELECT date, stock_code as ticker, tier, liquidity_20d_avg_value
         FROM DailyStockTier
         WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
         UNION ALL
-        SELECT t.date, t.stock_code as ticker, t.tier
+        SELECT t.date, t.stock_code as ticker, t.tier, t.liquidity_20d_avg_value
         FROM DailyStockTier t
         JOIN (
             SELECT stock_code, MAX(date) AS max_date
@@ -128,16 +128,39 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
         print("⚠️ No Tier data found. Returning empty tensor.")
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
-    # Pivot to (date, ticker) -> tier
-    # index=date, columns=ticker, values=tier
-    df_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    min_liq = int(strategy_params.get("min_liquidity_20d_avg_value", 0) or 0)
+    min_ratio = float(strategy_params.get("min_tier12_coverage_ratio", 0.0) or 0.0)
+
+    tier_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    liq_wide = df_pd.pivot_table(index='date', columns='ticker', values='liquidity_20d_avg_value')
     
-    # Reindex to full trading dates and all tickers
-    # Forward fill to propagate the latest tier
-    df_reindexed = df_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    tier_asof = tier_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    liq_asof = liq_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill()
+
+    if min_liq > 0:
+        liq_mask = liq_asof.fillna(-1) >= min_liq
+        tier_asof = tier_asof.where(liq_mask, 0)
+
+    tier1_count = (tier_asof == 1).sum(axis=1).astype(int)
+    tier12_count = ((tier_asof > 0) & (tier_asof <= 2)).sum(axis=1).astype(int)
+    universe_count = len(all_tickers)
+    print(
+        f"[TierCoverage][GPU] min_tier1={int(tier1_count.min())} "
+        f"min_tier12={int(tier12_count.min())} universe={universe_count}"
+    )
+
+    if min_ratio > 0 and universe_count > 0:
+        ratio = tier12_count / float(universe_count)
+        failed = ratio[ratio < min_ratio]
+        if not failed.empty:
+            fail_date = failed.index[0]
+            raise ValueError(
+                f"Tier coverage gate failed on {pd.to_datetime(fail_date).date()}: "
+                f"tier12_ratio={float(failed.iloc[0]):.4f} < threshold={min_ratio:.4f}"
+            )
     
     # Convert to CuPy
-    tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
+    tier_tensor = cp.asarray(tier_asof.values, dtype=cp.int8)
     
     print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
     return tier_tensor

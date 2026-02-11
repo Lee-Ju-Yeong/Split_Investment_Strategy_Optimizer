@@ -55,6 +55,8 @@ class MagicSplitStrategy(Strategy):
         # --- [Issue #67] Candidate Source Config ---
         candidate_source_mode="tier",
         use_weekly_alpha_gate=False,
+        min_liquidity_20d_avg_value=0,
+        min_tier12_coverage_ratio=0.0,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -71,6 +73,8 @@ class MagicSplitStrategy(Strategy):
         # [Issue #67]
         self.candidate_source_mode = candidate_source_mode
         self.use_weekly_alpha_gate = use_weekly_alpha_gate
+        self.min_liquidity_20d_avg_value = min_liquidity_20d_avg_value
+        self.min_tier12_coverage_ratio = min_tier12_coverage_ratio
         
         self.investment_per_order = 0
         self.previous_month = -1
@@ -135,7 +139,19 @@ class MagicSplitStrategy(Strategy):
                 try:
                     tier_result = None
                     if callable(get_tier_candidates_pit):
-                        tier_result = get_tier_candidates_pit(signal_date)
+                        get_tier_candidates_pit_gated = getattr(
+                            data_handler,
+                            "get_candidates_with_tier_fallback_pit_gated",
+                            None,
+                        )
+                        if callable(get_tier_candidates_pit_gated):
+                            tier_result = get_tier_candidates_pit_gated(
+                                signal_date,
+                                min_liquidity_20d_avg_value=self.min_liquidity_20d_avg_value,
+                                min_tier12_coverage_ratio=self.min_tier12_coverage_ratio,
+                            )
+                        else:
+                            tier_result = get_tier_candidates_pit(signal_date)
                     if not (isinstance(tier_result, tuple) and len(tier_result) == 2):
                         tier_result = get_tier_candidates(signal_date)
                     tier_codes, used_tier = tier_result

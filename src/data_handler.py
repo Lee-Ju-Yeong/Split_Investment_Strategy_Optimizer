@@ -345,6 +345,59 @@ class DataHandler:
         Returns:
             (candidates_list, source)
         """
+        return self.get_candidates_with_tier_fallback_pit_gated(
+            date=date,
+            min_liquidity_20d_avg_value=None,
+            min_tier12_coverage_ratio=None,
+        )
+
+    def _filter_by_min_liquidity(self, tier_map, min_liquidity_20d_avg_value):
+        if min_liquidity_20d_avg_value is None:
+            return tier_map
+
+        min_liq = int(min_liquidity_20d_avg_value)
+        filtered = {}
+        for code, info in tier_map.items():
+            liq_val = info.get("liquidity_20d_avg_value")
+            if pd.isna(liq_val):
+                continue
+            if int(liq_val) >= min_liq:
+                filtered[code] = info
+        return filtered
+
+    def _enforce_tier12_coverage_gate(self, date, pit_size, tier1_count, tier12_count, min_tier12_coverage_ratio):
+        print(
+            f"[TierCoverage] date={pd.to_datetime(date).date()} "
+            f"tier1_count={tier1_count} tier12_count={tier12_count} universe_count={pit_size}"
+        )
+
+        if min_tier12_coverage_ratio is None or pit_size <= 0:
+            return
+
+        ratio = float(tier12_count) / float(pit_size)
+        threshold = float(min_tier12_coverage_ratio)
+        if ratio < threshold:
+            raise ValueError(
+                f"Tier coverage gate failed on {pd.to_datetime(date).date()}: "
+                f"tier12_ratio={ratio:.4f} < threshold={threshold:.4f} "
+                f"(tier12_count={tier12_count}, universe_count={pit_size})"
+            )
+
+    def get_candidates_with_tier_fallback_pit_gated(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        """
+        Issue #67 Phase2:
+        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
+        Optional gates:
+            - min_liquidity_20d_avg_value
+            - min_tier12_coverage_ratio
+        Returns:
+            (candidates_list, source)
+        """
         pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
         if not pit_codes:
             return [], f"NO_CANDIDATES_{pit_source}"
@@ -354,14 +407,26 @@ class DataHandler:
             tickers=pit_codes,
             allowed_tiers=[1],
         )
-        if tier1_map:
-            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
+        tier1_map = self._filter_by_min_liquidity(tier1_map, min_liquidity_20d_avg_value)
 
         tier12_map = self.get_tiers_as_of(
             as_of_date=date,
             tickers=pit_codes,
             allowed_tiers=[1, 2],
         )
+        tier12_map = self._filter_by_min_liquidity(tier12_map, min_liquidity_20d_avg_value)
+
+        self._enforce_tier12_coverage_gate(
+            date=date,
+            pit_size=len(pit_codes),
+            tier1_count=len(tier1_map),
+            tier12_count=len(tier12_map),
+            min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+        )
+
+        if tier1_map:
+            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
+
         if tier12_map:
             return [code for code in pit_codes if code in tier12_map], f"TIER_2_FALLBACK_{pit_source}"
         return [], f"NO_CANDIDATES_{pit_source}"

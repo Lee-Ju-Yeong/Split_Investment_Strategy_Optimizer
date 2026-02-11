@@ -28,6 +28,14 @@
 - [x] 회귀 테스트 추가:
   - `tests/test_data_handler_tier.py`: PIT universe 조회/ fallback, PIT tier fallback 경로
   - `tests/test_issue67_tier_universe.py`: strategy tier/PIT API 우선 호출, 비-tier 모드 강제 tier 정규화 검증
+- [x] Coverage/Liquidity gate 반영:
+  - `DataHandler.get_candidates_with_tier_fallback_pit_gated()` 추가
+  - 구간별 coverage 로그(`date`, `tier1_count`, `tier12_count`, `universe_count`) 출력
+  - `min_tier12_coverage_ratio` 미달 시 fail-fast 예외
+  - `min_liquidity_20d_avg_value` 기반 후보군 필터링
+- [x] GPU preload에도 동일 게이트 반영:
+  - Tier tensor 생성 시 as-of liquidity mask 적용
+  - coverage gate(`min_tier12_coverage_ratio`) 미달 시 즉시 실패
 
 ## 1. 배경
 - 현재 CPU/GPU가 `WeeklyFilteredStocks`를 서로 다르게 사용하고 있어 후보군 일관성이 약함
