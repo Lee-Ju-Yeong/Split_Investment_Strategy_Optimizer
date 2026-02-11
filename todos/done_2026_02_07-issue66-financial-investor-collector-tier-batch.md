@@ -265,6 +265,23 @@ runner.run(mode="daily")
 - [ ] 후속 TODO(보류): `adj_close`/`adj_ratio` 파생 계산 배치
   - 배경: `DailyStockPrice` 스키마 확장 후 raw 기준으로 보정값을 채우는 전용 배치가 필요
   - 정책: 이번 변경에서는 스키마/수집 기본값만 반영하고, 파생 계산 배치는 별도 이슈로 분리
+- [x] `corporate_event_collector` 관측성/동시성 보강(2026-02-10)
+  - 코드: `src/corporate_event_collector.py`
+  - 변경:
+    - fetch 결과를 `fetch_errors`, `empty_results`, `nonempty_results`, `normalize_empty`로 분리 집계
+    - 샘플 티커 출력(`fetch error`, `empty`, `non-empty`) 추가
+    - write buffer flush 경로의 중첩 lock 제거(잠재 deadlock 리스크 완화)
+  - 스모크: `--ticker-limit 10` 실행 시 `empty=10`, `errors=0`, 진행 로그/샘플 출력 정상
+- [ ] 운영 블로커: pykrx `get_stock_major_changes` 전량 empty 응답(2026-02-10)
+  - full run 결과: `processed=5216`, `saved_rows=0`, `fetch_errors=0`, `empty=5216`, `nonempty=0`
+  - 동시 점검:
+    - `TickerUniverseHistory=5216`
+    - `CorporateMajorChanges rows=337`, `tickers=30` (기존 잔존 데이터)
+    - 샘플(`005930`, `000660`, `035420`) 재조회도 `rows=0`
+  - 해석: 수집기 예외라기보다 pykrx 원천이 "에러 없이 empty 반환"하는 구간 가능성 높음
+  - 대응:
+    - preflight health-check(`get_market_ticker_list`, 샘플 `get_stock_major_changes`)를 통과할 때만 본 배치 실행
+    - health-check fail 시 `blocked` 상태로 기록하고 Step 2-2로 대기
 - [x] `CalculatedIndicators` 전체 재계산 및 검증 완료
   - 실행: runbook 6장 전체 재계산 커맨드(`TRUNCATE` 후 `calculate_and_store_indicators_for_all(use_gpu=True)`)
   - 결과(2026-02-08): `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`
@@ -293,10 +310,13 @@ runner.run(mode="daily")
     - `--financial-workers`, `--financial-write-batch-size`
     - `--investor-workers`, `--investor-write-batch-size`
   - 단위테스트: `tests/test_pipeline_batch.py` 갱신 및 통과
-- [ ] `FinancialData`/`InvestorTradingTrend` 1995~ 전기간 재백필(개선 로직 적용) 실행
+- [x] `FinancialData`/`InvestorTradingTrend` 1995~ 전기간 재백필(개선 로직 적용) 실행
   - 실행(레포 루트에서):
     - `PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -m src.pipeline_batch --mode backfill --start-date 19950101 --end-date 20260209 --skip-tier --log-interval 20 --financial-workers 4 --financial-write-batch-size 20000 --investor-workers 4 --investor-write-batch-size 20000`
   - 유니버스: `TickerUniverseHistory` (`tickers=5,216`)
+  - 결과(2026-02-10): 완료
+    - `financial`: `processed=5215`, `rows_saved=15,159,338`, `errors=1`
+    - `investor`: `processed=5216`, `rows_saved=9,261,970`, `errors=0`
   - 비고: 이전 `per=0/pbr=0 -> NULL` 수동 정리는 개선 백필 결과로 자연 복원(업서트) 예정
 
 ---

@@ -22,6 +22,13 @@ strategy_params:
   stop_loss_rate: -0.15
   max_splits_limit: 10
   max_inactivity_period: 90
+  
+  # [Issue #67] Candidate Selection Mode
+  # weekly: Legacy WeeklyFilteredStocks
+  # hybrid_transition: Tier-based with optional Weekly intersection
+  # tier: Pure DailyStockTier (Tier 1 -> Fallback Tier 2)
+  candidate_source_mode: "hybrid_transition"
+  use_weekly_alpha_gate: true
 
 execution_params:
   buy_commission_rate: 0.00015

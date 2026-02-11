@@ -578,7 +578,7 @@ def _process_new_entry_signals_gpu(
     priority_scores[initial_buy_mask] = -candidate_atrs_for_day[candidate_indices_in_list[initial_buy_mask]]
 
     priority_scores_2d = priority_scores.reshape(num_simulations, num_candidates)
-    sorted_candidate_indices_in_sim = cp.argsort(priority_scores_2d, axis=1)
+    sorted_candidate_indices_in_sim = cp.argsort(priority_scores_2d, axis=1, kind='stable')
 
     # --- 3. [핵심 수정] 순차적 자본 차감을 통한 최종 매수 실행 ---
     # CPU의 순차적 로직을 모방하기 위해, 우선순위 루프(k)를 유지하되
@@ -703,6 +703,46 @@ def _process_new_entry_signals_gpu(
     portfolio_state[:, 0] = temp_capital
     return portfolio_state, positions_state, last_trade_day_idx_state
 
+def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.DatetimeIndex):
+    if day_idx <= 0:
+        return None, -1
+    signal_day_idx = day_idx - 1
+    return trading_dates_pd_cpu[signal_day_idx], signal_day_idx
+
+def _sort_candidates_by_atr_then_ticker(candidate_pairs):
+    pairs_sorted_by_ticker = sorted(candidate_pairs, key=lambda pair: pair[0])
+    return sorted(pairs_sorted_by_ticker, key=lambda pair: pair[1], reverse=True)
+
+def _collect_candidate_atr_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
+    if signal_date is None or not final_candidate_tickers:
+        return None
+
+    # CPU get_stock_row_as_of(ticker, signal_date)의 PIT(as-of <= date) 동작을 맞추기 위해
+    # 우선 signal_date 당일 값을 사용하고, 결측 티커만 직전 최신 행으로 보완한다.
+    same_day_rows = all_data_reset_idx[
+        (all_data_reset_idx['date'] == signal_date) &
+        (all_data_reset_idx['ticker'].isin(final_candidate_tickers))
+    ][['ticker', 'atr_14_ratio']]
+
+    available_tickers = set(same_day_rows['ticker'].to_arrow().to_pylist()) if not same_day_rows.empty else set()
+    missing_tickers = [ticker for ticker in final_candidate_tickers if ticker not in available_tickers]
+
+    if missing_tickers:
+        historical_rows = all_data_reset_idx[
+            (all_data_reset_idx['date'] < signal_date) &
+            (all_data_reset_idx['ticker'].isin(missing_tickers))
+        ][['ticker', 'date', 'atr_14_ratio']]
+        if not historical_rows.empty:
+            latest_history_rows = historical_rows.sort_values('date').drop_duplicates(subset=['ticker'], keep='last')
+            same_day_rows = cudf.concat(
+                [same_day_rows, latest_history_rows[['ticker', 'atr_14_ratio']]],
+                ignore_index=True
+            )
+
+    if same_day_rows.empty:
+        return None
+    return same_day_rows.set_index('ticker')['atr_14_ratio'].dropna()
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -713,13 +753,24 @@ def run_magic_split_strategy_on_gpu(
     all_tickers: list,
     execution_params: dict,
     max_splits_limit: int = 20,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    tier_tensor: cp.ndarray = None # [Issue #67]
 ):
     # --- 1. 상태 배열 초기화 ---
     num_combinations = param_combinations.shape[0]
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
+    
+    # Config from exec_params
+    candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
+    use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    valid_modes = {'weekly', 'tier', 'hybrid_transition'}
+    if candidate_source_mode not in valid_modes:
+        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'weekly'.")
+        candidate_source_mode = 'weekly'
+    if candidate_source_mode in ('tier', 'hybrid_transition') and tier_tensor is None:
+        raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
 
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
     portfolio_state[:, 0] = initial_cash
@@ -738,7 +789,7 @@ def run_magic_split_strategy_on_gpu(
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
     weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
-    print("Data prepared for GPU backtest. (asof logic will be applied in main loop)")
+    print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
@@ -767,48 +818,88 @@ def run_magic_split_strategy_on_gpu(
         #  디버깅 및 검증을 위한 임시 '일일 루프' (향후 단일 커널로 대체될 부분)
         for day_idx in range(start_idx, end_idx):
             current_date = trading_dates_pd_cpu[day_idx]
+            signal_date, signal_day_idx = _resolve_signal_date_for_gpu(day_idx, trading_dates_pd_cpu)
             # 텐서에서 하루치 데이터 슬라이싱
             current_prices_gpu = close_prices_tensor[day_idx]
             current_highs_gpu  = high_prices_tensor[day_idx]
             current_lows_gpu   = low_prices_tensor[day_idx]
 
-            # --- 후보군 선정 로직 (기존과 동일) ---
-            past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
-            if not past_or_equal_data.empty:
-                # 1. 해당 주간의 필터링된 종목 리스트를 가져옴
-                latest_filter_date = past_or_equal_data['date'].max()
-                candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
-                candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
+            # --- [Issue #67] Candidate Selection Logic ---
+            candidate_indices_list = []
+            
+            # (A) Tier Selection (Primary for Tier/Hybrid)
+            if candidate_source_mode in ['tier', 'hybrid_transition'] and tier_tensor is not None:
+                # 1. Select Tier 1
+                if signal_day_idx >= 0:
+                    signal_tiers = tier_tensor[signal_day_idx] # (num_tickers,)
+                    tier1_mask = (signal_tiers == 1)
 
-                # 2. 전체 데이터에서 현재 날짜 '이하'의 모든 데이터를 가져옴
-                daily_data_for_candidates = all_data_reset_idx[all_data_reset_idx['date'] == current_date]
-                
-                if not daily_data_for_candidates.empty:
-                    # 3. 현재 날짜 데이터 중에서 주간 후보군에 해당하는 종목만 필터링
-                    candidate_data_today = daily_data_for_candidates[daily_data_for_candidates['ticker'].isin(candidate_tickers_list)]
-                    
-                    # 4. 유효한 ATR 값을 가진 후보만 최종 선정 (NaN 제거)
-                    valid_candidate_atr_series = candidate_data_today.set_index('ticker')['atr_14_ratio'].dropna()
+                    if cp.any(tier1_mask):
+                        candidate_indices = cp.where(tier1_mask)[0]
+                    else:
+                        # Fallback to Tier 2 (<= 2)
+                        tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
+                        candidate_indices = cp.where(tier2_mask)[0]
 
-                    if not valid_candidate_atr_series.empty:
-                        # 5. 최종 후보 티커와 ATR 값을 cuPy 배열로 변환
-                        valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
-                        valid_atrs = valid_candidate_atr_series.values
-                        
-                        # ticker_to_idx 딕셔너리에 없는 티커는 제외
-                        candidate_indices_list = [ticker_to_idx.get(t) for t in valid_tickers if t in ticker_to_idx]
-                        
-                        # 실제 ATR 값도 ticker_to_idx에 존재하는 티커에 맞춰 필터링
-                        valid_atrs_filtered = [atr for t, atr in zip(valid_tickers, valid_atrs) if t in ticker_to_idx]
+                    candidate_indices_list = candidate_indices.tolist() # Convert to list for intersection
+            
+            # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
+            weekly_indices_list = []
+            if candidate_source_mode == 'weekly' or (candidate_source_mode == 'hybrid_transition' and use_weekly_alpha_gate):
+                past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
+                if not past_or_equal_data.empty:
+                    latest_filter_date = past_or_equal_data['date'].max()
+                    candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
+                    candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
+                    weekly_indices_list = [ticker_to_idx.get(t) for t in candidate_tickers_list if t in ticker_to_idx]
+            
+            # (C) Combine
+            final_candidate_indices = []
+            
+            if candidate_source_mode == 'weekly':
+                final_candidate_indices = weekly_indices_list
+            elif candidate_source_mode == 'tier':
+                final_candidate_indices = candidate_indices_list
+            elif candidate_source_mode == 'hybrid_transition':
+                if use_weekly_alpha_gate:
+                    weekly_index_set = set(weekly_indices_list)
+                    final_candidate_indices = [
+                        idx for idx in candidate_indices_list if idx in weekly_index_set
+                    ]
+                else:
+                    final_candidate_indices = candidate_indices_list
 
-                        candidate_tickers_for_day = cp.array(candidate_indices_list, dtype=cp.int32)
-                        candidate_atrs_for_day = cp.asarray(valid_atrs_filtered, dtype=cp.float32)
+            # (D) Valid Data Check (ATR)
+            # Re-use existing logic to filter valid ATR
+            if final_candidate_indices and signal_date is not None:
+                final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
+                valid_candidate_atr_series = _collect_candidate_atr_asof(
+                    all_data_reset_idx=all_data_reset_idx,
+                    final_candidate_tickers=final_candidate_tickers,
+                    signal_date=signal_date,
+                )
+
+                if valid_candidate_atr_series is None or valid_candidate_atr_series.empty:
+                    candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                    candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                else:
+                    valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
+                    valid_atrs = valid_candidate_atr_series.values
+                    candidate_pairs = [
+                        (ticker, float(atr))
+                        for ticker, atr in zip(valid_tickers, valid_atrs)
+                        if ticker in ticker_to_idx
+                    ]
+                    ranked_pairs = _sort_candidates_by_atr_then_ticker(candidate_pairs)
+
+                    if ranked_pairs:
+                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _ in ranked_pairs]
+                        valid_atrs_final = [atr for _, atr in ranked_pairs]
+                        candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
+                        candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
                     else:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                         candidate_atrs_for_day = cp.array([], dtype=cp.float32)
-                else:
-                    candidate_tickers_for_day = cp.array([], dtype=cp.int32)
-                    candidate_atrs_for_day = cp.array([], dtype=cp.float32)
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)

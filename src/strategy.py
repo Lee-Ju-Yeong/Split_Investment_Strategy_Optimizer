@@ -52,6 +52,9 @@ class MagicSplitStrategy(Strategy):
         stop_loss_rate=-0.15,
         max_splits_limit=10,
         max_inactivity_period=90,
+        # --- [Issue #67] Candidate Source Config ---
+        candidate_source_mode="weekly", # weekly | hybrid_transition | tier
+        use_weekly_alpha_gate=False,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -64,6 +67,10 @@ class MagicSplitStrategy(Strategy):
         self.stop_loss_rate = stop_loss_rate
         self.max_splits_limit = max_splits_limit
         self.max_inactivity_period = max_inactivity_period
+        
+        # [Issue #67]
+        self.candidate_source_mode = candidate_source_mode
+        self.use_weekly_alpha_gate = use_weekly_alpha_gate
         
         self.investment_per_order = 0
         self.previous_month = -1
@@ -110,15 +117,47 @@ class MagicSplitStrategy(Strategy):
             tqdm.write(log_msg)
         
         if available_slots > 0:
-            candidate_codes = data_handler.get_filtered_stock_codes(current_date)
-            get_codes_with_tier = getattr(data_handler, "get_filtered_stock_codes_with_tier", None)
-            if callable(get_codes_with_tier):
-                try:
-                    tier_codes = get_codes_with_tier(signal_date, allowed_tiers=(1, 2))
-                    if isinstance(tier_codes, (list, tuple, set)):
-                        candidate_codes = list(tier_codes)
-                except Exception:
+            candidate_codes = []
+            
+            # --- [Issue #67] Candidate Source Logic Start ---
+            mode = self.candidate_source_mode
+            
+            # 1. Weekly (Legacy)
+            if mode == "weekly":
+                candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+                
+            # 2. Tier / Hybrid
+            elif mode in ["tier", "hybrid_transition"]:
+                get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
+                if callable(get_tier_candidates):
+                    try:
+                        tier_codes, used_tier = get_tier_candidates(signal_date)
+                        candidate_codes = tier_codes
+                        
+                        # Logging for observability
+                        from tqdm import tqdm
+                        
+                        if used_tier == 'TIER_2_FALLBACK':
+                             tqdm.write(f"[Strategy] {current_date.date()} | Fallback: Tier 1 (0) -> Tier 2 ({len(candidate_codes)})")
+
+                        if mode == "hybrid_transition" and self.use_weekly_alpha_gate:
+                            weekly_codes = data_handler.get_filtered_stock_codes(current_date)
+                            weekly_set = set(weekly_codes)
+                            original_count = len(candidate_codes)
+                            candidate_codes = [code for code in candidate_codes if code in weekly_set]
+                            
+                            tqdm.write(f"[Strategy] {current_date.date()} | Hybrid: Tier({used_tier}, {original_count}) & Weekly({len(weekly_codes)}) -> Intersection({len(candidate_codes)})")
+                    except Exception as exc:
+                        print(f"[Warning] Tier candidate lookup failed ({exc}). Falling back to weekly.")
+                        candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+                else:
+                    # Fallback if method missing (should not happen with correct DataHandler)
+                    print(f"[Warning] get_candidates_with_tier_fallback missing. Falling back to weekly.")
                     candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+            else:
+                # Default fallback
+                candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+            # --- [Issue #67] Logic End ---
             
             active_candidates = []
             for code in candidate_codes:

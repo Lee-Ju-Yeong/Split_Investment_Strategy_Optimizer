@@ -26,6 +26,11 @@
 - [ ] 민감도 분석: 선택 파라미터 ±10% perturbation 저하율(`<= 15%`) 측정
 - [ ] Ablation 4축 비교: Legacy-Calmar / Robust-Score / Robust+Gate / Robust+Gate+Behavior
 - [ ] Universe 모드 비교(최소): `hybrid_transition` vs `tier`
+- [ ] 강건성 검증 프로토콜 고정:
+  - 학습/최적화 기준 경로는 `deterministic baseline`으로 고정
+  - 검증 경로는 `seeded_stress` + `jackknife_drop_topN` 별도 수행
+  - `random-only` 선택 정책은 운영 기준으로 금지
+- [ ] 집중도 리스크 지표 추가: `max_single_stock_contribution`, `HHI` (또는 동등 지표)
 - [ ] 결과 산출물 저장: fold별 gate 리포트 + 최종 robust 파라미터 CSV
 
 ## 4. 브랜치 규칙 (A안 전환 연계)
@@ -37,6 +42,7 @@
 - legacy 대비 OOS 안정성 지표(분산/열화) 개선 근거 확보
 - 문제 시 즉시 legacy 복귀 가능(rollback 절차 문서화)
 - #67 tier 모드 전환 이후에도 gate 통과 재현 가능
+- deterministic baseline + seeded_stress + jackknife 결과가 동일 승격 규칙으로 판정 가능
 
 ## 6. 제외 범위
 - 전략 체결 로직(`strategy.py`, `execution.py`) 기능 변경
