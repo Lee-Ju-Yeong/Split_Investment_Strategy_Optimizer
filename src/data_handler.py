@@ -18,6 +18,7 @@ class DataHandler:
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
+                                                               use_pure=True,
                                                                **self.db_config)
             self._load_company_info_cache()
         except Exception as e:
@@ -72,10 +73,12 @@ class DataHandler:
         conn = self.get_connection()
         try:
             query = "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date"
+            start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+            end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 # pd.read_sql 사용 시 날짜 파싱이 더 안정적
-                df = pd.read_sql(query, conn, params=(start_date, end_date))
+                df = pd.read_sql(query, conn, params=(start_date_str, end_date_str))
             return pd.to_datetime(df['date']).tolist()
         finally:
             conn.close()
@@ -85,6 +88,8 @@ class DataHandler:
         conn = self.get_connection()
         # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
         extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
+        extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
             SELECT
@@ -98,7 +103,7 @@ class DataHandler:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=(ticker, extended_start_date, end_date))
+                df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
             if df.empty:
                 return df
 

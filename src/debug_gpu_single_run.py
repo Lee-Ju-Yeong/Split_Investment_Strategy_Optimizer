@@ -27,7 +27,7 @@ config = load_config()
 db_config = config['database']
 backtest_settings = config['backtest_settings']
 strategy_params = config['strategy_params']
-execution_params = config['execution_params']
+execution_params = config['execution_params'].copy()
 
 # GPU 커널에 쿨다운 기간 전달을 위해 execution_params에 추가
 execution_params['cooldown_period_days'] = strategy_params.get('cooldown_period_days', 5)
@@ -294,9 +294,9 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     start_time_kernel = time.time()
     
     # exec_params에 모드 정보 추가
-    execution_params = execution_params.copy()
-    execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
-    execution_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
+    run_exec_params = execution_params.copy()
+    run_exec_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
+    run_exec_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
@@ -306,7 +306,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         trading_date_indices_gpu,
         trading_dates_pd,
         initial_cash,
-        execution_params,
+        run_exec_params,
         debug_mode=debug_mode,
         tier_tensor=tier_tensor
     )

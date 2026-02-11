@@ -135,7 +135,7 @@ class MagicSplitStrategy(Strategy):
             _ = self._resolve_candidate_mode()
             get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
             get_tier_candidates_pit = getattr(data_handler, "get_candidates_with_tier_fallback_pit", None)
-            if callable(get_tier_candidates):
+            if callable(get_tier_candidates_pit) or callable(get_tier_candidates):
                 try:
                     tier_result = None
                     if callable(get_tier_candidates_pit):
