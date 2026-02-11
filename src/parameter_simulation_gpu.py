@@ -320,7 +320,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     
     # Update execution params with mode
     # Note: strategy_params is global here, loaded from config
-    execution_params['candidate_source_mode'] = strategy_params.get('candidate_source_mode', 'weekly')
+    execution_params['candidate_source_mode'] = strategy_params.get('candidate_source_mode', 'tier')
     execution_params['use_weekly_alpha_gate'] = strategy_params.get('use_weekly_alpha_gate', False)
 
     #  배치 처리 로직 (자동 계산 기능 추가)

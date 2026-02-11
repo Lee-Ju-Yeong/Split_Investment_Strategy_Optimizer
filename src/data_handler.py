@@ -253,6 +253,50 @@ class DataHandler:
             return []
         return [code for code in candidate_codes if code in tier_map]
 
+    def get_pit_universe_codes_as_of(self, as_of_date):
+        """
+        Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
+        1) TickerUniverseSnapshot latest(as_of)
+        2) empty면 TickerUniverseHistory active(as_of) fallback
+        Returns:
+            (codes, source)
+        """
+        as_of_ts = pd.to_datetime(as_of_date)
+        as_of_date_str = as_of_ts.strftime("%Y-%m-%d")
+        conn = self.get_connection()
+        try:
+            snapshot_query = """
+                SELECT stock_code
+                FROM TickerUniverseSnapshot
+                WHERE snapshot_date = (
+                    SELECT MAX(snapshot_date)
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date <= %s
+                )
+                ORDER BY stock_code
+            """
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                snapshot_df = pd.read_sql(snapshot_query, conn, params=[as_of_date_str])
+            if not snapshot_df.empty:
+                return snapshot_df["stock_code"].tolist(), "SNAPSHOT_ASOF"
+
+            history_query = """
+                SELECT stock_code
+                FROM TickerUniverseHistory
+                WHERE listed_date <= %s
+                  AND (delisted_date IS NULL OR delisted_date > %s)
+                ORDER BY stock_code
+            """
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                history_df = pd.read_sql(history_query, conn, params=[as_of_date_str, as_of_date_str])
+            if not history_df.empty:
+                return history_df["stock_code"].tolist(), "HISTORY_ACTIVE_ASOF"
+            return [], "NO_UNIVERSE"
+        finally:
+            conn.close()
+
     def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
         query = """
             SELECT t.stock_code
@@ -293,3 +337,31 @@ class DataHandler:
             return [], "NO_CANDIDATES"
         finally:
             conn.close()
+
+    def get_candidates_with_tier_fallback_pit(self, date):
+        """
+        Issue #67 Phase2:
+        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
+        Returns:
+            (candidates_list, source)
+        """
+        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
+        if not pit_codes:
+            return [], f"NO_CANDIDATES_{pit_source}"
+
+        tier1_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=pit_codes,
+            allowed_tiers=[1],
+        )
+        if tier1_map:
+            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
+
+        tier12_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=pit_codes,
+            allowed_tiers=[1, 2],
+        )
+        if tier12_map:
+            return [code for code in pit_codes if code in tier12_map], f"TIER_2_FALLBACK_{pit_source}"
+        return [], f"NO_CANDIDATES_{pit_source}"

@@ -78,7 +78,7 @@
 ### P1 (실행 경로/운영 안정화)
 - [ ] 데이터 플로우 의사결정(2026-02-09): 최종 `A안(KRX PIT + DailyStockTier)`로 전환
   - [x] Phase 1(전환기): `C안(Hybrid)` 허용 (`weekly`는 선택 alpha gate로만 사용)
-  - [ ] Phase 2(고정): `A안`을 기본값으로 승격, `weekly` 기본 후보군 경로 제거
+  - [x] Phase 2(고정): `A안`을 기본값으로 승격, `weekly` 기본 후보군 경로 제거
   - [x] 브랜치 규칙: `A안 전환 코드는 main 직접 작업 금지`, 기능 브랜치에서만 진행
   - [x] 권장 브랜치명: `feature/issue67-a-universe-tier-phase1`, `feature/issue67-a-universe-tier-phase2`
 - [ ] pykrx 확장 데이터셋 도입 로드맵 실행 (이슈 #71): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71
@@ -96,8 +96,8 @@
   - [x] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
   - [x] Phase A parity hardening: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거) 반영
   - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
-  - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
-  - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
+  - [x] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
+  - [x] `WeeklyFilteredStocks` 후보군 경로 제거(A안 단일 경로 고정)
   - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [ ] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
@@ -125,7 +125,7 @@
   - [ ] 스냅샷 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
   - [ ] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
   - [ ] 하드 게이트: parity mismatch `0건`만 pass
-  - [ ] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
+  - [ ] `candidate_source_mode=tier` parity 배치 검증 추가
 - [ ] 도메인 모델/캐시 통합(Position, CompanyInfo 캐시) (이슈 #57): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57
 - [ ] 테스트 인터페이스 갱신(test_integration.py) (이슈 #59): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59
 - [ ] 스크립트 import 부작용 제거(parameter_simulation_gpu.py) (이슈 #60): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60

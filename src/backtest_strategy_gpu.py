@@ -763,14 +763,15 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
-    use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
-    valid_modes = {'weekly', 'tier', 'hybrid_transition'}
-    if candidate_source_mode not in valid_modes:
-        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'weekly'.")
-        candidate_source_mode = 'weekly'
-    if candidate_source_mode in ('tier', 'hybrid_transition') and tier_tensor is None:
-        raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
+    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
+    if candidate_source_mode != "tier":
+        print(
+            f"[Warning] candidate_source_mode '{candidate_source_mode}' is deprecated. "
+            "Forcing 'tier' (A-path)."
+        )
+        candidate_source_mode = "tier"
+    if tier_tensor is None:
+        raise ValueError("tier_tensor is required when candidate_source_mode='tier'")
 
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
     portfolio_state[:, 0] = initial_cash
@@ -827,47 +828,20 @@ def run_magic_split_strategy_on_gpu(
             # --- [Issue #67] Candidate Selection Logic ---
             candidate_indices_list = []
             
-            # (A) Tier Selection (Primary for Tier/Hybrid)
-            if candidate_source_mode in ['tier', 'hybrid_transition'] and tier_tensor is not None:
-                # 1. Select Tier 1
-                if signal_day_idx >= 0:
-                    signal_tiers = tier_tensor[signal_day_idx] # (num_tickers,)
-                    tier1_mask = (signal_tiers == 1)
+            # (A) Tier Selection (A-path only)
+            if signal_day_idx >= 0:
+                signal_tiers = tier_tensor[signal_day_idx] # (num_tickers,)
+                tier1_mask = (signal_tiers == 1)
 
-                    if cp.any(tier1_mask):
-                        candidate_indices = cp.where(tier1_mask)[0]
-                    else:
-                        # Fallback to Tier 2 (<= 2)
-                        tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
-                        candidate_indices = cp.where(tier2_mask)[0]
-
-                    candidate_indices_list = candidate_indices.tolist() # Convert to list for intersection
-            
-            # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
-            weekly_indices_list = []
-            if candidate_source_mode == 'weekly' or (candidate_source_mode == 'hybrid_transition' and use_weekly_alpha_gate):
-                past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
-                if not past_or_equal_data.empty:
-                    latest_filter_date = past_or_equal_data['date'].max()
-                    candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
-                    candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
-                    weekly_indices_list = [ticker_to_idx.get(t) for t in candidate_tickers_list if t in ticker_to_idx]
-            
-            # (C) Combine
-            final_candidate_indices = []
-            
-            if candidate_source_mode == 'weekly':
-                final_candidate_indices = weekly_indices_list
-            elif candidate_source_mode == 'tier':
-                final_candidate_indices = candidate_indices_list
-            elif candidate_source_mode == 'hybrid_transition':
-                if use_weekly_alpha_gate:
-                    weekly_index_set = set(weekly_indices_list)
-                    final_candidate_indices = [
-                        idx for idx in candidate_indices_list if idx in weekly_index_set
-                    ]
+                if cp.any(tier1_mask):
+                    candidate_indices = cp.where(tier1_mask)[0]
                 else:
-                    final_candidate_indices = candidate_indices_list
+                    tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
+                    candidate_indices = cp.where(tier2_mask)[0]
+
+                candidate_indices_list = candidate_indices.tolist()
+
+            final_candidate_indices = candidate_indices_list
 
             # (D) Valid Data Check (ATR)
             # Re-use existing logic to filter valid ATR

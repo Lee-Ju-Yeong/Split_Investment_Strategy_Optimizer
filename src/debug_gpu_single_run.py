@@ -270,7 +270,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     
     # exec_params에 모드 정보 추가
     execution_params = execution_params.copy()
-    execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'weekly')
+    execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
     execution_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
     
     daily_values_result = run_gpu_backtest_kernel(

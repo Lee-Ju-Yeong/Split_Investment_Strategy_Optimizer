@@ -17,6 +17,18 @@
   - 모드별 end-to-end CPU/GPU parity 하네스(`tests/test_backtest_universe_mode.py`, `tests/test_cpu_gpu_parity_topk.py`)
   - Phase B 계측/Phase C 구조 최적화
 
+## 0-1. 진행 현황 업데이트 (2026-02-11)
+- [x] `DataHandler.get_pit_universe_codes_as_of()` 추가: `TickerUniverseSnapshot latest(as-of)` 우선, empty 시 `TickerUniverseHistory active(as-of)` fallback
+- [x] `DataHandler.get_candidates_with_tier_fallback_pit()` 추가: PIT 유니버스 내부에서 `tier=1 -> tier<=2 fallback`
+- [x] `MagicSplitStrategy`가 `get_candidates_with_tier_fallback_pit` 우선 호출(미지원 시 기존 API fallback)하도록 반영
+- [x] `A안` 단일 경로 고정:
+  - `candidate_source_mode` 기본값을 `tier`로 승격
+  - CPU/GPU에서 `weekly/hybrid_transition` 입력 시 경고 후 `tier`로 강제
+  - Tier 조회 실패 시 `weekly` fallback 제거(빈 후보군 반환)
+- [x] 회귀 테스트 추가:
+  - `tests/test_data_handler_tier.py`: PIT universe 조회/ fallback, PIT tier fallback 경로
+  - `tests/test_issue67_tier_universe.py`: strategy tier/PIT API 우선 호출, 비-tier 모드 강제 tier 정규화 검증
+
 ## 1. 배경
 - 현재 CPU/GPU가 `WeeklyFilteredStocks`를 서로 다르게 사용하고 있어 후보군 일관성이 약함
 - 전략 강건성 목표(OOS) 관점에서 `Legacy list` 의존을 줄이고 PIT + Tier 규칙으로 통일 필요

@@ -91,7 +91,66 @@ class TestDataHandlerTierApis(unittest.TestCase):
             )
         self.assertEqual(result, ["A", "C"])
 
+    @patch("pandas.read_sql")
+    def test_get_pit_universe_codes_as_of_uses_snapshot_first(self, mock_read_sql):
+        mock_read_sql.side_effect = [
+            pd.DataFrame({"stock_code": ["A", "B"]}),
+        ]
+
+        codes, source = self.handler.get_pit_universe_codes_as_of("2024-01-04")
+
+        self.assertEqual(codes, ["A", "B"])
+        self.assertEqual(source, "SNAPSHOT_ASOF")
+        self.assertEqual(mock_read_sql.call_count, 1)
+
+    @patch("pandas.read_sql")
+    def test_get_pit_universe_codes_as_of_fallbacks_to_history(self, mock_read_sql):
+        mock_read_sql.side_effect = [
+            pd.DataFrame({"stock_code": []}),
+            pd.DataFrame({"stock_code": ["C"]}),
+        ]
+
+        codes, source = self.handler.get_pit_universe_codes_as_of("2024-01-04")
+
+        self.assertEqual(codes, ["C"])
+        self.assertEqual(source, "HISTORY_ACTIVE_ASOF")
+        self.assertEqual(mock_read_sql.call_count, 2)
+
+    def test_get_candidates_with_tier_fallback_pit_prefers_tier1(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B", "C"], "SNAPSHOT_ASOF"),
+        ), patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1}, "C": {"tier": 1}},
+            ],
+        ):
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
+
+        self.assertEqual(codes, ["A", "C"])
+        self.assertEqual(source, "TIER_1_SNAPSHOT_ASOF")
+
+    def test_get_candidates_with_tier_fallback_pit_uses_tier12_fallback(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B", "C"], "SNAPSHOT_ASOF"),
+        ), patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {},
+                {"B": {"tier": 2}},
+            ],
+        ):
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
+
+        self.assertEqual(codes, ["B"])
+        self.assertEqual(source, "TIER_2_FALLBACK_SNAPSHOT_ASOF")
+
 
 if __name__ == "__main__":
     unittest.main()
-

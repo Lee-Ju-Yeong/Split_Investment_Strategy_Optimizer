@@ -53,7 +53,7 @@ class MagicSplitStrategy(Strategy):
         max_splits_limit=10,
         max_inactivity_period=90,
         # --- [Issue #67] Candidate Source Config ---
-        candidate_source_mode="weekly", # weekly | hybrid_transition | tier
+        candidate_source_mode="tier",
         use_weekly_alpha_gate=False,
     ):
         self.max_stocks = max_stocks
@@ -80,6 +80,14 @@ class MagicSplitStrategy(Strategy):
         if current_day_idx is None:
             return pd.to_datetime(current_date)
         return data_handler.get_previous_trading_date(trading_dates, current_day_idx)
+
+    def _resolve_candidate_mode(self):
+        if self.candidate_source_mode != "tier":
+            print(
+                f"[Warning] candidate_source_mode='{self.candidate_source_mode}' is deprecated. "
+                "Forcing 'tier' (A-path)."
+            )
+        return "tier"
 
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
@@ -120,43 +128,30 @@ class MagicSplitStrategy(Strategy):
             candidate_codes = []
             
             # --- [Issue #67] Candidate Source Logic Start ---
-            mode = self.candidate_source_mode
-            
-            # 1. Weekly (Legacy)
-            if mode == "weekly":
-                candidate_codes = data_handler.get_filtered_stock_codes(current_date)
-                
-            # 2. Tier / Hybrid
-            elif mode in ["tier", "hybrid_transition"]:
-                get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
-                if callable(get_tier_candidates):
-                    try:
-                        tier_codes, used_tier = get_tier_candidates(signal_date)
-                        candidate_codes = tier_codes
-                        
-                        # Logging for observability
-                        from tqdm import tqdm
-                        
-                        if used_tier == 'TIER_2_FALLBACK':
-                             tqdm.write(f"[Strategy] {current_date.date()} | Fallback: Tier 1 (0) -> Tier 2 ({len(candidate_codes)})")
+            _ = self._resolve_candidate_mode()
+            get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
+            get_tier_candidates_pit = getattr(data_handler, "get_candidates_with_tier_fallback_pit", None)
+            if callable(get_tier_candidates):
+                try:
+                    tier_result = None
+                    if callable(get_tier_candidates_pit):
+                        tier_result = get_tier_candidates_pit(signal_date)
+                    if not (isinstance(tier_result, tuple) and len(tier_result) == 2):
+                        tier_result = get_tier_candidates(signal_date)
+                    tier_codes, used_tier = tier_result
+                    candidate_codes = tier_codes
 
-                        if mode == "hybrid_transition" and self.use_weekly_alpha_gate:
-                            weekly_codes = data_handler.get_filtered_stock_codes(current_date)
-                            weekly_set = set(weekly_codes)
-                            original_count = len(candidate_codes)
-                            candidate_codes = [code for code in candidate_codes if code in weekly_set]
-                            
-                            tqdm.write(f"[Strategy] {current_date.date()} | Hybrid: Tier({used_tier}, {original_count}) & Weekly({len(weekly_codes)}) -> Intersection({len(candidate_codes)})")
-                    except Exception as exc:
-                        print(f"[Warning] Tier candidate lookup failed ({exc}). Falling back to weekly.")
-                        candidate_codes = data_handler.get_filtered_stock_codes(current_date)
-                else:
-                    # Fallback if method missing (should not happen with correct DataHandler)
-                    print(f"[Warning] get_candidates_with_tier_fallback missing. Falling back to weekly.")
-                    candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+                    from tqdm import tqdm
+                    if used_tier.startswith("TIER_2_FALLBACK"):
+                        tqdm.write(
+                            f"[Strategy] {current_date.date()} | Fallback: Tier 1 (0) -> Tier 2 ({len(candidate_codes)})"
+                        )
+                except Exception as exc:
+                    print(f"[Warning] Tier candidate lookup failed ({exc}). Returning empty candidate set.")
+                    candidate_codes = []
             else:
-                # Default fallback
-                candidate_codes = data_handler.get_filtered_stock_codes(current_date)
+                print("[Warning] get_candidates_with_tier_fallback missing. Returning empty candidate set.")
+                candidate_codes = []
             # --- [Issue #67] Logic End ---
             
             active_candidates = []
