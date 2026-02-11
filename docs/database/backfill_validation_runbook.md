@@ -72,17 +72,47 @@ WHERE date > CURDATE();
 - 대량 DDL/인덱스 재생성/테이블 truncate
 - 동일 테이블에 대량 update를 유발하는 보정 배치(`adj_close`/`adj_ratio`)
 
-## 5) 장애 복구 원칙
+## 5) `adj_close`/`adj_ratio` 백테스트 보장 구간 게이트 (원천 blocked 대응)
+
+`get_stock_major_changes` 원천이 장기간 empty를 반환하는 상황에서는, 전기간 100% 커버 대신 "장기 백테스트 보장 구간" 품질 게이트로 종료 판단한다.
+
+- 백테스트 보장 구간 게이트(필수):
+  - 기본 구간: `date >= '2013-11-20'` (일자 단위 완전 커버 시작일)
+  - `adj_close_not_null = total`
+  - `adj_ratio_not_null = total`
+  - `ratio_mismatch = 0`
+- 레거시 구간(보장 구간 이전):
+  - `adj_* NULL` 허용
+  - 다만 `adj_close IS NOT NULL AND close_price > 0`인 행의 `adj_ratio`는 mismatch 0 유지
+
+```sql
+SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN adj_close IS NOT NULL THEN 1 ELSE 0 END) AS adj_close_not_null,
+  SUM(CASE WHEN adj_ratio IS NOT NULL THEN 1 ELSE 0 END) AS adj_ratio_not_null,
+  SUM(
+    CASE
+      WHEN adj_close IS NOT NULL
+       AND close_price > 0
+       AND (adj_ratio IS NULL OR ABS(adj_ratio - (adj_close / close_price)) > 1e-8)
+      THEN 1 ELSE 0
+    END
+  ) AS ratio_mismatch
+FROM DailyStockPrice
+WHERE date >= '2013-11-20';
+```
+
+## 6) 장애 복구 원칙
 
 - 기본은 `resume=True` 재실행 (동일 명령 재사용)
 - 재현성 검증이 필요하면 해당 구간만 삭제 후 재실행
 - `--allow-legacy-fallback`은 운영 안정화 전까지 기본 비활성 유지
 
-## 6) `CalculatedIndicators` 재계산 실행안 (즉시 실행용)
+## 7) `CalculatedIndicators` 재계산 실행안 (즉시 실행용)
 
 `DailyStockPrice`를 KRX raw 기준으로 재적재한 뒤에는 기존 `CalculatedIndicators`가 stale일 수 있으므로 재계산이 필요하다.
 
-### 6-1) 실행 기준 (전체 vs 구간)
+### 7-1) 실행 기준 (전체 vs 구간)
 
 - 전체 재계산 선택:
   - `DailyStockPrice` 재적재 시작일이 기존 지표 최소일보다 과거로 확장됨
@@ -93,7 +123,7 @@ WHERE date > CURDATE();
   - 과거 구간 원본 데이터 변경이 없음을 확인함
   - 빠른 운영 복구가 우선이고, 이후 전체 재계산 슬롯이 따로 있음
 
-### 6-2) 권장: 전체 재계산 (정합성 우선)
+### 7-2) 권장: 전체 재계산 (정합성 우선)
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
@@ -111,7 +141,7 @@ finally:
 PY
 ```
 
-### 6-3) 대안: 최근 구간만 재계산 (시간 단축)
+### 7-3) 대안: 최근 구간만 재계산 (시간 단축)
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
@@ -131,7 +161,7 @@ finally:
 PY
 ```
 
-### 6-4) 롤백 기준/명령
+### 7-4) 롤백 기준/명령
 
 - 롤백 트리거(둘 중 하나라도 충족):
   - 검증 SQL에서 `future_rows > 0` 또는 PK 유사 중복(`duplicate_like_rows > 0`)
@@ -175,11 +205,11 @@ finally:
 PY
 ```
 
-## 7) Tier 규칙 튜닝 초안 (read-only)
+## 8) Tier 규칙 튜닝 초안 (read-only)
 
 아래 초안은 현재 통계(최근 20거래일 평균 거래대금 분위수, 재무 위험 비율, 수급 양수 비율) 기반이다.
 
-### 7-1) 변수 의미
+### 8-1) 변수 의미
 
 - `lookback_days`
   - 의미: 평균 거래대금 계산에 사용하는 롤링 윈도우(거래일 수)
@@ -207,7 +237,7 @@ PY
   - 그 외 → `tier=2`
   - 추가로 `bps <= 0` 또는 `roe < 0`이면 `tier=3`으로 override
 
-### 7-2) 임계값 후보(A/B/C)
+### 8-2) 임계값 후보(A/B/C)
 
 - A안(보수): `danger_liquidity=500,000,000`, `prime_liquidity=2,000,000,000`
 - B안(기본): `danger_liquidity=300,000,000`, `prime_liquidity=1,000,000,000`
@@ -243,7 +273,7 @@ PY
 
 분포 비교 후 최종안을 고르면 그때 `pipeline_batch`로 실제 재적재한다.
 
-### 7-3) 0값/결측값 의미 정책 (수집기 반영, 2026-02-09)
+### 8-3) 0값/결측값 의미 정책 (수집기 반영, 2026-02-09)
 
 - 원칙: `NULL`은 미관측/미수집, `0`은 관측된 실제 값으로 취급
 - `FinancialData`
@@ -276,17 +306,17 @@ WHERE COALESCE(individual_net_buy, 0)=0
   AND COALESCE(total_net_buy, 0)=0;
 ```
 
-## 8) Investor 포함 read-only 검증 결과 (2026-02-08)
+## 9) Investor 포함 read-only 검증 결과 (2026-02-08)
 
 Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시나리오를 read-only로 비교했다.
 
-### 8-1) 비교 시나리오
+### 9-1) 비교 시나리오
 
 - A안: `danger=100m`, `prime=1b` + `tier1`에서 `flow_ratio20 < -0.02`이면 `tier2` 강등
 - B안: `danger=300m`, `prime=1b` + `flow_ratio20 <= -0.03`이면 `tier`를 1단계 강등
 - C안: `danger=300m`, `prime=1b` + `tier2`에서 `flow5 < -500,000,000`이면 `tier3` 강등
 
-### 8-2) read-only 결과 요약
+### 9-2) read-only 결과 요약
 
 - A안: `tier1=22.23%`, `tier2=45.38%`, `tier3=32.39%`, `flow_impact=9.79%`, `churn=2.90%`
 - B안: `tier1=23.76%`, `tier2=23.45%`, `tier3=52.79%`, `flow_impact=13.77%`, `churn=3.82%`
@@ -297,7 +327,7 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 - C는 영향도가 낮고(`1.88%`) 분포 교란이 작아 v1 운영 안정성에 유리하다.
 - 현재 데이터 구간에서 `forward 20d downside monotonicity`는 모든 시나리오에서 미충족이었고, 이는 임계값 문제와 별개로 데이터 커버리지/구조 영향이 크므로 참고 지표로만 사용한다.
 
-### 8-3) v1 확정안 (운영 기준)
+### 9-3) v1 확정안 (운영 기준)
 
 - `lookback_days = 20`
 - `financial_lag_days = 45`
@@ -307,13 +337,13 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 - 수급 최소 규칙(v1): `tier2`에서만 `flow5 < -500,000,000`이면 `tier3` 강등
 - 결측 규칙: `InvestorTradingTrend` 미존재 날짜/종목은 수급 규칙 미적용(기본 tier 유지)
 
-### 8-4) 적용 순서
+### 9-4) 적용 순서
 
 1. 위 파라미터로 read-only shadow를 1주간 유지
 2. `flow_impact`, `tier churn`, `tier distribution` 일별 점검
 3. 이상 없으면 `daily_stock_tier_batch`에 수급 규칙을 write 경로로 반영
 
-### 8-5) `lookback_days` / `financial_lag_days` 운영 권고
+### 9-5) `lookback_days` / `financial_lag_days` 운영 권고
 
 - 교차 검토 결론:
   - `lookback_days=20`은 유지(월 단위 유동성 안정성과 반응성 균형)
@@ -326,11 +356,11 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 2. 후보 그리드: `lookback {20,30}`, `lag {45,60}`, `danger {100m,300m,500m}`, `prime {800m,1b,2b}`
 3. 단일 fold 최고값 채택 금지, fold median/majority 기반 확정
 
-## 9) Tier v1 write 최종 게이트 (feature flag 기본 OFF)
+## 10) Tier v1 write 최종 게이트 (feature flag 기본 OFF)
 
 기본 정책: `pipeline_batch`의 Tier v1 write 플래그는 기본 비활성(`off`)이며, 게이트 통과 전에는 활성화하지 않는다.
 
-### 9-1) read-only 편차 점검 명령
+### 10-1) read-only 편차 점검 명령
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
@@ -401,13 +431,13 @@ finally:
 PY
 ```
 
-### 9-2) 통과 기준 (v1)
+### 10-2) 통과 기준 (v1)
 
 - `flow_impact_pct <= 3.0`
 - `churn_pct <= 3.5`
 - 점검 기간의 `tier` 분포 급변 없음(전일 대비 이상치 변동 없음)
 
-### 9-3) write 적용 명령 (게이트 통과 후에만)
+### 10-3) write 적용 명령 (게이트 통과 후에만)
 
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u -m src.pipeline_batch \
@@ -422,7 +452,7 @@ PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u -m src.pip
 운영 기본값 유지:
 - `--enable-tier-v1-write`를 전달하지 않으면 v1 write는 비활성(OFF)
 
-## 10) 백필 종료 운영 로그 템플릿 (고정 포맷)
+## 11) 백필 종료 운영 로그 템플릿 (고정 포맷)
 
 백필 종료 시 아래 포맷으로 운영노트/이슈 코멘트에 고정 기록한다.
 

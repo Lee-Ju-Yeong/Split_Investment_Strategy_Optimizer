@@ -7,7 +7,7 @@
 ## 이슈별 상세 TODO 문서
 - [x] 이슈 #64 PIT/룩어헤드 방지: `todos/done_2026_02_07-issue64-point-in-time-lookahead-bias.md`
 - [x] 이슈 #65 스키마/인덱스 확장: `todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md`
-- [ ] 이슈 #66 수집기 분리/사전계산 배치: `todos/2026_02_07-issue66-financial-investor-collector-tier-batch.md`
+- [x] 이슈 #66 수집기 분리/사전계산 배치: `todos/done_2026_02_07-issue66-financial-investor-collector-tier-batch.md`
 - [x] 이슈 #70 상폐 포함 Historical Universe: `todos/done_2026_02_08-issue70-historical-ticker-universe-delisted.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
@@ -36,18 +36,26 @@
   - 실행 커맨드: `python -m src.ohlcv_batch --start-date 19950101 --end-date <today> --log-interval 20`
   - 운영 원칙: `resume=True` 유지(중단 후 동일 명령 재실행), `allow_legacy_fallback=False` 유지
   - 검증 결과(2026-02-08): `rows_total=14,750,953`, `tickers_total=4,795`, `min_date=1995-05-08`, `max_date=2026-02-06`, `duplicate_like_rows=0`, `future_rows=0`
-- [ ] `adj_close`/`adj_ratio` 파생 계산 배치 추가: raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
+- [x] `adj_close`/`adj_ratio` 파생 계산 배치 추가: raw OHLCV 적재 이후 보정계수 산출 및 업데이트 배치 구현
   - [x] Step 1: `CorporateMajorChanges` 스키마 추가 및 `DailyStockPrice` 컬럼 검증
   - [x] Step 2: `corporate_event_collector.py` 구현 및 백필 준비
   - [x] Step 2-1: `corporate_event_collector.py` 관측성/동시성 보강
     - fetch 결과를 `fetch_errors | empty_results | nonempty_results | normalize_empty`로 분리 계측
     - write buffer flush 경로에서 중첩 lock 제거(잠재 deadlock 리스크 완화)
-  - [ ] Step 2-2: pykrx 원천 응답 정상화 확인(운영 블로커)
+  - [x] Step 2-2: pykrx 원천 응답 정상화 확인(운영 블로커 종료)
     - 2026-02-10 full run: `processed=5216`, `saved_rows=0`, `fetch_errors=0`, `empty=5216`
-    - 상태 해석: 수집기 오류보다 `pykrx` major-changes endpoint 전량 empty 응답 가능성이 높음
-    - 운영 가드: preflight health-check(`ticker_count`, 샘플 major_changes) fail 시 배치 skip/blocked 처리
+    - 상태 해석: 수집기 오류가 아니라 원천(`get_stock_major_changes`) 데이터 부재로 판단
+    - 결정(2026-02-11): 해당 원천 복구 전까지 `CorporateMajorChanges` 확장 수집은 `external_blocked`로 종료 처리
+    - 운영 가드: preflight health-check(`ticker_count`, 샘플 major_changes) fail 시 배치 skip/blocked 처리 유지
   - [x] Step 3: `ohlcv_adjusted_updater.py` 구현 및 테스트(5종) 통과
-  - [ ] Step 4: 수정 주가 기반 `CalculatedIndicators` 전체 재계산 (보류/대기)
+  - [x] Step 4: 백테스트 보장 구간 기준 종료(지표 계산은 raw `close_price` SSOT 유지)
+    - 근거: `indicator_calculator`는 `DailyStockPrice.close_price` 기반 계산 경로를 사용
+    - 정책: `adj_close/adj_ratio`는 보정 참조용 파생 컬럼으로 유지하고, 지표 재계산의 강제 게이트에서 분리
+  - 운영 실측(2026-02-11):
+    - 전체: `total=14,750,953`, `adj_close_not_null=8,417,573`, `adj_ratio_not_null=8,417,559`, `ratio_mismatch=0`
+    - 연도 기준: `2014~2026` 각 연도에서 `close_price>0` 행 대비 `adj_close/adj_ratio` 100% (`ratio_mismatch=0`)
+    - 일자 기준 최초 완전 커버 시작일: `2013-11-20` (해당 일자 이후 `close_price>0` 행 `adj_*` 누락 0)
+    - 결론: 장기 백테스트 보장 구간을 `2013-11-20` 이후로 정의하고, 이전 레거시 구간 null은 허용
 - [x] `FinancialData`/`InvestorTradingTrend` 0값 의미 정리(수집기 정책 반영)
   - `FinancialData`: `per<=0`, `pbr<=0`은 `NULL`로 정규화(기존 누적 데이터 포함)
   - `InvestorTradingTrend`: 컬럼 미탐지/미관측은 `NULL`, all-zero 무의미 row는 저장 제외
