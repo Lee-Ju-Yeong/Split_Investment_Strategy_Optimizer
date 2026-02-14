@@ -157,6 +157,30 @@ def create_tables(conn):
     )
     ''')
     cur.execute('''
+    CREATE TABLE IF NOT EXISTS MarketCapDaily (
+        stock_code VARCHAR(20),
+        date DATE,
+        market_cap BIGINT NULL,
+        shares_outstanding BIGINT NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS ShortSellingDaily (
+        stock_code VARCHAR(20),
+        date DATE,
+        short_volume BIGINT NULL,
+        short_value BIGINT NULL,
+        short_balance BIGINT NULL,
+        short_balance_value BIGINT NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
     CREATE TABLE IF NOT EXISTS DailyStockTier (
         date DATE,
         stock_code VARCHAR(20),
@@ -209,6 +233,8 @@ def create_tables(conn):
     ensure_index('FinancialData', 'idx_financial_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')
+    ensure_index('MarketCapDaily', 'idx_mcap_date_stock', 'date, stock_code')
+    ensure_index('ShortSellingDaily', 'idx_short_date_stock', 'date, stock_code')
     ensure_index('DailyStockTier', 'idx_tier_stock_date', 'stock_code, date')
     ensure_index('DailyStockTier', 'idx_tier_date_tier_stock', 'date, tier, stock_code')
     ensure_index('TickerUniverseSnapshot', 'idx_tus_stock_date', 'stock_code, snapshot_date')

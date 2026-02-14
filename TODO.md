@@ -14,6 +14,9 @@
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
 
+## 개발 메모
+- 로컬 DB 없이 노트북에서 진행 가능한 작업 목록: `todos/2026_02_14-notebook-no-local-db-dev.md`
+
 ## 전체 우선순위 (Global Backlog)
 
 ### P0 (신뢰도/데이터 정합성 선행)

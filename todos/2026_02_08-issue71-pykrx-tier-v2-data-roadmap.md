@@ -2,6 +2,12 @@
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71`
 - 목적: pykrx에서 추가 수집 가능한 데이터를 Tier 고도화에 단계적으로 반영하기 위한 실행 로드맵 고정
 
+## 0. 진행 현황 (2026-02-14)
+- [x] Phase P0 테이블 DDL/인덱스 추가: `MarketCapDaily`, `ShortSellingDaily`
+- [x] 수집 워커 추가: `src/market_cap_collector.py`, `src/short_selling_collector.py`
+- [x] 배치 엔트리 확장: `src/pipeline_batch.py`에 `--run-marketcap`, `--run-shortsell` 옵션 추가
+- [ ] pykrx source health-check preflight 유틸/가드(전량 empty 패턴 fail-fast) 공통화
+
 ## 1. 배경
 - 현재 운영 축은 `DailyStockPrice` / `FinancialData` / `InvestorTradingTrend` / `DailyStockTier`
 - Tier는 유동성 + 재무 위험 중심이며, 수급/공매도/외국인 보유/섹터 히스토리 반영이 제한적
@@ -14,6 +20,35 @@
 4. Optuna 기반 파라미터 탐색 적용 범위/전제조건 고정
 
 ## 3. 데이터 우선순위
+### 3-0. PyKrx API 매핑 (구현용, 2026-02-14 업데이트)
+
+아래는 각 데이터셋을 어떤 pykrx API로 적재할지의 "원천 매핑"이다.
+
+- 교차검토(Gemini) 요약:
+  - P0(필수): `MarketCapDaily`, `ShortSellingDaily`
+  - P1(성능/해석력 개선): `ForeignOwnershipDaily`, `SectorClassificationHistory`(스냅샷 + SCD Type2)
+  - 제외/보류:
+    - `get_stock_major_changes`: 원천 자체에 데이터가 없는 것으로 확인(health-check/preflight에 포함 금지)
+    - OHLCV/가격변동: 이미 `DailyStockPrice`에서 처리(중복 수집 금지)
+    - 투자자 매매/순매수: 이미 `InvestorTradingTrend`에서 처리(중복 수집은 drift/불일치 위험)
+    - ETF/ETN/ELW: Tier v2(주식 후보군/리스크) MVP 범위 밖(필요 시 별도 이슈로 분리)
+
+- `MarketCapDaily`
+  - API: `pykrx.stock.get_market_cap(<date>)` (전종목), `get_market_cap_by_ticker(<start>, <end>, <ticker>)`
+  - 비고: `market_cap`, `shares_outstanding`는 수급/공매도 지표의 정규화 분모로 사용
+- `ShortSellingDaily`
+  - API(권장): `pykrx.stock.get_shorting_status_by_date(<start>, <end>, <ticker>)` (기간/종목)
+  - API(보조): `get_shorting_volume_by_ticker(<date>, <market>)`, `get_shorting_value_by_ticker(<date>, <market>)` (단, volume/value만; balance 계열은 별도 처리 필요)
+  - 비고: 공매도는 KRX 정책상 최근일(T+2) 지연이 있으므로 preflight에서 날짜 선택을 보수적으로 한다.
+- `ForeignOwnershipDaily`
+  - API: `pykrx.stock.get_exhaustion_rates_of_foreign_investment(<date>, <market>)`
+  - 비고: 외국인 "flow(순매수)"와 "stock(보유/한도)"를 분리해 해석하기 위한 신호
+- `SectorClassificationHistory`
+  - API: `pykrx.stock.get_market_sector_classifications(<date>)`
+  - 비고: `get_stock_major_changes`가 원천 자체 empty인 상황에서는, 섹터 히스토리를 "스냅샷 수집 + 변경 감지(SCD Type2)"로 재구축한다.
+- `IndexDaily`, `IndexConstituentHistory`
+  - API: `pykrx.stock.get_index_ohlcv(<start>, <end>, <index_ticker>)`, `get_index_ticker_list(<date>)`, `get_index_portfolio_deposit_file(<index_ticker>, <date?>)`
+
 ### 3-1. Phase P0 (필수)
 - `MarketCapDaily`
   - 필드: `date`, `stock_code`, `market_cap`, `shares_outstanding`
@@ -29,6 +64,10 @@
 - `SectorClassificationHistory`
   - 필드: `stock_code`, `sector_code`, `sector_name`, `announce_date`, `effective_date`, `end_date`
   - 용도: 섹터 상대강도 및 구조 변화 반영
+  - 수집/적재 방식(권장):
+    - `get_market_sector_classifications(date)`를 주기적으로(예: weekly) 스냅샷 저장
+    - 종목별로 `sector_code/sector_name` 변경 감지 시 기존 row의 `end_date`를 닫고 신규 row를 생성(SCD Type2)
+    - pykrx 원천에서 `announce_date/effective_date`를 직접 제공하지 않으므로, 기본은 `effective_date=snapshot_date`, `announce_date=NULL` 또는 `announce_date=effective_date`로 저장한다.
 
 ### 3-3. Phase P2 (고도화)
 - `IndexDaily`
@@ -72,8 +111,16 @@
 - 결측 시 가중치 재정규화, 핵심 신호 다중 결측 시 `Tier3` 강등
 - 배치 실패는 부분성공 플래그 + 최근 N일 재수집으로 복구
 - pykrx source health-check preflight를 수집 배치 공통 가드로 고정
-  - 최소 체크: `get_market_ticker_list(<date>) > 0`, 샘플 `get_stock_major_changes(<largecap>)` 응답 확인
-  - fail 조건: 전량 empty 응답 패턴 감지 시 해당 배치 `blocked/skip` 처리(무의미한 full run 방지)
+  - 최소 체크(권장):
+    - `get_market_ticker_list(<date>) > 0`
+    - 샘플 `get_market_cap(<date>)` non-empty
+    - 샘플 `get_market_fundamental(<date>)` non-empty
+    - 섹터 스냅샷을 도입한 경우 `get_market_sector_classifications(<date>)` non-empty
+    - 공매도는 `T+2` 지연을 고려해 `today-3~today-10` 범위의 적절한 거래일로 샘플 호출
+  - fail 조건:
+    - 전량 empty 응답 패턴 감지 시 해당 배치 `blocked/skip` 처리(무의미한 full run 방지)
+  - 주의:
+    - `get_stock_major_changes`는 원천 자체에 데이터가 없는 것으로 확인된 상태이므로, 다른 수집 배치의 preflight에 포함하지 않는다(별도 external_blocked 처리).
 - Optuna는 lookahead 방지 규칙을 동일 적용하고, 학습/검증 구간 분리(WFO fold 단위)로만 실행
 - Optuna 결과 운영 반영은 feature flag로 점진 전환하고, 이상 징후 시 legacy 설정으로 즉시 롤백
 
@@ -90,6 +137,10 @@
 - [ ] Tier v2 read-only 실험 스크립트 추가
 - [ ] PIT/왜곡 방지 검증 항목 테스트화
 - [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+- [ ] `MarketCapDaily` 적재 단계에서 `Common Stock`만 포함되도록 종목 마스터/유니버스와 조인해 제외 규칙 고정(ETF/ETN/ELW/SPAC 등)
+- [ ] 거래정지/비정상 거래일 파생 플래그(halt/zero-volume) 정책 정의(매수 제한/리스크 대응용)
+- [ ] (선택) `get_market_fundamental(date)` 기반 `FundamentalDaily` 병행 수집 여부 결정(일별 trailing PER/PBR 등)
+- [ ] `SectorClassificationHistory` 스냅샷 수집 + SCD Type2 적재 워커 추가
 - [ ] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정)
 - [ ] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가
 - [ ] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`)

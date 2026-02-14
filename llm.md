@@ -17,7 +17,7 @@
 
 ## 2. Quick Commands
 
-> Last Verified: 2026-02-08
+> Last Verified: 2026-02-14
 > 엔트리포인트/CLI 옵션 변경 시 이 섹션을 즉시 갱신합니다.
 
 ```bash
@@ -35,9 +35,15 @@ python -c "from src.db_setup import get_db_connection, create_tables; conn=get_d
 # 데이터 파이프라인 (Legacy/General)
 python -m src.main_script
 
-# 배치 오케스트레이터 (Financial/Investor/Tier)
+# 배치 오케스트레이터 (Financial/Investor/Tier + optional MarketCap/ShortSelling)
 python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
 python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
+python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --run-marketcap --run-shortsell
+python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD> --run-marketcap --run-shortsell
+
+# 확장 데이터셋 배치 (Issue #71 Phase P0)
+python -m src.market_cap_collector --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
+python -m src.short_selling_collector --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
 
 # Historical Universe 배치 (상폐 포함 PIT 유니버스)
 python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
@@ -102,6 +108,8 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `daily_stock_tier_batch.py`: Tier 사전 계산 워커
 - `financial_collector.py`: FinancialData 수집 워커
 - `investor_trading_collector.py`: InvestorTradingTrend 수집 워커
+- `market_cap_collector.py`: MarketCapDaily 수집 워커 (Issue #71 P0)
+- `short_selling_collector.py`: ShortSellingDaily 수집 워커 (Issue #71 P0)
 - `config_loader.py`: `config/config.yaml` 로드
 
 ### Key Design Principles

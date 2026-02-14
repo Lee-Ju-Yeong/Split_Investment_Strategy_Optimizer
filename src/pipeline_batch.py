@@ -16,6 +16,8 @@ from .db_setup import create_tables, get_db_connection
 from .daily_stock_tier_batch import run_daily_stock_tier_batch
 from .financial_collector import run_financial_batch
 from .investor_trading_collector import run_investor_trading_batch
+from .market_cap_collector import run_market_cap_batch
+from .short_selling_collector import run_short_selling_batch
 from .ticker_universe_batch import run_ticker_universe_batch
 
 
@@ -27,11 +29,18 @@ def run_pipeline_batch(
     run_universe=False,
     run_financial=True,
     run_investor=True,
+    run_market_cap=False,
+    run_short_selling=False,
     run_tier=True,
     financial_workers=4,
     financial_write_batch_size=20000,
     investor_workers=4,
     investor_write_batch_size=20000,
+    market_cap_workers=4,
+    market_cap_write_batch_size=20000,
+    short_selling_workers=4,
+    short_selling_write_batch_size=20000,
+    short_selling_lag_trading_days=3,
     universe_markets=None,
     universe_step_days=7,
     universe_workers=1,
@@ -88,6 +97,29 @@ def run_pipeline_batch(
             workers=investor_workers,
             write_batch_size=investor_write_batch_size,
             log_interval=log_interval,
+        )
+
+    if run_market_cap:
+        summary["market_cap"] = run_market_cap_batch(
+            conn=conn,
+            mode=mode,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+            workers=market_cap_workers,
+            write_batch_size=market_cap_write_batch_size,
+            log_interval=log_interval,
+        )
+
+    if run_short_selling:
+        summary["short_selling"] = run_short_selling_batch(
+            conn=conn,
+            mode=mode,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+            workers=short_selling_workers,
+            write_batch_size=short_selling_write_batch_size,
+            log_interval=log_interval,
+            lag_trading_days=short_selling_lag_trading_days,
         )
 
     if run_tier:
@@ -198,6 +230,46 @@ def _build_arg_parser():
         help="Skip InvestorTradingTrend collection.",
     )
     parser.add_argument(
+        "--run-marketcap",
+        action="store_true",
+        help="Run MarketCapDaily collection (pykrx get_market_cap by ticker/date-range).",
+    )
+    parser.add_argument(
+        "--marketcap-workers",
+        type=int,
+        default=4,
+        help="Worker count for MarketCapDaily API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--marketcap-write-batch-size",
+        type=int,
+        default=20000,
+        help="Row batch size for MarketCapDaily upsert commits.",
+    )
+    parser.add_argument(
+        "--run-shortsell",
+        action="store_true",
+        help="Run ShortSellingDaily collection (pykrx get_shorting_status_by_date by ticker).",
+    )
+    parser.add_argument(
+        "--shortsell-workers",
+        type=int,
+        default=4,
+        help="Worker count for ShortSellingDaily API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--shortsell-write-batch-size",
+        type=int,
+        default=20000,
+        help="Row batch size for ShortSellingDaily upsert commits.",
+    )
+    parser.add_argument(
+        "--shortsell-lag-trading-days",
+        type=int,
+        default=3,
+        help="Clamp end_date by N trading days to account for short-selling publication lag (default: 3).",
+    )
+    parser.add_argument(
         "--skip-tier",
         action="store_true",
         help="Skip DailyStockTier pre-calculation.",
@@ -252,11 +324,18 @@ def main():
             f"run_universe={args.run_universe}, "
             f"run_financial={not args.skip_financial}, "
             f"run_investor={not args.skip_investor}, "
+            f"run_market_cap={args.run_marketcap}, "
+            f"run_short_selling={args.run_shortsell}, "
             f"run_tier={not args.skip_tier}, "
             f"financial_workers={args.financial_workers}, "
             f"financial_write_batch_size={args.financial_write_batch_size}, "
             f"investor_workers={args.investor_workers}, "
             f"investor_write_batch_size={args.investor_write_batch_size}, "
+            f"market_cap_workers={args.marketcap_workers}, "
+            f"market_cap_write_batch_size={args.marketcap_write_batch_size}, "
+            f"short_selling_workers={args.shortsell_workers}, "
+            f"short_selling_write_batch_size={args.shortsell_write_batch_size}, "
+            f"short_selling_lag_trading_days={args.shortsell_lag_trading_days}, "
             f"tier_v1_write_enabled={args.enable_tier_v1_write}, "
             f"log_interval={args.log_interval}"
         )
@@ -269,11 +348,18 @@ def main():
             run_universe=args.run_universe,
             run_financial=not args.skip_financial,
             run_investor=not args.skip_investor,
+            run_market_cap=args.run_marketcap,
+            run_short_selling=args.run_shortsell,
             run_tier=not args.skip_tier,
             financial_workers=max(int(args.financial_workers), 1),
             financial_write_batch_size=max(int(args.financial_write_batch_size), 1),
             investor_workers=max(int(args.investor_workers), 1),
             investor_write_batch_size=max(int(args.investor_write_batch_size), 1),
+            market_cap_workers=max(int(args.marketcap_workers), 1),
+            market_cap_write_batch_size=max(int(args.marketcap_write_batch_size), 1),
+            short_selling_workers=max(int(args.shortsell_workers), 1),
+            short_selling_write_batch_size=max(int(args.shortsell_write_batch_size), 1),
+            short_selling_lag_trading_days=max(int(args.shortsell_lag_trading_days), 0),
             universe_markets=[
                 market.strip().upper()
                 for market in args.universe_markets.split(",")
