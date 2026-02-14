@@ -1,36 +1,35 @@
 # src/walk_forward_analyzer.py
 
-import pandas as pd
-import numpy as np
-from datetime import timedelta, datetime
-from tqdm import tqdm
-import os
-import matplotlib.pyplot as plt
-import seaborn as sns
+from __future__ import annotations
 
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score
-from sklearn.neighbors import NearestNeighbors
+import os
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from .config_loader import load_config
-# 실제 워커 함수 및 분석 모듈 임포트
-from .parameter_simulation_gpu import find_optimal_parameters
-from .debug_gpu_single_run import run_single_backtest
-from .performance_analyzer import PerformanceAnalyzer
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 # --- Clustering Helper Function ---
 def find_robust_parameters(
-    simulation_results_df: pd.DataFrame,
+    simulation_results_df: "pd.DataFrame",
     param_cols: list,
     metric_cols: list,
     k_range: tuple = (2, 11),
     min_cluster_size_ratio: float = 0.05
-) -> (dict, pd.DataFrame):
+) -> tuple[dict, "pd.DataFrame | None"]:
     """
     K-Means 클러스터링을 사용하여 시뮬레이션 결과에서 가장 강건한 파라미터 조합을 찾습니다.
     (WFO 파이프라인에 통합하기 위해 시각화 코드는 제거된 버전)
     """
+    import numpy as np
+    import pandas as pd
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    from sklearn.neighbors import NearestNeighbors
+    from sklearn.preprocessing import StandardScaler
+
     print("\n--- 4a. Robust Parameter Search via Clustering ---")
     features = param_cols + metric_cols
     df = simulation_results_df[features].dropna()
@@ -89,8 +88,14 @@ def find_robust_parameters(
     
     return best_params_series.to_dict(), clustered_df_full
 # --- 분석 및 시각화 헬퍼 함수 ---
-def plot_wfo_results(final_curve: pd.Series, params_df: pd.DataFrame, results_dir: str):
+def plot_wfo_results(final_curve: "pd.Series", params_df: "pd.DataFrame", results_dir: str):
     """최종 WFO 결과(수익곡선, 파라미터 분포)를 시각화하고 저장합니다."""
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    from .performance_analyzer import PerformanceAnalyzer
+
     print("\n" + "="*80)
     print("🎨 Generating WFO result plots...")
     print("="*80)
@@ -143,6 +148,15 @@ def run_walk_forward_analysis():
     """
     Walk-Forward Optimization 프로세스 전체를 총괄하는 오케스트레이터 함수.
     """
+    import numpy as np
+    import pandas as pd
+    from tqdm import tqdm
+
+    # 실제 워커 함수 및 분석 모듈은 GPU 환경에서만 필요하므로 lazy import
+    from .debug_gpu_single_run import run_single_backtest
+    from .parameter_simulation_gpu import find_optimal_parameters
+    from .performance_analyzer import PerformanceAnalyzer
+
     # 1. 설정 로드
     config = load_config()
     wfo_settings = config['walk_forward_settings']
