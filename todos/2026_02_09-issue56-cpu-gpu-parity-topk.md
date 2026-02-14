@@ -19,6 +19,14 @@
   - mismatch `> 0`이면 즉시 `AssertionError`로 fail-fast
 - [ ] top-k/scenario pack parity는 후속 구현 필요
 
+## 0-2. 진행 현황 업데이트 (2026-02-14)
+- [x] top-k 배치 parity 하네스(기본형) 추가:
+  - `src/cpu_gpu_parity_topk.py`
+  - 입력: (옵션) top-k 파라미터 CSV(최적화 결과/수동 생성) + 기간/현금/허용오차
+  - 동작: GPU는 N개 파라미터를 1회 배치 실행, CPU는 N회 순차 실행 후 equity curve 정합성 비교
+  - 산출물: mismatch 발생 시 first mismatch 포함 JSON report (`--out`) 생성
+- [ ] scenario pack(`seeded_stress`, `jackknife_drop_topN`)는 후속 구현 필요
+
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙
 - 현재 단일 실행 비교만으로는 대규모 조합의 edge case drift를 놓칠 수 있음

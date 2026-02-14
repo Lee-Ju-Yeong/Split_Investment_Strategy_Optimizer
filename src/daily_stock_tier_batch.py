@@ -148,21 +148,82 @@ def fetch_price_history(conn, start_date, end_date, ticker_codes=None):
         return pd.read_sql(query, conn, params=params)
 
 
-def fetch_financial_history(conn, end_date, ticker_codes=None):
-    params = [end_date]
-    query = """
+def fetch_financial_history(conn, end_date, ticker_codes=None, start_date=None):
+    """
+    Fetch financial history up to `end_date`.
+
+    When `start_date` is provided, it returns:
+      1) rows in [start_date, end_date]
+      2) plus the latest row per stock_code before start_date (PIT-friendly as-of seed)
+
+    This prevents loading the entire FinancialData table for long backfills while
+    preserving merge_asof correctness within the requested window.
+    """
+    end_date = str(end_date)
+
+    def _read_sql(query, params):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return pd.read_sql(query, conn, params=params)
+
+    if start_date is None:
+        params = [end_date]
+        query = """
+            SELECT stock_code, date, roe, bps
+            FROM FinancialData
+            WHERE date <= %s
+        """
+        if ticker_codes:
+            in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+            query += in_sql
+            params.extend(in_params)
+        query += " ORDER BY stock_code, date"
+        return _read_sql(query, params=params)
+
+    start_date = str(start_date)
+
+    params = [start_date, end_date]
+    range_query = """
         SELECT stock_code, date, roe, bps
         FROM FinancialData
-        WHERE date <= %s
+        WHERE date BETWEEN %s AND %s
     """
     if ticker_codes:
         in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
-        query += in_sql
+        range_query += in_sql
         params.extend(in_params)
-    query += " ORDER BY stock_code, date"
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return pd.read_sql(query, conn, params=params)
+    range_query += " ORDER BY stock_code, date"
+    in_range = _read_sql(range_query, params=params)
+
+    prev_params = [start_date]
+    prev_query = """
+        SELECT f.stock_code, f.date, f.roe, f.bps
+        FROM FinancialData f
+        JOIN (
+            SELECT stock_code, MAX(date) AS max_date
+            FROM FinancialData
+            WHERE date < %s
+    """
+    if ticker_codes:
+        in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+        prev_query += in_sql
+        prev_params.extend(in_params)
+    prev_query += """
+            GROUP BY stock_code
+        ) latest
+        ON f.stock_code = latest.stock_code AND f.date = latest.max_date
+        ORDER BY f.stock_code, f.date
+    """
+    prev_rows = _read_sql(prev_query, params=prev_params)
+
+    if in_range.empty and prev_rows.empty:
+        return in_range
+
+    combined = pd.concat([prev_rows, in_range], ignore_index=True)
+    combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+    combined = combined.dropna(subset=["date"])
+    combined.sort_values(["stock_code", "date"], inplace=True)
+    return combined
 
 
 def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
@@ -433,6 +494,7 @@ def run_daily_stock_tier_batch(
 
     financial_df = fetch_financial_history(
         conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
