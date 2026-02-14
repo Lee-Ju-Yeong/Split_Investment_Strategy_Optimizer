@@ -11,13 +11,161 @@ from .config_loader import load_config
 if TYPE_CHECKING:
     import pandas as pd
 
+
+def _normalize_additional_buy_priority(value: object) -> str:
+    """
+    Canonicalize `additional_buy_priority` to the string values expected by workers.
+
+    Notes:
+    - GPU optimization results may carry this as numeric 0/1.
+    - CPU strategy treats any non-"lowest_order" as drop-priority, but GPU workers map string->0/1.
+    """
+    if value is None:
+        return "lowest_order"
+
+    if isinstance(value, (int, float)):
+        try:
+            return "highest_drop" if int(value) == 1 else "lowest_order"
+        except (TypeError, ValueError):
+            return "lowest_order"
+
+    if isinstance(value, str):
+        v = value.strip()
+        if v in {"lowest_order"}:
+            return "lowest_order"
+        if v in {"highest_drop", "biggest_drop"}:
+            return "highest_drop"
+        return v
+
+    return "lowest_order"
+
+
+def _select_legacy_best_params(simulation_results_df: "pd.DataFrame") -> dict:
+    """
+    Legacy selector: choose the single best row by `calmar_ratio`.
+    Returns an empty dict when selection is impossible.
+    """
+    if simulation_results_df is None or simulation_results_df.empty:
+        return {}
+
+    if "calmar_ratio" in simulation_results_df.columns:
+        sorted_df = (
+            simulation_results_df.sort_values("calmar_ratio", ascending=False)
+            .dropna(subset=["calmar_ratio"])
+        )
+        row = sorted_df.iloc[0] if not sorted_df.empty else simulation_results_df.iloc[0]
+    else:
+        row = simulation_results_df.iloc[0]
+
+    params_dict = row.to_dict()
+    params_dict["additional_buy_priority"] = _normalize_additional_buy_priority(
+        params_dict.get("additional_buy_priority")
+    )
+    return params_dict
+
+
+def compute_robust_score(
+    cluster_summary: "pd.DataFrame",
+    *,
+    metric: str = "calmar_ratio",
+    k: float = 1.0,
+    size_col: str = "size",
+) -> "pd.Series":
+    """
+    Issue #68:
+    - robust_score = (mean - k*std) * log1p(cluster_size)
+    """
+    import numpy as np
+    import pandas as pd
+
+    mean_col = f"{metric}_mean"
+    std_col = f"{metric}_std"
+    missing = [c for c in (mean_col, std_col, size_col) if c not in cluster_summary.columns]
+    if missing:
+        raise KeyError(f"Missing required columns for robust score: {missing}")
+
+    mean = pd.to_numeric(cluster_summary[mean_col], errors="coerce")
+    std = pd.to_numeric(cluster_summary[std_col], errors="coerce").fillna(0.0)
+    size = pd.to_numeric(cluster_summary[size_col], errors="coerce").fillna(0.0)
+    return (mean - (k * std)) * np.log1p(size)
+
+
+def apply_robust_gates(
+    fold_metrics_df: "pd.DataFrame",
+    *,
+    metric: str = "calmar_ratio",
+    min_oos_is_ratio: float = 0.60,
+    min_fold_pass_rate: float = 0.70,
+    max_oos_mdd_p95: float = 0.25,
+) -> tuple["pd.DataFrame", dict]:
+    """
+    Issue #68 gates:
+    - median(OOS/IS) >= 0.60
+    - fold_pass_rate >= 70%
+    - OOS_MDD_p95 <= 25%
+
+    Expected columns:
+    - `is_{metric}`, `oos_{metric}`, `oos_mdd`
+    """
+    import numpy as np
+    import pandas as pd
+
+    if fold_metrics_df is None or fold_metrics_df.empty:
+        return pd.DataFrame(), {
+            "gate_passed": False,
+            "reason": "empty_fold_metrics",
+        }
+
+    is_col = f"is_{metric}"
+    oos_col = f"oos_{metric}"
+    required_cols = {is_col, oos_col, "oos_mdd"}
+    missing = sorted(required_cols - set(fold_metrics_df.columns))
+    if missing:
+        raise KeyError(f"Missing required columns for robust gates: {missing}")
+
+    df = fold_metrics_df.copy()
+    is_vals = pd.to_numeric(df[is_col], errors="coerce")
+    oos_vals = pd.to_numeric(df[oos_col], errors="coerce")
+
+    ratio = np.where(is_vals > 0, oos_vals / is_vals, 0.0)
+    df["oos_is_ratio"] = pd.Series(ratio, index=df.index)
+    df["fold_pass"] = df["oos_is_ratio"] >= min_oos_is_ratio
+
+    median_ratio = float(df["oos_is_ratio"].median())
+    fold_pass_rate = float(df["fold_pass"].mean())
+
+    oos_mdd_abs = pd.to_numeric(df["oos_mdd"], errors="coerce").abs()
+    oos_mdd_p95 = float(oos_mdd_abs.quantile(0.95))
+
+    gate_passed = bool(
+        (median_ratio >= min_oos_is_ratio)
+        and (fold_pass_rate >= min_fold_pass_rate)
+        and (oos_mdd_p95 <= max_oos_mdd_p95)
+    )
+
+    summary = {
+        "gate_passed": gate_passed,
+        "metric": metric,
+        "median_oos_is_ratio": median_ratio,
+        "fold_pass_rate": fold_pass_rate,
+        "oos_mdd_p95": oos_mdd_p95,
+        "threshold_min_oos_is_ratio": min_oos_is_ratio,
+        "threshold_min_fold_pass_rate": min_fold_pass_rate,
+        "threshold_max_oos_mdd_p95": max_oos_mdd_p95,
+        "num_folds": int(len(df)),
+    }
+    return df, summary
+
+
 # --- Clustering Helper Function ---
 def find_robust_parameters(
     simulation_results_df: "pd.DataFrame",
     param_cols: list,
     metric_cols: list,
     k_range: tuple = (2, 11),
-    min_cluster_size_ratio: float = 0.05
+    min_cluster_size_ratio: float = 0.05,
+    score_metric: str = "calmar_ratio",
+    score_k: float = 1.0,
 ) -> tuple[dict, "pd.DataFrame | None"]:
     """
     K-Means 클러스터링을 사용하여 시뮬레이션 결과에서 가장 강건한 파라미터 조합을 찾습니다.
@@ -61,12 +209,20 @@ def find_robust_parameters(
     
     cluster_summary = df.groupby('cluster')[metric_cols].mean()
     cluster_summary['size'] = df['cluster'].value_counts()
-    
-    # Z-score 계산 시 분모가 0이 되는 경우 방지
-    calmar_std = cluster_summary['calmar_ratio'].std()
-    denominator = calmar_std if calmar_std > 0 else 1
-    cluster_summary['calmar_zscore'] = (cluster_summary['calmar_ratio'] - cluster_summary['calmar_ratio'].mean()) / denominator
-    cluster_summary['robustness_score'] = cluster_summary['calmar_zscore'] * np.log1p(cluster_summary['size'])
+
+    if score_metric not in metric_cols:
+        raise ValueError(f"score_metric '{score_metric}' must be included in metric_cols")
+
+    cluster_summary[f"{score_metric}_mean"] = cluster_summary[score_metric]
+    cluster_summary[f"{score_metric}_std"] = (
+        df.groupby("cluster")[score_metric].std().reindex(cluster_summary.index).fillna(0.0)
+    )
+    cluster_summary["robustness_score"] = compute_robust_score(
+        cluster_summary,
+        metric=score_metric,
+        k=score_k,
+        size_col="size",
+    )
     
     min_cluster_size = int(len(df) * min_cluster_size_ratio)
     qualified_clusters = cluster_summary[cluster_summary['size'] >= min_cluster_size]
@@ -85,8 +241,13 @@ def find_robust_parameters(
     
     # WFO 결과 저장을 위해 클러스터링 결과가 포함된 DF 반환
     clustered_df_full = df.reset_index().merge(simulation_results_df.drop(columns=features, errors='ignore'), left_on='index', right_index=True)
-    
-    return best_params_series.to_dict(), clustered_df_full
+
+    best_params_dict = best_params_series.to_dict()
+    best_params_dict["additional_buy_priority"] = _normalize_additional_buy_priority(
+        best_params_dict.get("additional_buy_priority")
+    )
+
+    return best_params_dict, clustered_df_full
 # --- 분석 및 시각화 헬퍼 함수 ---
 def plot_wfo_results(final_curve: "pd.Series", params_df: "pd.DataFrame", results_dir: str):
     """최종 WFO 결과(수익곡선, 파라미터 분포)를 시각화하고 저장합니다."""
@@ -162,6 +323,25 @@ def run_walk_forward_analysis():
     wfo_settings = config['walk_forward_settings']
     backtest_settings = config['backtest_settings']
     initial_cash = backtest_settings['initial_cash'] 
+    robust_selection_enabled = bool(wfo_settings.get("robust_selection_enabled", True))
+    selection_mode = "robust" if robust_selection_enabled else "legacy"
+
+    robust_score_metric = str(wfo_settings.get("robust_score_metric", "calmar_ratio"))
+    robust_score_k = float(wfo_settings.get("robust_score_k", 1.0))
+    robust_gate_metric = str(wfo_settings.get("robust_gate_metric", "calmar_ratio"))
+    robust_gates_cfg = wfo_settings.get("robust_gates", {})
+    if not isinstance(robust_gates_cfg, dict):
+        robust_gates_cfg = {}
+    gate_min_oos_is_ratio = float(robust_gates_cfg.get("min_oos_is_ratio", 0.60))
+    gate_min_fold_pass_rate = float(robust_gates_cfg.get("min_fold_pass_rate", 0.70))
+    gate_max_oos_mdd_p95 = float(robust_gates_cfg.get("max_oos_mdd_p95", 0.25))
+
+    print(
+        "[WFO] "
+        f"selection_mode={selection_mode}, "
+        f"robust_score_metric={robust_score_metric}, "
+        f"robust_gate_metric={robust_gate_metric}"
+    )
 
     # 2. [핵심] 모든 기간 파라미터 자동 계산
     # --------------------------------------------------------------------------
@@ -253,6 +433,7 @@ def run_walk_forward_analysis():
     
     #  새로운 롤링 윈도우 루프
     all_oos_curves, all_optimal_params = [], []
+    fold_gate_rows = []
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     results_dir = os.path.join("results", f"wfo_run_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
@@ -269,17 +450,23 @@ def run_walk_forward_analysis():
              start_date=is_start.strftime('%Y-%m-%d'),
              end_date=is_end.strftime('%Y-%m-%d'),
              initial_cash=initial_cash
-         )
-        print(f"  - IS simulation complete. Analyzing {len(is_simulation_results_df)} combinations.")
-        
-        # [NEW] 2. 클러스터링으로 강건 파라미터 탐색
-        robust_params_dict, clustered_df = find_robust_parameters(
-            simulation_results_df=is_simulation_results_df,
-            param_cols=['additional_buy_drop_rate', 'sell_profit_rate', 'stop_loss_rate', 'max_inactivity_period'],
-            metric_cols=['cagr', 'mdd', 'calmar_ratio'],
-            k_range=(2, 8),
-            min_cluster_size_ratio=0.05
         )
+        print(f"  - IS simulation complete. Analyzing {len(is_simulation_results_df)} combinations.")
+
+        if robust_selection_enabled:
+            # [NEW] 2. 클러스터링으로 강건 파라미터 탐색
+            robust_params_dict, clustered_df = find_robust_parameters(
+                simulation_results_df=is_simulation_results_df,
+                param_cols=['additional_buy_drop_rate', 'sell_profit_rate', 'stop_loss_rate', 'max_inactivity_period'],
+                metric_cols=['cagr', 'mdd', 'calmar_ratio'],
+                k_range=(2, 8),
+                min_cluster_size_ratio=0.05,
+                score_metric=robust_score_metric,
+                score_k=robust_score_k,
+            )
+        else:
+            robust_params_dict = _select_legacy_best_params(is_simulation_results_df)
+            clustered_df = None
         
         # 디버깅을 위해 각 폴드의 클러스터링 결과 저장
         if clustered_df is not None:
@@ -307,6 +494,22 @@ def run_walk_forward_analysis():
              initial_cash=initial_cash if not all_oos_curves else all_oos_curves[-1].iloc[-1]
          )
         all_oos_curves.append(oos_equity_curve)    
+
+        if not oos_equity_curve.empty:
+            oos_analyzer = PerformanceAnalyzer(pd.DataFrame(oos_equity_curve, columns=["total_value"]))
+            oos_metrics = oos_analyzer.get_metrics(formatted=False)
+        else:
+            oos_metrics = {}
+
+        fold_gate_rows.append(
+            {
+                "fold": fold_num,
+                "selection_mode": selection_mode,
+                f"is_{robust_gate_metric}": float(robust_params_dict.get(robust_gate_metric, np.nan)),
+                f"oos_{robust_gate_metric}": float(oos_metrics.get(robust_gate_metric, np.nan)),
+                "oos_mdd": float(oos_metrics.get("mdd", np.nan)),
+            }
+        )
             
     pbar.close()
 
@@ -343,6 +546,21 @@ def run_walk_forward_analysis():
     params_df.to_csv(params_filepath, index=False)
    
     print(f"\n✅ Robust parameters for each fold saved to: {params_filepath}")
+
+    if fold_gate_rows:
+        fold_gate_df = pd.DataFrame(fold_gate_rows)
+        fold_gate_report_df, gates_summary = apply_robust_gates(
+            fold_gate_df,
+            metric=robust_gate_metric,
+            min_oos_is_ratio=gate_min_oos_is_ratio,
+            min_fold_pass_rate=gate_min_fold_pass_rate,
+            max_oos_mdd_p95=gate_max_oos_mdd_p95,
+        )
+
+        gate_report_path = os.path.join(results_dir, "wfo_gate_report.csv")
+        fold_gate_report_df.to_csv(gate_report_path, index=False, float_format="%.6f")
+        print(f"\n✅ Gate report saved to: {gate_report_path}")
+        print(f"[Gate Summary] {gates_summary}")
 
 if __name__ == '__main__':
     run_walk_forward_analysis()

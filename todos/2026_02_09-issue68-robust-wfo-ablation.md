@@ -24,8 +24,11 @@
   - 브랜치: `feature/issue68-wfo-import-safe-no-gpu`
   - 커밋: `890aa30d5fe65ce8fb352b96106933898ab3ad65`
   - 테스트: `python -m unittest tests.test_issue68_wfo_import_side_effects`
-- [ ] robust score 실험식 고정: `(mean - k*std) * log1p(cluster_size)`
-- [ ] gate 고정: `median(OOS/IS) >= 0.60`, `fold_pass_rate >= 70%`, `OOS_MDD_p95 <= 25%`
+- [x] robust score 실험식 고정: `(mean - k*std) * log1p(cluster_size)`
+- [x] gate 고정: `median(OOS/IS) >= 0.60`, `fold_pass_rate >= 70%`, `OOS_MDD_p95 <= 25%`
+- [x] 단위 테스트: robust score/gate + `additional_buy_priority` 정규화
+  - 테스트: `python -m unittest tests.test_issue68_robust_scoring_gates`
+- [x] `config/config.example.yaml`: `robust_selection_enabled` + robust score/gate 설정 예시 추가
 - [ ] 행동지표 feature 실험: `trade_count`, `avg_hold_days`
 - [ ] 민감도 분석: 선택 파라미터 ±10% perturbation 저하율(`<= 15%`) 측정
 - [ ] Ablation 4축 비교: Legacy-Calmar / Robust-Score / Robust+Gate / Robust+Gate+Behavior
