@@ -110,6 +110,21 @@ def apply_robust_gates(
     import numpy as np
     import pandas as pd
 
+    def _quantile_higher(series: "pd.Series", q: float) -> float:
+        """
+        Conservative empirical quantile.
+
+        For discrete fold samples we prefer a "higher" quantile (no linear interpolation)
+        so that a small tail of worse MDD values is not smoothed away.
+        """
+        values = pd.to_numeric(series, errors="coerce").dropna().to_numpy()
+        if values.size == 0:
+            return float("nan")
+        values = np.sort(values)
+        idx = int(np.ceil(q * (len(values) - 1)))
+        idx = max(0, min(idx, len(values) - 1))
+        return float(values[idx])
+
     if fold_metrics_df is None or fold_metrics_df.empty:
         return pd.DataFrame(), {
             "gate_passed": False,
@@ -135,7 +150,7 @@ def apply_robust_gates(
     fold_pass_rate = float(df["fold_pass"].mean())
 
     oos_mdd_abs = pd.to_numeric(df["oos_mdd"], errors="coerce").abs()
-    oos_mdd_p95 = float(oos_mdd_abs.quantile(0.95))
+    oos_mdd_p95 = _quantile_higher(oos_mdd_abs, 0.95)
 
     gate_passed = bool(
         (median_ratio >= min_oos_is_ratio)
