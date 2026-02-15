@@ -1,4 +1,13 @@
 # src/filtered_stock_loader.py
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/filtered_stock_loader.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 import pandas as pd
 import configparser
 from sqlalchemy import create_engine, text

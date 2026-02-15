@@ -10,6 +10,16 @@ import warnings
 
 # 모든 경고 메시지 억제 (pykrx, pandas 등)
 warnings.filterwarnings('ignore')
+
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/main_script.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 # 다른 모듈에서 함수 임포트
 from .company_info_manager import (
     update_company_info_from_pykrx, # 필요시 CompanyInfo DB 업데이트용

@@ -6,7 +6,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from db_setup import get_db_connection
+from .db_setup import get_db_connection
 
 def collect_etf_data():
     conn = get_db_connection()  # Establish a connection to the database

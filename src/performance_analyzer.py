@@ -4,6 +4,15 @@ performance_analyzer.py
 This module contains the functions for analyzing the performance of the Magic Split Strategy.
 """
 
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/performance_analyzer.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt

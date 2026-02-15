@@ -5,7 +5,7 @@ import time
 import pandas as pd
 import numpy as np
 from pykrx import stock
-from db_setup import get_db_connection
+from .db_setup import get_db_connection
 
 def get_market_ohlcv_with_fallback(start_date, end_date, ticker):
     """
