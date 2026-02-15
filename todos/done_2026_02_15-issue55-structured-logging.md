@@ -141,4 +141,4 @@
 (사람이 작성하는 시점엔 TODO 로만 남겨놓는다)
 (문제 해결에 참고했던 issue 번호가 포함된 링크 or commit hash)
 - issue: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55
-- commit: 521b529
+- commit: 38b450d
