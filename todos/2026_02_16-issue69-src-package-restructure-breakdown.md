@@ -197,6 +197,13 @@
 - [x] `src/<new_pkg>/__init__.py`: 신규 서브패키지 스켈레톤 추가(PR-0)
 - [x] `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat`: 통과 확인(PR-0)
 
+### 6-2. PR-1: `pipeline_batch` 구현을 `src/pipeline`로 이동
+- [x] `src/pipeline/batch.py`: 기존 `src/pipeline_batch.py` 구현 이동(BOOTSTRAP 제거 + 상위 모듈 상대 import로 변경)
+- [x] `src/pipeline_batch.py`: entrypoint 호환 wrapper로 재생성(`python -m src.pipeline_batch` 유지)
+- [x] `tests/test_pipeline_batch.py`: patch 타겟을 `src.pipeline.batch.*`로 갱신
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch -v`
+
 ---
 
 ## 7. 문제 해결에 참고
