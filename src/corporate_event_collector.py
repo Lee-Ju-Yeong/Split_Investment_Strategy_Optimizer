@@ -5,6 +5,15 @@ Fetches and stores corporate major changes (name, sector, par value, CEO) from p
 Optimized with parallel workers and rate limiting.
 """
 
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/corporate_event_collector.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 import time
 import threading
 from datetime import datetime, timedelta

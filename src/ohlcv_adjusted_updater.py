@@ -5,6 +5,15 @@ Updates adj_close and adj_ratio in DailyStockPrice using pykrx adjusted data.
 Includes anomaly guards for known sentinel-like values.
 """
 
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/ohlcv_adjusted_updater.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 import argparse
 import time
 import threading

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
 # GPU 버전 함수 임포트
-from src.indicator_calculator_gpu import calculate_indicators_gpu
+from .indicator_calculator_gpu import calculate_indicators_gpu
 
 
 def get_ohlcv_from_db(conn, ticker_code):

@@ -2,6 +2,15 @@
 This script is used to debug the GPU single run.
 It is used to test the GPU single run with the parameters from the config.yaml file.
 """
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/debug_gpu_single_run.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 import time
 import cudf
 import cupy as cp
@@ -12,10 +21,10 @@ import os
 import urllib.parse
 
 # --- 필요한 모듈 추가 임포트 ---
-from src.config_loader import load_config
-from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+from .config_loader import load_config
+from .backtest_strategy_gpu import run_magic_split_strategy_on_gpu
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
-from src.performance_analyzer import PerformanceAnalyzer
+from .performance_analyzer import PerformanceAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
