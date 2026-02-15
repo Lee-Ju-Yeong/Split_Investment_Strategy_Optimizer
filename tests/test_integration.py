@@ -1,75 +1,141 @@
-import unittest
-from unittest.mock import patch, MagicMock
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import sys
-import os
 import configparser
-import math
+import os
+import unittest
+from unittest.mock import patch
 
-# 경로 설정
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from db_setup import get_db_connection, create_tables
-from data_handler import DataHandler
-from portfolio import Portfolio, Position, Trade
-from strategy import Strategy
-from execution import BasicExecutionHandler
-from backtester import BacktestEngine
-
-# --- 테스트를 위한 수정된 클래스들 ---
-class TestExecutionHandler(BasicExecutionHandler):
-    def execute_order(self, order_event, portfolio, data_handler):
-        if order_event['type'] == 'BUY':
-            buy_price = self._adjust_price_up(order_event['price'])
-            cost = buy_price * order_event['quantity']
-            total_cost = cost * (1 + self.buy_commission_rate)
-            if portfolio.cash >= total_cost:
-                portfolio.update_cash(-total_cost)
-                order_event['position'].buy_price = buy_price
-                portfolio.add_position(order_event['ticker'], order_event['position'])
-                # 거래 기록 추가
-                trade = Trade(order_event['date'], order_event['ticker'], 1, order_event['quantity'], buy_price, None, 'buy', 0, 0, None, portfolio.cash, 0)
-                portfolio.record_trade(trade)
-
-class SimpleBuyStrategy(Strategy):
-    def __init__(self, start_date, end_date):
-        self.start_date, self.end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-        self.invested = False
-    def generate_signals(self, current_date, portfolio, data_handler):
-        if self.invested: return []
-        for code in data_handler.get_filtered_stock_codes(current_date):
-            stock_data = data_handler.load_stock_data(code, self.start_date, self.end_date)
-            if stock_data is None or stock_data.empty or current_date not in stock_data.index: continue
-            latest = stock_data.loc[current_date]
-            if pd.notna(latest['ma_5']) and pd.notna(latest['ma_20']) and latest['ma_5'] > latest['ma_20']:
-                self.invested = True
-                return [{'date': current_date, 'ticker': code, 'type': 'BUY', 'quantity': 10, 
-                         'price': latest['close_price'], 'position': Position(0, 10, 1, 0.05, 0.1), 
-                         'start_date': self.start_date, 'end_date': self.end_date}]
-        return []
+try:
+    import numpy as np
+    import pandas as pd
+except ModuleNotFoundError:
+    # Optional in minimal/laptop envs; integration tests should skip gracefully.
+    np = None
+    pd = None
 
 class TestBacktestingIntegration(unittest.TestCase):
     TEST_TICKER = '999998'
     START_DATE, END_DATE = '2022-01-01', '2022-03-31'
+    INITIAL_CASH = 1_000_000
+    INVESTMENT_AMOUNT = 1_000_000
 
     @classmethod
     def setUpClass(cls):
-        cls.conn = get_db_connection()
-        create_tables(cls.conn)
+        if pd is None or np is None:
+            raise unittest.SkipTest("pandas/numpy are required for DB integration tests.")
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        config_path = os.path.join(repo_root, "config.ini")
+        if not os.path.exists(config_path):
+            raise unittest.SkipTest("config.ini not found. DB integration tests require local MySQL config.")
+
+        # DB drivers are optional for most tests; integration test should skip if missing.
+        try:
+            import pymysql  # noqa: F401
+            import mysql.connector  # noqa: F401
+        except ModuleNotFoundError as exc:
+            raise unittest.SkipTest(f"DB driver not installed: {exc.name}")
+
+        # Import inside to keep module import safe in non-DB environments.
+        from src.backtester import BacktestEngine
+        from src.data_handler import DataHandler
+        from src.db_setup import create_tables, get_db_connection
+        from src.execution import BasicExecutionHandler
+        from src.portfolio import Portfolio, Position
+        from src.strategy import Strategy
+
+        cls.BacktestEngine = BacktestEngine
+        cls.BasicExecutionHandler = BasicExecutionHandler
+        cls.DataHandler = DataHandler
+        cls.Portfolio = Portfolio
+        cls.Position = Position
+
         config = configparser.ConfigParser()
-        config.read(os.path.join(os.path.dirname(__file__), '../config.ini'))
-        cls.db_config = dict(config['mysql'])
+        config.read(config_path)
+        if "mysql" not in config:
+            raise unittest.SkipTest("config.ini is missing [mysql] section.")
+        cls.db_config = dict(config["mysql"])
+
+        # db_setup.py reads config.ini from CWD; enforce repo_root for this test.
+        cwd = os.getcwd()
+        os.chdir(repo_root)
+        try:
+            cls.conn = get_db_connection()
+            create_tables(cls.conn)
+        except Exception as exc:
+            raise unittest.SkipTest(f"Cannot connect to MySQL: {exc}")
+        finally:
+            os.chdir(cwd)
+
+        PositionImpl = cls.Position
+
+        class SimpleBuyStrategy(Strategy):
+            def __init__(self, start_date, end_date, investment_amount):
+                self.start_date = pd.to_datetime(start_date)
+                self.end_date = pd.to_datetime(end_date)
+                self.investment_amount = float(investment_amount)
+                self.invested = False
+
+            def generate_sell_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+                return []
+
+            def generate_additional_buy_signals(
+                self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None
+            ):
+                return []
+
+            def generate_new_entry_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+                if self.invested:
+                    return []
+
+                for code in data_handler.get_filtered_stock_codes(current_date):
+                    row = data_handler.get_stock_row_as_of(code, current_date, self.start_date, self.end_date)
+                    if row is None:
+                        continue
+
+                    ma_5 = row.get("ma_5")
+                    ma_20 = row.get("ma_20")
+                    close_price = row.get("close_price")
+                    if pd.notna(ma_5) and pd.notna(ma_20) and pd.notna(close_price) and ma_5 > ma_20:
+                        self.invested = True
+                        position = PositionImpl(
+                            buy_price=float(close_price),
+                            quantity=0,
+                            order=1,
+                            additional_buy_drop_rate=0.05,
+                            sell_profit_rate=0.10,
+                        )
+                        return [
+                            {
+                                "date": current_date,
+                                "ticker": code,
+                                "type": "BUY",
+                                "investment_amount": self.investment_amount,
+                                "position": position,
+                                "reason_for_trade": "신규 진입",
+                                "trigger_price": float(close_price),
+                                "start_date": self.start_date,
+                                "end_date": self.end_date,
+                            }
+                        ]
+                return []
+
+        cls.SimpleBuyStrategy = SimpleBuyStrategy
 
     @classmethod
-    def tearDownClass(cls): cls.conn.close()
+    def tearDownClass(cls):
+        if getattr(cls, "conn", None) is not None:
+            cls.conn.close()
+
     def setUp(self):
         self._cleanup_test_data()
         self._prepare_test_data()
-        self.patcher = patch.object(DataHandler, 'get_filtered_stock_codes', return_value=[self.TEST_TICKER])
-        self.patcher.start()
+
+        self.filtered_codes_patcher = patch.object(
+            self.DataHandler, "get_filtered_stock_codes", return_value=[self.TEST_TICKER]
+        )
+        self.filtered_codes_patcher.start()
+
     def tearDown(self):
-        self.patcher.stop()
+        self.filtered_codes_patcher.stop()
         self._cleanup_test_data()
 
     def _cleanup_test_data(self):
@@ -85,7 +151,15 @@ class TestBacktestingIntegration(unittest.TestCase):
                         (self.START_DATE, self.TEST_TICKER, '백테스트용주식'))
         
         dates = pd.to_datetime(pd.date_range(self.START_DATE, self.END_DATE, freq='B'))
-        close_prices = np.concatenate([np.linspace(12000, 10000, 30), np.linspace(10001, 15000, len(dates)-30)])
+        n = len(dates)
+        n_down = min(30, max(1, n))
+        n_up = n - n_down
+        close_prices = np.concatenate(
+            [
+                np.linspace(12000, 10000, n_down),
+                np.linspace(10001, 15000, n_up) if n_up > 0 else np.array([], dtype=float),
+            ]
+        )
         df = pd.DataFrame({'date': dates, 'close_price': close_prices})
         df.set_index('date', inplace=True)
         df['ma_5'] = df['close_price'].rolling(5).mean()
@@ -104,11 +178,11 @@ class TestBacktestingIntegration(unittest.TestCase):
         self.conn.commit()
 
     def test_backtesting_buy_scenario(self):
-        data_handler = DataHandler(self.db_config)
-        portfolio = Portfolio(1000000, self.START_DATE, self.END_DATE)
-        strategy = SimpleBuyStrategy(self.START_DATE, self.END_DATE)
-        execution_handler = TestExecutionHandler()
-        backtester = BacktestEngine(self.START_DATE, self.END_DATE, portfolio, strategy, data_handler, execution_handler)
+        data_handler = self.DataHandler(self.db_config)
+        portfolio = self.Portfolio(self.INITIAL_CASH, self.START_DATE, self.END_DATE)
+        strategy = self.SimpleBuyStrategy(self.START_DATE, self.END_DATE, self.INVESTMENT_AMOUNT)
+        execution_handler = self.BasicExecutionHandler()
+        backtester = self.BacktestEngine(self.START_DATE, self.END_DATE, portfolio, strategy, data_handler, execution_handler)
         
         final_portfolio = backtester.run()
 
@@ -116,7 +190,4 @@ class TestBacktestingIntegration(unittest.TestCase):
         self.assertEqual(final_portfolio.trade_history[0].code, self.TEST_TICKER)
         
 if __name__ == '__main__':
-    suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(TestBacktestingIntegration))
-    runner = unittest.TextTestRunner(verbosity=2)
-    runner.run(suite)
+    unittest.main(verbosity=2)
