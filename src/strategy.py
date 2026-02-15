@@ -8,6 +8,9 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Position:
     """ 포지션 정보를 저장하는 데이터 클래스 """
@@ -106,15 +109,14 @@ class MagicSplitStrategy(Strategy):
 
         # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
-        if (current_date - self.backtest_start_date).days < 15:
-            from tqdm import tqdm
+        if logger.isEnabledFor(logging.DEBUG) and (current_date - self.backtest_start_date).days < 15:
             log_msg = (
                 f"[CPU_SLOT_DEBUG] {current_date.strftime('%Y-%m-%d')} | "
                 f"MaxStocks: {self.max_stocks}, "
                 f"CurrentHoldings: {len(portfolio.positions)}, "
                 f"AvailableSlots: {available_slots}"
             )
-            tqdm.write(log_msg)
+            logger.debug(log_msg)
         
         if available_slots > 0:
             candidate_codes = []
@@ -133,26 +135,39 @@ class MagicSplitStrategy(Strategy):
                     try:
                         tier_codes, used_tier = get_tier_candidates(signal_date)
                         candidate_codes = tier_codes
-                        
-                        # Logging for observability
-                        from tqdm import tqdm
-                        
+
                         if used_tier == 'TIER_2_FALLBACK':
-                             tqdm.write(f"[Strategy] {current_date.date()} | Fallback: Tier 1 (0) -> Tier 2 ({len(candidate_codes)})")
+                             logger.debug(
+                                 "[Strategy] %s | Fallback: Tier 1 (0) -> Tier 2 (%s)",
+                                 current_date.date(),
+                                 len(candidate_codes),
+                             )
 
                         if mode == "hybrid_transition" and self.use_weekly_alpha_gate:
                             weekly_codes = data_handler.get_filtered_stock_codes(current_date)
                             weekly_set = set(weekly_codes)
                             original_count = len(candidate_codes)
                             candidate_codes = [code for code in candidate_codes if code in weekly_set]
-                            
-                            tqdm.write(f"[Strategy] {current_date.date()} | Hybrid: Tier({used_tier}, {original_count}) & Weekly({len(weekly_codes)}) -> Intersection({len(candidate_codes)})")
+
+                            logger.debug(
+                                "[Strategy] %s | Hybrid: Tier(%s, %s) & Weekly(%s) -> Intersection(%s)",
+                                current_date.date(),
+                                used_tier,
+                                original_count,
+                                len(weekly_codes),
+                                len(candidate_codes),
+                            )
                     except Exception as exc:
-                        print(f"[Warning] Tier candidate lookup failed ({exc}). Falling back to weekly.")
+                        exc_info = logger.isEnabledFor(logging.DEBUG)
+                        logger.warning(
+                            "Tier candidate lookup failed (%s). Falling back to weekly.",
+                            exc,
+                            exc_info=exc_info,
+                        )
                         candidate_codes = data_handler.get_filtered_stock_codes(current_date)
                 else:
                     # Fallback if method missing (should not happen with correct DataHandler)
-                    print(f"[Warning] get_candidates_with_tier_fallback missing. Falling back to weekly.")
+                    logger.warning("get_candidates_with_tier_fallback missing. Falling back to weekly.")
                     candidate_codes = data_handler.get_filtered_stock_codes(current_date)
             else:
                 # Default fallback
