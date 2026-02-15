@@ -39,7 +39,9 @@ pip install -r requirement.txt
 
 ### 2) 설정 파일
 - `config/config.example.yaml` -> `config/config.yaml` 복사 후 수정
-- `config.ini`(레거시 DB 유틸)도 로컬 환경에 맞게 설정
+- 단일 설정 소스: `config/config.yaml` (필요 시 `MAGICSPLIT_CONFIG_PATH`로 override)
+  - `database`: DB 접속 정보
+  - `data_pipeline`: `src/main_script.py` 경로/플래그 (하드코딩 제거)
 
 ### 3) DB 스키마 생성/갱신
 ```bash

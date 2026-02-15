@@ -8,10 +8,6 @@ from datetime import datetime, timedelta
 # pandas SQLAlchemy 경고 메시지 억제
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
-# GPU 버전 함수 임포트
-from .indicator_calculator_gpu import calculate_indicators_gpu
-
-
 def get_ohlcv_from_db(conn, ticker_code):
     """
     DailyStockPrice 테이블에서 특정 종목의 전체 OHLCV 데이터를 조회합니다.
@@ -164,6 +160,14 @@ def calculate_and_store_indicators_for_all(conn, use_gpu=False):
         
         calc_start_time = time.time()
         if use_gpu:
+            try:
+                from .indicator_calculator_gpu import calculate_indicators_gpu
+            except ModuleNotFoundError as e:
+                raise ModuleNotFoundError(
+                    "GPU 지표 계산을 사용하려면 `cudf`, `cupy`가 필요합니다. "
+                    "rapids-env에서 실행하거나 config.yaml의 data_pipeline.flags.use_gpu를 false로 설정하세요."
+                ) from e
+
             df_indicators = calculate_indicators_gpu(df_ohlcv)
         else:
             df_indicators = calculate_indicators(df_ohlcv)

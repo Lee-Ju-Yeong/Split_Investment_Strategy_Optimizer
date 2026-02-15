@@ -38,6 +38,22 @@ execution_params:
 paths:
   results_dir: "results"
 
+# Data pipeline (src/main_script.py)
+# - relative paths are resolved from project root
+data_pipeline:
+  paths:
+    condition_search_files_folder: "data/raw_data"
+    processed_data_folder: "data/processed_data"
+    filtered_stocks_csv_path: "data/processed_data/mapped_weekly_filtered_stocks_FINAL.csv"
+  flags:
+    use_gpu: false
+    update_company_info_db: false
+    process_hts_csv_files: false
+    load_filtered_stocks_csv: true
+    collect_ohlcv_data: true
+    force_recollect_ohlcv: false
+    calculate_indicators: true
+
 parameter_space:
   max_stocks:
     type: "list"

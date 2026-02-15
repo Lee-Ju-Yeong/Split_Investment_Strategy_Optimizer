@@ -1,4 +1,3 @@
-import configparser
 import os
 import unittest
 from unittest.mock import patch
@@ -23,9 +22,9 @@ class TestBacktestingIntegration(unittest.TestCase):
             raise unittest.SkipTest("pandas/numpy are required for DB integration tests.")
 
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        config_path = os.path.join(repo_root, "config.ini")
+        config_path = os.environ.get("MAGICSPLIT_CONFIG_PATH") or os.path.join(repo_root, "config", "config.yaml")
         if not os.path.exists(config_path):
-            raise unittest.SkipTest("config.ini not found. DB integration tests require local MySQL config.")
+            raise unittest.SkipTest("config/config.yaml not found. DB integration tests require local MySQL config.")
 
         # DB drivers are optional for most tests; integration test should skip if missing.
         try:
@@ -38,6 +37,7 @@ class TestBacktestingIntegration(unittest.TestCase):
         from src.backtester import BacktestEngine
         from src.data_handler import DataHandler
         from src.db_setup import create_tables, get_db_connection
+        from src.config_loader import load_config
         from src.execution import BasicExecutionHandler
         from src.portfolio import Portfolio, Position
         from src.strategy import Strategy
@@ -48,22 +48,16 @@ class TestBacktestingIntegration(unittest.TestCase):
         cls.Portfolio = Portfolio
         cls.Position = Position
 
-        config = configparser.ConfigParser()
-        config.read(config_path)
-        if "mysql" not in config:
-            raise unittest.SkipTest("config.ini is missing [mysql] section.")
-        cls.db_config = dict(config["mysql"])
+        config = load_config()
+        cls.db_config = dict(config.get("database") or {})
+        if not cls.db_config:
+            raise unittest.SkipTest("config/config.yaml is missing `database` section.")
 
-        # db_setup.py reads config.ini from CWD; enforce repo_root for this test.
-        cwd = os.getcwd()
-        os.chdir(repo_root)
         try:
-            cls.conn = get_db_connection()
+            cls.conn = get_db_connection(cls.db_config)
             create_tables(cls.conn)
         except Exception as exc:
             raise unittest.SkipTest(f"Cannot connect to MySQL: {exc}")
-        finally:
-            os.chdir(cwd)
 
         PositionImpl = cls.Position
 
