@@ -117,6 +117,17 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 ### `config/config.yaml` (gitignored)
 
+**Config Path:**
+- 기본 경로: `config/config.yaml` (프로젝트 루트 기준)
+- override: 환경변수 `MAGICSPLIT_CONFIG_PATH` (절대/상대 경로 모두 허용)
+
+**Database:**
+- `database.host|user|password|database` 를 표준으로 사용합니다.
+
+**Data Pipeline (`src/main_script.py`):**
+- `data_pipeline.paths`: `condition_search_files_folder`, `processed_data_folder`, `filtered_stocks_csv_path`
+- `data_pipeline.flags`: `use_gpu`, `update_company_info_db`, `process_hts_csv_files`, `load_filtered_stocks_csv`, `collect_ohlcv_data`, `force_recollect_ohlcv`, `calculate_indicators`
+
 **Strategy Parameters:**
 - `max_stocks`: 최대 보유 종목 수
 - `order_investment_ratio`: 1회 주문당 투자 비율
