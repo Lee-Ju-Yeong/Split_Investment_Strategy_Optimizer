@@ -1,7 +1,6 @@
 # ohlcv_collector.py
 
 import pandas as pd
-from pykrx import stock
 import time
 import numpy as np # numpy 임포트 추가
 # from sqlalchemy.exc import IntegrityError # SQLAlchemy 의존성 제거
@@ -12,6 +11,18 @@ from datetime import datetime, timedelta
 API_CALL_DELAY = 0.3
 DEFAULT_PYKRX_START_DATE_STR = "19800101"
 USE_ADJUSTED_OHLCV = False
+
+
+def _get_pykrx_stock():
+    try:
+        from pykrx import stock  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "pykrx is required for OHLCV collection. "
+            "Install it (e.g. `pip install pykrx`) in your active environment."
+        ) from exc
+    return stock
+
 
 def get_latest_ohlcv_date_for_ticker(conn, ticker_code): # engine 대신 conn (MySQL connection)
     """
@@ -37,6 +48,7 @@ def get_market_ohlcv_with_fallback(start_date, end_date, ticker_code):
     KRX 원본가 기준(adjusted=False)으로 OHLCV를 조회합니다.
     """
     time.sleep(API_CALL_DELAY)
+    stock = _get_pykrx_stock()
     return stock.get_market_ohlcv(
         start_date,
         end_date,
