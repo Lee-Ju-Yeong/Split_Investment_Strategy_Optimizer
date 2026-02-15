@@ -12,6 +12,7 @@
 - [x] 이슈 #59 테스트 인터페이스 갱신: `todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md`
 - [x] 이슈 #60 스크립트 import 부작용 제거: `todos/done_2026_02_15-issue60-import-parameter-simulation-gpu-py.md`
 - [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
+- [ ] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/2026_02_16-issue69-src-package-restructure-breakdown.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`

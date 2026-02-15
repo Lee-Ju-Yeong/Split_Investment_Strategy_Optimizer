@@ -158,3 +158,6 @@ data/
 .ipynb_checkpoints
 __pycache__
 
+# Allow Python package path under src/ (Issue #69)
+!src/data/
+!src/data/**
