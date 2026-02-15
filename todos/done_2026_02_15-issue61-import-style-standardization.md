@@ -142,4 +142,5 @@
 (사람이 작성하는 시점엔 TODO 로만 남겨놓는다)
 (문제 해결에 참고했던 issue 번호가 포함된 링크 or commit hash)
 - issue: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/61
-- commit: (작업 완료 후 기록)
+- PR: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/78`
+- merged commit (main): `bed91ea`

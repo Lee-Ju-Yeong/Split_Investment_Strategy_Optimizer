@@ -126,3 +126,4 @@ python -c "import src.parameter_simulation_gpu"
 ## 9. 문제 해결에 참고
 (문제 해결에 참고했던 issue 번호가 포함된 링크 or commit hash)
 - issue: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60
+- merged commit (main): `eaf5bfe`

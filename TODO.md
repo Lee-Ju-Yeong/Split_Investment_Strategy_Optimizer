@@ -9,6 +9,9 @@
 - [x] 이슈 #65 스키마/인덱스 확장: `todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md`
 - [x] 이슈 #66 수집기 분리/사전계산 배치: `todos/done_2026_02_07-issue66-financial-investor-collector-tier-batch.md`
 - [x] 이슈 #70 상폐 포함 Historical Universe: `todos/done_2026_02_08-issue70-historical-ticker-universe-delisted.md`
+- [x] 이슈 #59 테스트 인터페이스 갱신: `todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md`
+- [x] 이슈 #60 스크립트 import 부작용 제거: `todos/done_2026_02_15-issue60-import-parameter-simulation-gpu-py.md`
+- [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
@@ -127,9 +130,9 @@
   - [ ] 하드 게이트: parity mismatch `0건`만 pass
   - [ ] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
 - [ ] 도메인 모델/캐시 통합(Position, CompanyInfo 캐시) (이슈 #57): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57
-- [ ] 테스트 인터페이스 갱신(test_integration.py) (이슈 #59): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59
-- [ ] 스크립트 import 부작용 제거(parameter_simulation_gpu.py) (이슈 #60): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60
-- [ ] 임포트 스타일 통일(상대/절대/스크립트 실행) (이슈 #61): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/61
+- [x] 테스트 인터페이스 갱신(test_integration.py) (이슈 #59): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59
+- [x] 스크립트 import 부작용 제거(parameter_simulation_gpu.py) (이슈 #60): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60
+- [x] 임포트 스타일 통일(상대/절대/스크립트 실행) (이슈 #61): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/61
 
 ### P2-Notes (2026-02-09, 멀티에이전트 합의)
 - 최적점(peak) 단일 선택보다 OOS 일관성 중심의 robust cluster 정책을 우선 적용
