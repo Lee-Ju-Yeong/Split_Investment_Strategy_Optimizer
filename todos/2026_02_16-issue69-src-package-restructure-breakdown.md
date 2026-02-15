@@ -166,16 +166,24 @@
 ---
 
 ## 5. 최종 결정된 수정 방안 (AI 가 자동 진행하면 안되고 **무조건**/**MUST** 사람에게 선택/결정을 맡겨야 한다)
-(사람이 작성하는 시점엔 TODO 로만 남겨놓는다)
-(작성 시: 파일경로:위치 + 무엇을 + 어떻게 + 왜. 코드 전체 복사 금지)
-- <간단한 수정 방안 설명>
-### 5-1. <여러 수정 방안 중 최종 결정 이유1>
-(단순한 이유이거나 이유가 없으면 안되고, 근본적으로 문제를 해결하는 올바른 구조여야 함, 단순하게 땜빵 처리하고 그게 가장 코드를 적게 수정하는 방안 이었다는 등, 그런 어이없는 사유는 절대 안 됨)
-- <결정이유설명1>
-- <결정이유설명2>
-- ...
-### 5-2. <여러 수정 방안 중 최종 결정 이유2>
-### 5-3. ...
+결정: **B안(Wrapper-first 점진 리팩터링)** 로 진행한다.
+
+- 요약:
+  - 기존 `src/*.py` 엔트리포인트/파일명은 유지하고(thin wrapper), 내부 구현을 신규 서브패키지로 단계적으로 이동한다.
+  - PR 당 1~2개 대형 모듈만 대상으로 하여 리스크/충돌을 최소화한다.
+  - no DB/no GPU 환경에서도 import-safe, 테스트 skip-safe 규칙을 유지한다.
+
+### 5-1. 결정 이유
+- 리팩터링 범위가 크므로 한 번에 이동(A안)하면 import 경로/의존성 회귀 리스크가 큼
+- 엔트리포인트 호환성(BOOTSTRAP 포함)과 import-side-effects 규칙(#60/#68)을 PR 단위로 안전하게 고정 가능
+- 노트북 환경(no DB/no GPU)에서도 “개발 가능한 상태”를 유지하며 병렬로 정리 가능
+
+### 5-2. PR 단계(초안)
+- PR-0(안전망): 신규 테스트 + 패키지 스켈레톤(빈 `__init__.py`)만 추가
+- PR-1: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
+- PR-2: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
+- PR-3: 배치/수집기 계층(`*batch.py`)를 `src/pipeline/*`로 이동(엔트리포인트 wrapper 유지)
+- PR-4: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
 
 ---
 
@@ -185,11 +193,9 @@
 (작성 시: 파일경로:라인 + 무엇을 + 어떻게. 코드 전체 복사 금지)
 - <어떻게 고쳤다 한 줄>
 ### 6-1. <수정한 기능1>
-- [ ] `<코드수정위치1>` 에서 어떤 걸 수정
-  - <필요한 경우 세세한 경과1> (생략 가능)
-- [ ] `<코드수정위치2>` 에서 어떤 걸 수정
-  - <필요한 경우 세세한 경과1> (생략 가능)
-- [ ] ...
+- [x] `tests/test_issue69_entrypoint_compat.py`: 엔트리포인트 import/호환성 가드 테스트 추가(PR-0)
+- [x] `src/<new_pkg>/__init__.py`: 신규 서브패키지 스켈레톤 추가(PR-0)
+- [x] `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat`: 통과 확인(PR-0)
 
 ---
 
