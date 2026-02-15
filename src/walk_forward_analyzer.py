@@ -11,7 +11,6 @@ from .config_loader import load_config
 if TYPE_CHECKING:
     import pandas as pd
 
-
 def _normalize_additional_buy_priority(value: object) -> str:
     """
     Canonicalize `additional_buy_priority` to the string values expected by workers.
@@ -170,7 +169,6 @@ def apply_robust_gates(
         "num_folds": int(len(df)),
     }
     return df, summary
-
 
 # --- Clustering Helper Function ---
 def find_robust_parameters(
