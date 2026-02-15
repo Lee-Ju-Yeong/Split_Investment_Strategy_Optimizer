@@ -73,3 +73,16 @@ parameter_space:
 walk_forward_settings:
   total_folds: 6
   period_length_days: 365
+  # [Issue #68] Robust WFO feature flag
+  robust_selection_enabled: true
+
+  # Robust score config (cluster scoring)
+  robust_score_metric: "calmar_ratio"
+  robust_score_k: 1.0
+
+  # Robust gates config (post-WFO validation)
+  robust_gate_metric: "calmar_ratio"
+  robust_gates:
+    min_oos_is_ratio: 0.60
+    min_fold_pass_rate: 0.70
+    max_oos_mdd_p95: 0.25
