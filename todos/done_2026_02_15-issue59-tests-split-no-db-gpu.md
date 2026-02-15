@@ -145,3 +145,6 @@
 (사람이 작성하는 시점엔 TODO 로만 남겨놓는다)
 (문제 해결에 참고했던 issue 번호가 포함된 링크 or commit hash)
 - issue: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59`
+- PR: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/76`
+- merged commit (main): `e6cc909`
+- note: 이후 `#53`에서 통합 테스트 설정 소스가 `config.ini` -> `config/config.yaml`(+ `MAGICSPLIT_CONFIG_PATH`)로 전환됨 (`7a694c2`)
