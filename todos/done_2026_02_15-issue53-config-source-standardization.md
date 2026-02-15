@@ -87,5 +87,6 @@
 ## 10. 진행 상태 (2026-02-15)
 - Branch: `feature/issue53-config-source-standardization-v2`
 - Impl commit: `df8d673`
-- PR (create): `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/new/feature/issue53-config-source-standardization-v2`
-- Status: PR 리뷰 대기
+- PR: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/79`
+- Merged commit (main): `7a694c2`
+- Status: merged
