@@ -35,6 +35,7 @@ for name in [
     "src.walk_forward_analyzer",
     "src.parameter_simulation_gpu",
     "src.pipeline_batch",
+    "src.ticker_universe_batch",
 ]:
     importlib.import_module(name)
 """
@@ -60,9 +61,11 @@ for name in [
         pipeline_batch = importlib.import_module("src.pipeline_batch")
         self.assertTrue(hasattr(pipeline_batch, "run_pipeline_batch"))
 
+        ticker_universe_batch = importlib.import_module("src.ticker_universe_batch")
+        self.assertTrue(hasattr(ticker_universe_batch, "run_ticker_universe_batch"))
+
         wfo = importlib.import_module("src.walk_forward_analyzer")
         self.assertTrue(hasattr(wfo, "run_walk_forward_analysis"))
 
         sim = importlib.import_module("src.parameter_simulation_gpu")
         self.assertTrue(hasattr(sim, "find_optimal_parameters"))
-

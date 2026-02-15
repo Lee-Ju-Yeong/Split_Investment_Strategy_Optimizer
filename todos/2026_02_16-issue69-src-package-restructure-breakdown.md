@@ -180,10 +180,13 @@
 
 ### 5-2. PR 단계(초안)
 - PR-0(안전망): 신규 테스트 + 패키지 스켈레톤(빈 `__init__.py`)만 추가
-- PR-1: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
-- PR-2: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
-- PR-3: 배치/수집기 계층(`*batch.py`)를 `src/pipeline/*`로 이동(엔트리포인트 wrapper 유지)
-- PR-4: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
+- PR-1: `src/pipeline_batch.py` 구현을 `src/pipeline/batch.py`로 이동(엔트리포인트 wrapper 유지)
+- PR-2: `src/ticker_universe_batch.py` 구현을 `src/pipeline/ticker_universe_batch.py`로 이동(엔트리포인트 wrapper 유지)
+- PR-3: `src/ohlcv_batch.py` 구현을 `src/pipeline/ohlcv_batch.py`로 이동(엔트리포인트 wrapper 유지)
+- PR-4: `src/daily_stock_tier_batch.py` 구현을 `src/pipeline/daily_stock_tier_batch.py`로 이동(필요 시 엔트리포인트 wrapper)
+- PR-5: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
+- PR-6: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
+- PR-7: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
 
 ---
 
@@ -203,6 +206,14 @@
 - [x] `tests/test_pipeline_batch.py`: patch 타겟을 `src.pipeline.batch.*`로 갱신
 - [x] 테스트 통과:
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch -v`
+
+### 6-3. PR-2: `ticker_universe_batch` 구현을 `src/pipeline`로 이동
+- [x] `src/pipeline/ticker_universe_batch.py`: 기존 `src/ticker_universe_batch.py` 구현 이동(BOOTSTRAP 제거 + 상위 모듈 상대 import로 변경)
+- [x] `src/ticker_universe_batch.py`: entrypoint 호환 wrapper로 재생성(`python -m src.ticker_universe_batch` 유지)
+- [x] `src/pipeline/batch.py`: 내부 import를 wrapper 대신 `.ticker_universe_batch` 구현으로 전환
+- [x] `tests/test_ticker_universe_batch.py`: patch 타겟을 `src.pipeline.ticker_universe_batch.*`로 갱신
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_ticker_universe_batch -v`
 
 ---
 
