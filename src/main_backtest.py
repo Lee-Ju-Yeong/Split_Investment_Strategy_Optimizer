@@ -4,6 +4,7 @@ import warnings
 # pandas UserWarning을 다른 모듈 임포트 전에 필터링합니다.
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
+import logging
 import pandas as pd
 import os
 from datetime import datetime
@@ -17,7 +18,17 @@ from .performance_analyzer import PerformanceAnalyzer
 from .config_loader import load_config
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
 
+logger = logging.getLogger(__name__)
+
 def run_backtest_from_config(config: dict) -> dict:
+    # When called from non-CLI entrypoints (e.g., Flask), logging may not be configured.
+    # We only auto-configure if root has no handlers to avoid duplicating external setups.
+    root = logging.getLogger()
+    if not getattr(root, "_magic_split_logging_configured", False) and not root.handlers:
+        from .logging_utils import setup_logging
+
+        setup_logging()
+
     try:
         db_params = config['database']
         backtest_settings = config['backtest_settings']
@@ -47,7 +58,7 @@ def run_backtest_from_config(config: dict) -> dict:
         data_handler=data_handler, execution_handler=execution_handler
     )
     
-    print("백테스팅 엔진을 실행합니다...")
+    logger.info("백테스팅 엔진을 실행합니다...")
     final_portfolio = engine.run()
 
     ### ### 이슈 구현: daily_snapshot_history 사용으로 변경 ### ###
@@ -85,7 +96,7 @@ def run_backtest_from_config(config: dict) -> dict:
             trade_filepath = os.path.join(result_dir, trade_filename)
             trade_df.to_csv(trade_filepath, index=False, encoding='utf-8-sig')
             trade_filepath_for_response = trade_filepath.replace('\\', '/')
-            print(f"상세 거래 내역이 '{trade_filepath_for_response}'에 저장되었습니다.")
+            logger.info("상세 거래 내역이 '%s'에 저장되었습니다.", trade_filepath_for_response)
 
         final_positions_list = []
         if final_portfolio.positions:
@@ -175,19 +186,21 @@ def display_results_in_terminal(result: dict):
 def main():
     """터미널에서 직접 실행할 때 사용되는 메인 함수."""
     try:
+        from .logging_utils import setup_logging
+
+        setup_logging()
         config = load_config()
         result = run_backtest_from_config(config)
         
         if result.get("success"):
             display_results_in_terminal(result)
         else:
-            print(f"\n[오류] 백테스팅 실행 중 문제가 발생했습니다: {result.get('error', '알 수 없는 오류')}")
+            logger.error("백테스팅 실행 중 문제가 발생했습니다: %s", result.get("error", "알 수 없는 오류"))
 
     except FileNotFoundError:
-        print("\n[오류] 'config/config.yaml' 설정 파일을 찾을 수 없습니다. 프로젝트 루트에 생성해주세요.")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error("'config/config.yaml' 설정 파일을 찾을 수 없습니다. 프로젝트 루트에 생성해주세요.")
+    except Exception:
+        logger.exception("백테스팅 실행 중 예외 발생")
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,10 @@ This module contains the functions for executing the orders for the Magic Split 
 
 import math
 import numpy as np
+import logging
 from .portfolio import Trade, Position
+
+logger = logging.getLogger(__name__)
 
 # --- 타입 힌트를 위한 임포트 ---
 from typing import TYPE_CHECKING
@@ -86,10 +89,15 @@ class BasicExecutionHandler:
         cost = np.float32(execution_price) * np.float32(quantity)
         commission = np.floor(cost * np.float32(self.buy_commission_rate))
         total_cost = cost + commission
-        print(
-        f"[CPU_BUY_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
-        f"Invest: {investment_amount:,.0f} / ExecPrice: {execution_price:,.0f} = Qty: {quantity}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[CPU_BUY_CALC] %s %s | Invest: %s / ExecPrice: %s = Qty: %s",
+                order_event["date"].strftime("%Y-%m-%d"),
+                ticker,
+                f"{investment_amount:,.0f}",
+                f"{execution_price:,.0f}",
+                int(quantity),
+            )
         if portfolio.cash < total_cost:
             return
 
@@ -185,16 +193,24 @@ class BasicExecutionHandler:
         commission = np.floor(total_deduction * commission_ratio)
         tax = total_deduction - commission
   
-        print(
-        f"[CPU_SELL_CALC] {order_event['date'].strftime('%Y-%m-%d')} {ticker} | "
-        f"Qty: {quantity} * ExecPrice: {execution_price:,.0f} = Revenue: {revenue:,.0f}"
-    )
-        print(
-            f"[CPU_SELL_PRICE] {order_event['date'].strftime('%Y-%m-%d')} {ticker} "
-            f"Reason: {order_event.get('reason_for_trade', 'N/A')} | "
-            f"Target: {target_price:.2f} -> Exec: {execution_price} | "
-            f"High: {ohlc_data['high_price']}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[CPU_SELL_CALC] %s %s | Qty: %s * ExecPrice: %s = Revenue: %s",
+                order_event["date"].strftime("%Y-%m-%d"),
+                ticker,
+                int(quantity),
+                f"{execution_price:,.0f}",
+                f"{revenue:,.0f}",
+            )
+            logger.debug(
+                "[CPU_SELL_PRICE] %s %s Reason: %s | Target: %.2f -> Exec: %s | High: %s",
+                order_event["date"].strftime("%Y-%m-%d"),
+                ticker,
+                order_event.get("reason_for_trade", "N/A"),
+                float(target_price),
+                execution_price,
+                ohlc_data.get("high_price"),
+            )
         
         # 정산
         portfolio.update_cash(net_revenue)
