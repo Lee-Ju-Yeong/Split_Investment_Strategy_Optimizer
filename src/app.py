@@ -1,5 +1,14 @@
 # app.py
 
+import sys
+from pathlib import Path
+
+# BOOTSTRAP: allow direct execution (`python src/app.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
 import os

@@ -2,7 +2,7 @@
 import datetime
 import time
 from pykrx import stock
-from db_setup import get_db_connection
+from .db_setup import get_db_connection
 
 def collect_tickers():
     conn = get_db_connection() # Establish a connection to the database
