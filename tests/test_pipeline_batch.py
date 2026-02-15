@@ -19,10 +19,10 @@ class TestPipelineBatch(unittest.TestCase):
                 end_date_str="20260207",
             )
 
-    @patch("src.pipeline_batch.run_daily_stock_tier_batch")
-    @patch("src.pipeline_batch.run_investor_trading_batch")
-    @patch("src.pipeline_batch.run_financial_batch")
-    @patch("src.pipeline_batch.run_ticker_universe_batch")
+    @patch("src.pipeline.batch.run_daily_stock_tier_batch")
+    @patch("src.pipeline.batch.run_investor_trading_batch")
+    @patch("src.pipeline.batch.run_financial_batch")
+    @patch("src.pipeline.batch.run_ticker_universe_batch")
     def test_run_pipeline_batch_calls_collectors(
         self,
         mock_run_universe,
