@@ -1,18 +1,48 @@
-# db_setup.py
-import configparser
-import pymysql
+from __future__ import annotations
 
-def get_db_connection():
-    config = configparser.ConfigParser()
-    config.read('config.ini')
 
-    user= config['mysql']['user']
-    password = config['mysql']['password']
-    host = config['mysql']['host']
-    database = config['mysql']['database']
+def get_db_connection(db_config: dict | None = None):
+    """
+    Create a DB connection.
 
-    conn = pymysql.connect(host=host, user=user, password=password, db=database, charset='utf8')
-    return conn
+    Default config source:
+    - `config/config.yaml` -> `database` section (via `src.config_loader.load_config`)
+
+    Args:
+        db_config: Optional DB config dict. If provided, it takes precedence.
+                  Expected keys: host, user, password, database (optionally port).
+    """
+    if db_config is None:
+        # Lazy import to keep module import safe in no-DB environments.
+        from .config_loader import load_config
+
+        config = load_config()
+        db_config = dict(config.get("database") or {})
+
+    required = ["host", "user", "password", "database"]
+    missing = [k for k in required if not db_config.get(k)]
+    if missing:
+        raise KeyError(f"DB 설정 누락: {missing}. config.yaml의 `database` 섹션을 확인하세요.")
+
+    try:
+        import pymysql  # type: ignore
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "pymysql is required for DB operations. Install it (e.g., `pip install pymysql`) "
+            "or run in a DB-enabled environment."
+        ) from e
+
+    conn_kwargs = {
+        "host": db_config["host"],
+        "user": db_config["user"],
+        "password": db_config["password"],
+        "db": db_config["database"],
+        "charset": "utf8",
+    }
+    if db_config.get("port") is not None:
+        conn_kwargs["port"] = int(db_config["port"])
+
+    return pymysql.connect(**conn_kwargs)
 
 def create_tables(conn):
     cur = conn.cursor()

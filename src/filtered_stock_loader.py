@@ -9,20 +9,32 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     __package__ = file_path.parent.name  # "src"
 
 import pandas as pd
-import configparser
+import urllib.parse
 from sqlalchemy import create_engine, text
 from tqdm import tqdm
 
-def get_db_engine():
-    """SQLAlchemy 엔진을 생성하여 반환합니다."""
-    config = configparser.ConfigParser()
-    config.read('config.ini')
+def get_db_engine(db_config: dict | None = None):
+    """SQLAlchemy 엔진을 생성하여 반환합니다.
 
-    user = config['mysql']['user']
-    password = config['mysql']['password']
-    host = config['mysql']['host']
-    database = config['mysql']['database']
-    
+    Default config source:
+    - `config/config.yaml` -> `database` section
+    """
+    if db_config is None:
+        from .config_loader import load_config
+
+        config = load_config()
+        db_config = dict(config.get("database") or {})
+
+    required = ["host", "user", "password", "database"]
+    missing = [k for k in required if not db_config.get(k)]
+    if missing:
+        raise KeyError(f"DB 설정 누락: {missing}. config.yaml의 `database` 섹션을 확인하세요.")
+
+    user = db_config["user"]
+    password = urllib.parse.quote_plus(db_config["password"])
+    host = db_config["host"]
+    database = db_config["database"]
+
     # SQLAlchemy를 사용하여 데이터베이스 연결 엔진 생성
     engine = create_engine(f"mysql+pymysql://{user}:{password}@{host}/{database}?charset=utf8mb4")
     return engine
@@ -80,11 +92,16 @@ def load_filtered_stocks_to_db(csv_path, engine):
 
 def main():
     """메인 실행 함수"""
-    csv_file_path = 'data/processed_data/mapped_weekly_filtered_stocks_FINAL.csv'
-    db_engine = get_db_engine()
+    from .config_loader import load_config, resolve_project_path
+
+    config = load_config()
+    pipeline_paths = (config.get("data_pipeline") or {}).get("paths") or {}
+    csv_file_path = pipeline_paths.get("filtered_stocks_csv_path", "data/processed_data/mapped_weekly_filtered_stocks_FINAL.csv")
+
+    db_engine = get_db_engine(config.get("database"))
     
     print("주간 필터링 종목 DB 적재 작업을 시작합니다.")
-    load_filtered_stocks_to_db(csv_file_path, db_engine)
+    load_filtered_stocks_to_db(str(resolve_project_path(csv_file_path)), db_engine)
     print("작업을 종료합니다.")
 
 if __name__ == "__main__":
