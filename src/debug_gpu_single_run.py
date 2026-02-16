@@ -22,7 +22,7 @@ import urllib.parse
 
 # --- 필요한 모듈 추가 임포트 ---
 from .config_loader import load_config
-from .backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
 from .performance_analyzer import PerformanceAnalyzer
 

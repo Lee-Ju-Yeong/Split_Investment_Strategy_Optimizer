@@ -266,8 +266,8 @@
   - `python -m unittest tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
 
 ### 6-8. PR-7: `backtest_strategy_gpu` 분해(`src/backtest/gpu/*`)
-- [ ] `src/backtest/gpu/*`: GPU 커널/상태/runner를 책임 단위로 분리
-- [ ] `src/backtest_strategy_gpu.py`: wrapper 유지(직접 import 시 GPU deps 요구되는 구조는 허용, 단 호출 경계는 `parameter_simulation_gpu_lib`에서 통제)
+- [x] `src/backtest/gpu/*`: GPU 커널/상태/runner를 책임 단위로 분리
+- [x] `src/backtest_strategy_gpu.py`: wrapper 유지(직접 import 시 GPU deps 요구되는 구조는 허용, 단 호출 경계는 `parameter_simulation_gpu_lib`에서 통제)
 - [ ] CPU-GPU 정합성 확인(가능 범위): `src/debug_gpu_single_run.py` 기준 시나리오 스모크
 
 ### 6-9. PR-8: CPU 백테스터(core) 계층 이동(`src/backtest/cpu/*`)
