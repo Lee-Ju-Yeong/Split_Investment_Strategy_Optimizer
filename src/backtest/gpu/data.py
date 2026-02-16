@@ -38,7 +38,7 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
     
     # 3. 필요한 각 컬럼에 대해 (num_days, num_tickers) 텐서 생성하고 값 채우기
     tensors = {}
-    for col_name in ['close_price', 'high_price', 'low_price']:
+    for col_name in ['open_price', 'close_price', 'high_price', 'low_price']:
         # 0으로 채워진 빈 텐서 생성
         tensor = cp.zeros((num_days, num_tickers), dtype=cp.float32)
         
