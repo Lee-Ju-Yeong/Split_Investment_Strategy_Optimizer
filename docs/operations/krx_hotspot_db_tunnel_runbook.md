@@ -122,9 +122,7 @@ python -m src.pipeline_batch \
   --skip-financial --skip-investor --skip-tier
 ```
 
-참고: 현재 `src/db_setup.py`는 DB port를 별도 설정으로 읽지 않습니다.
-기본 3306을 사용하므로, 실행 시점에는 로컬 터널 포트를 3306으로 맞추거나
-로컬 3306 충돌이 없는 환경에서 실행하는 방식을 권장합니다.
+참고: `src/db_setup.py`는 `config.ini`의 `[mysql] port` 값을 읽으며, 미설정 시 기본 3306을 사용합니다.
 
 ## 4) 결과 검증
 

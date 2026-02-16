@@ -9,9 +9,17 @@ def get_db_connection():
     user= config['mysql']['user']
     password = config['mysql']['password']
     host = config['mysql']['host']
+    port = config.getint('mysql', 'port', fallback=3306)
     database = config['mysql']['database']
 
-    conn = pymysql.connect(host=host, user=user, password=password, db=database, charset='utf8')
+    conn = pymysql.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        db=database,
+        charset='utf8',
+    )
     return conn
 
 def create_tables(conn):
