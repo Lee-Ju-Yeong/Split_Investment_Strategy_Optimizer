@@ -215,6 +215,15 @@
 - [x] 테스트 통과:
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_ticker_universe_batch -v`
 
+### 6-4. PR-3: `ohlcv_batch` 구현을 `src/pipeline`로 이동
+- [x] `src/pipeline/ohlcv_batch.py`: 기존 `src/ohlcv_batch.py` 구현 이동(BOOTSTRAP 제거 + 상위 모듈 상대 import로 변경)
+- [x] `src/ohlcv_batch.py`: entrypoint 호환 wrapper로 재생성(`python -m src.ohlcv_batch` 유지 + 주요 심볼 re-export)
+- [x] `src/ohlcv_collector.py`: `pykrx` import를 lazy로 전환(import-safe; 호출 시에만 의존)
+- [x] `tests/test_ohlcv_batch.py`: patch 타겟을 `src.pipeline.ohlcv_batch.*`로 갱신
+- [x] `tests/test_issue69_entrypoint_compat.py`: `src.ohlcv_batch` import + 심볼(`run_ohlcv_batch`) 가드 추가
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_ticker_universe_batch tests.test_ohlcv_batch -v`
+
 ---
 
 ## 7. 문제 해결에 참고
