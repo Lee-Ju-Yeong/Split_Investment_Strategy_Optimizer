@@ -286,8 +286,12 @@
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_issue69_parameter_simulation_wrapper_compat -v`
 
 ### 6-11. PR-10: 엔트리포인트 호환성 가드 보강(DoD Gate)
-- [ ] `tests/test_issue69_entrypoint_compat.py`: `src.main_backtest`, `src.main_script` import 가드 추가
-- [ ] (선택) `src/main_script.py`: `main()` 함수 도입 + `if __name__ == \"__main__\": main()`로 정리(동작 동일)
+- [x] `tests/test_issue69_entrypoint_compat.py`: `src.main_backtest`, `src.main_script` import 가드 추가
+- [x] `src/main_script.py`: `main()` 함수 도입 + `if __name__ == \"__main__\": main()`로 정리(동작 동일)
+- [x] `src/data_handler.py`: `mysql.connector` import를 `DataHandler.__init__` 내부 lazy import로 전환(no-DB import-safe)
+- [x] `src/main_backtest.py`: `PerformanceAnalyzer` import를 함수 내부 lazy import로 전환(import 시 matplotlib 의존 제거)
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
 
 ### 6-12. PR-11: import 경로 변경 가이드 문서화(DoD Gate)
 - [ ] `docs/refactoring/issue69-import-path-mapping.md`: 이전 import 경로 -> 신규 경로 매핑 테이블 작성

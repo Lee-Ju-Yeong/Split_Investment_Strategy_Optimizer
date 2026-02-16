@@ -32,6 +32,8 @@ class _Blocker(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, _Blocker())
 
 for name in [
+    "src.main_backtest",
+    "src.main_script",
     "src.walk_forward_analyzer",
     "src.parameter_simulation_gpu",
     "src.pipeline_batch",
@@ -60,6 +62,13 @@ for name in [
         )
 
     def test_entrypoints_export_expected_symbols(self):
+        main_backtest = importlib.import_module("src.main_backtest")
+        self.assertTrue(hasattr(main_backtest, "main"))
+        self.assertTrue(hasattr(main_backtest, "run_backtest_from_config"))
+
+        main_script = importlib.import_module("src.main_script")
+        self.assertTrue(hasattr(main_script, "main"))
+
         pipeline_batch = importlib.import_module("src.pipeline_batch")
         self.assertTrue(hasattr(pipeline_batch, "run_pipeline_batch"))
 

@@ -23,7 +23,6 @@ from .strategy import MagicSplitStrategy
 from .portfolio import Portfolio
 from .execution import BasicExecutionHandler
 from .backtester import BacktestEngine
-from .performance_analyzer import PerformanceAnalyzer 
 from .config_loader import load_config
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
 
@@ -82,6 +81,8 @@ def run_backtest_from_config(config: dict) -> dict:
     daily_values_for_response = history_df['total_value']
 
     try:
+        from .performance_analyzer import PerformanceAnalyzer
+
         # PerformanceAnalyzer는 이제 전체 history_df를 받습니다.
         analyzer = PerformanceAnalyzer(history_df)
         raw_metrics = analyzer.get_metrics(formatted=False)
