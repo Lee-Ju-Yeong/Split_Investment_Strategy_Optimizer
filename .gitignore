@@ -158,3 +158,8 @@ data/
 .ipynb_checkpoints
 __pycache__
 
+# Private operation notes
+docs/operations/*.local.md
+docs/operations/private/
+config/ops.local.*
+*.secrets.yaml
