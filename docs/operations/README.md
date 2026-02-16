@@ -30,3 +30,10 @@
 1. 공개판: `krx_hotspot_db_tunnel_runbook.md`
 2. 로컬 템플릿: `krx_hotspot_db_tunnel_runbook.local.example.md`
 3. 실제 환경값은 템플릿을 복사한 `*.local.md`에만 기록
+
+## 권장 로컬 파일명
+
+1. `docs/operations/krx_hotspot_db_tunnel_runbook.local.md`
+2. `docs/operations/private/krx_hotspot_db_tunnel_values.md`
+
+두 파일 모두 `.gitignore` 패턴으로 커밋에서 제외됩니다.

@@ -161,5 +161,7 @@ __pycache__
 # Private operation notes
 docs/operations/*.local.md
 docs/operations/private/
+docs/operations/*secrets*.md
+docs/operations/*values*.md
 config/ops.local.*
 *.secrets.yaml
