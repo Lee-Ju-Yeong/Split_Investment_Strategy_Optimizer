@@ -418,13 +418,6 @@ def _probe_krx_market_cap_endpoint(preflight_start, preflight_end):
         )
 
     content_type = (response.headers.get("content-type") or "").lower()
-    if "json" not in content_type:
-        snippet = " ".join(response.text.splitlines()[:3]).strip()
-        raise RuntimeError(
-            "[market_cap_collector] KRX endpoint returned non-JSON response "
-            f"(content_type={content_type}). head={snippet[:200]}"
-        )
-
     try:
         response.json()
     except ValueError as exc:
@@ -433,6 +426,14 @@ def _probe_krx_market_cap_endpoint(preflight_start, preflight_end):
             "[market_cap_collector] KRX endpoint returned invalid JSON. "
             f"head={snippet[:200]}"
         ) from exc
+
+    if "json" not in content_type:
+        # KRX occasionally returns JSON payload with text/html content-type.
+        # We accept parseable JSON and keep this warning for observability.
+        print(
+            "[market_cap_collector] KRX endpoint returned non-standard "
+            f"content_type={content_type}, but JSON payload was valid."
+        )
 
 
 def _run_market_cap_preflight(end_date):
