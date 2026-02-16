@@ -9,7 +9,7 @@
 - 기존 top-level 모듈(`src/*.py`)은 호환성 wrapper로 유지합니다.
 - 신규/내부 구현 import는 하위 패키지 구현 경로를 우선 사용합니다.
 - 엔트리포인트 실행 커맨드(`python -m src.<entrypoint>`)는 기존과 동일하게 유지합니다.
-- `PR-7`(`backtest_strategy_gpu` 분해)은 아직 미완료이므로, 해당 경로는 "현행 유지" 상태입니다.
+- `backtest_strategy_gpu`는 wrapper를 유지하고 실제 구현은 `src.backtest.gpu.*`를 사용합니다.
 
 ## 2. 경로 매핑 표
 
@@ -28,7 +28,7 @@
 | CPU execution | `src.execution` | `src.backtest.cpu.execution` | Done | wrapper + legacy import 호환 |
 | GPU optimization library | `src.parameter_simulation_gpu_lib` | `src.optimization.gpu.*` | Done | wrapper 유지 |
 | GPU optimization entrypoint | `src.parameter_simulation_gpu` | `src.parameter_simulation_gpu_lib -> src.optimization.gpu.parameter_simulation` | Done | import-safe wrapper 유지 (#60) |
-| GPU strategy kernel | `src.backtest_strategy_gpu` | `src.backtest.gpu.*` (planned) | Pending (PR-7) | 현재는 단일 모듈 유지 |
+| GPU strategy kernel | `src.backtest_strategy_gpu` | `src.backtest.gpu.*` | Done | wrapper + legacy import 호환 |
 
 ## 3. import 사용 가이드
 
@@ -75,4 +75,4 @@ from src.parameter_simulation_gpu import find_optimal_parameters
 
 ## 5. 남은 작업
 
-- `PR-7`: `src.backtest_strategy_gpu`를 `src.backtest.gpu/*`로 분해 후, 본 문서의 Pending 행을 Done으로 갱신합니다.
+- 없음 (Issue #69 분해 단계 기준)

@@ -75,13 +75,13 @@ def _ensure_gpu_deps():
             "Install sqlalchemy (and pymysql) in your environment."
         ) from err
 
-    # Note: `src.backtest_strategy_gpu` imports cupy/cudf at module import time,
+    # Note: `src.backtest.gpu.engine` imports cupy/cudf at module import time,
     # so we must only import it after confirming GPU deps exist.
     try:
-        from ...backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+        from ...backtest.gpu.engine import run_magic_split_strategy_on_gpu
     except ImportError:  # pragma: no cover
         # Legacy mode: imported as top-level `optimization.*` with `src/` on sys.path.
-        from backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+        from backtest.gpu.engine import run_magic_split_strategy_on_gpu
 
     return cp, cudf, create_engine, run_magic_split_strategy_on_gpu
 
