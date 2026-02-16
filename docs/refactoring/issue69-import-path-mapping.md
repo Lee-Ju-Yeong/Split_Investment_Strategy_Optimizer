@@ -73,6 +73,44 @@ from src.parameter_simulation_gpu import find_optimal_parameters
 - `python -m src.main_backtest`
 - `python -m src.main_script`
 
-## 5. 남은 작업
+## 5. PR-12 적용 결과
 
-- 없음 (Issue #69 분해 단계 기준)
+- `src` 내부 wrapper 참조 제거
+  - `src.main_backtest` -> `src.backtest.cpu.*` 직접 import
+- 테스트 import 전환(호환성 테스트 제외)
+  - `tests/test_pipeline_batch.py` -> `src.pipeline.batch`
+  - `tests/test_ticker_universe_batch.py` -> `src.pipeline.ticker_universe_batch`
+  - `tests/test_ohlcv_batch.py` -> `src.pipeline.ohlcv_batch`
+  - `tests/test_daily_stock_tier_batch.py` -> `src.pipeline.daily_stock_tier_batch`
+  - `tests/test_collector_normalization.py` -> `src.data.collectors.*`
+  - `tests/test_integration.py` -> `src.backtest.cpu.*`
+  - `tests/test_point_in_time.py` -> `src.backtest.cpu.strategy`
+  - `tests/test_issue67_tier_universe.py` -> `src.backtest.cpu.*`, `src.backtest.gpu.*`
+  - `tests/test_portfolio.py` -> `src.backtest.cpu.portfolio`
+  - `tests/test_backtest_strategy_gpu.py` -> `src.backtest.gpu.logic`
+
+## 6. Wrapper 정리 목록 (확정)
+
+### 6.1 유지 필수 (현 단계 제거 불가)
+
+| Wrapper | 유지 사유 |
+| --- | --- |
+| `src.pipeline_batch` | 엔트리포인트 커맨드 호환 (`python -m src.pipeline_batch`) |
+| `src.ticker_universe_batch` | 엔트리포인트/운영 스크립트 호환 |
+| `src.ohlcv_batch` | 엔트리포인트/운영 스크립트 호환 |
+| `src.walk_forward_analyzer` | 엔트리포인트/사이드이펙트 가드 테스트 |
+| `src.parameter_simulation_gpu` | public API(`find_optimal_parameters`) + import-safe 규칙(#60) |
+| `src.parameter_simulation_gpu_lib` | 패키지/legacy wrapper 호환 테스트 유지 |
+
+### 6.2 조건부 제거 가능 (내부 import 전환 완료 후 정책 결정)
+
+| Wrapper | 제거 조건 |
+| --- | --- |
+| `src.backtester` | `tests/test_issue69_cpu_backtest_wrapper_compat.py` 정책 변경(legacy import 중단) |
+| `src.strategy` | `tests/test_issue69_cpu_backtest_wrapper_compat.py` 정책 변경(legacy import 중단) |
+| `src.portfolio` | `tests/test_issue69_cpu_backtest_wrapper_compat.py` 정책 변경(legacy import 중단) |
+| `src.execution` | `tests/test_issue69_cpu_backtest_wrapper_compat.py` 정책 변경(legacy import 중단) |
+| `src.backtest_strategy_gpu` | legacy import(`import backtest_strategy_gpu`) 호환 정책 종료 |
+| `src.daily_stock_tier_batch` | `src.daily_stock_tier_batch` top-level import 호환 정책 종료 |
+| `src.financial_collector` | `src.financial_collector` top-level import 호환 정책 종료 |
+| `src.investor_trading_collector` | `src.investor_trading_collector` top-level import 호환 정책 종료 |

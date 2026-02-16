@@ -5,8 +5,8 @@ import sys
 import os
 import pandas as pd
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from portfolio import Portfolio, Position, Trade
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.backtest.cpu.portfolio import Portfolio, Position, Trade
 
 class TestPortfolio(unittest.TestCase):
 
@@ -25,7 +25,7 @@ class TestPortfolio(unittest.TestCase):
         self.assertEqual(self.portfolio.cash, self.initial_cash)
         self.assertEqual(self.portfolio.positions, {})
         self.assertEqual(self.portfolio.trade_history, [])
-        self.assertEqual(self.portfolio.daily_value_history, [])
+        self.assertEqual(self.portfolio.daily_snapshot_history, [])
 
     def test_update_cash(self):
         """현금 업데이트 기능 검증"""
@@ -41,23 +41,23 @@ class TestPortfolio(unittest.TestCase):
         position2 = Position(buy_price=65000, quantity=5, order=2, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
 
         # 포지션 추가
-        self.portfolio.add_position(ticker, position1)
+        self.portfolio.add_position(ticker, position1, date(2022, 1, 10), 0)
         self.assertIn(ticker, self.portfolio.positions)
         self.assertEqual(len(self.portfolio.positions[ticker]), 1)
         self.assertEqual(self.portfolio.positions[ticker][0].quantity, 10)
 
         # 같은 종목에 다른 차수 포지션 추가 (정렬 확인)
-        self.portfolio.add_position(ticker, position2)
+        self.portfolio.add_position(ticker, position2, date(2022, 1, 11), 1)
         self.assertEqual(len(self.portfolio.positions[ticker]), 2)
         self.assertEqual(self.portfolio.positions[ticker][0].order, 1) # 정렬되어 order 1이 먼저 와야 함
         
         # 포지션 제거
-        self.portfolio.remove_position(ticker, position1)
+        self.portfolio.remove_position(ticker, position1, date(2022, 1, 12), 2)
         self.assertEqual(len(self.portfolio.positions[ticker]), 1)
         self.assertEqual(self.portfolio.positions[ticker][0], position2)
 
         # 마지막 포지션 제거
-        self.portfolio.remove_position(ticker, position2)
+        self.portfolio.remove_position(ticker, position2, date(2022, 1, 13), 3)
         self.assertNotIn(ticker, self.portfolio.positions)
 
     def test_get_total_value(self):
@@ -71,8 +71,8 @@ class TestPortfolio(unittest.TestCase):
         ticker2 = '000660'
         pos1 = Position(buy_price=70000, quantity=10, order=1, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
         pos2 = Position(buy_price=100000, quantity=5, order=1, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
-        self.portfolio.add_position(ticker1, pos1)
-        self.portfolio.add_position(ticker2, pos2)
+        self.portfolio.add_position(ticker1, pos1, date(2022, 1, 10), 0)
+        self.portfolio.add_position(ticker2, pos2, date(2022, 1, 10), 0)
         self.portfolio.update_cash(-(70000 * 10 + 100000 * 5)) # 매수 비용만큼 현금 차감
 
         # get_latest_price가 반환할 현재가 설정
@@ -97,16 +97,41 @@ class TestPortfolio(unittest.TestCase):
     def test_record_trade_and_daily_value(self):
         """거래 및 일별 가치 기록 기능 검증"""
         # 거래 기록
-        trade = Trade(date=date(2022, 3, 5), code='005930', order=1, quantity=10, buy_price=70000, sell_price=None, trade_type='BUY', profit=0, profit_rate=0, normalized_value=0.5, capital=100000, total_portfolio_value=100000)
+        trade = Trade(
+            date=date(2022, 3, 5),
+            code='005930',
+            name='삼성전자',
+            trade_type='BUY',
+            order=1,
+            reason_for_trade='신규 진입',
+            trigger_price=70000,
+            open_price=70000,
+            high_price=70500,
+            low_price=69500,
+            close_price=70000,
+            quantity=10,
+            buy_price=70000,
+            sell_price=None,
+            commission=0,
+            tax=0,
+            trade_value=700000,
+            quantity_before=0,
+            quantity_after=10,
+            avg_buy_price_after=70000,
+            realized_pnl=0,
+            cash_before=100000,
+            cash_after=30000,
+            total_portfolio_value=100000,
+        )
         self.portfolio.record_trade(trade)
         self.assertEqual(len(self.portfolio.trade_history), 1)
         self.assertEqual(self.portfolio.trade_history[0].code, '005930')
 
         # 일별 가치 기록
-        self.portfolio.record_daily_value(date(2022, 3, 5), 100000)
-        self.portfolio.record_daily_value(date(2022, 3, 6), 101000)
-        self.assertEqual(len(self.portfolio.daily_value_history), 2)
-        self.assertEqual(self.portfolio.daily_value_history[1]['value'], 101000)
+        self.portfolio.record_daily_snapshot(date(2022, 3, 5), 100000)
+        self.portfolio.record_daily_snapshot(date(2022, 3, 6), 101000)
+        self.assertEqual(len(self.portfolio.daily_snapshot_history), 2)
+        self.assertEqual(self.portfolio.daily_snapshot_history[1]['total_value'], 101000)
 
 if __name__ == '__main__':
     unittest.main()

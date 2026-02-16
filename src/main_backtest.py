@@ -19,10 +19,10 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     __package__ = file_path.parent.name  # "src"
 
 from .data_handler import DataHandler
-from .strategy import MagicSplitStrategy
-from .portfolio import Portfolio
-from .execution import BasicExecutionHandler
-from .backtester import BacktestEngine
+from .backtest.cpu.strategy import MagicSplitStrategy
+from .backtest.cpu.portfolio import Portfolio
+from .backtest.cpu.execution import BasicExecutionHandler
+from .backtest.cpu.backtester import BacktestEngine
 from .config_loader import load_config
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
 

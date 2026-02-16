@@ -8,13 +8,9 @@ import unittest
 import numpy as np
 import cupy as cp
 import pandas as pd
-import cudf
 
 # Import the functions to be tested
-from src.backtest_strategy_gpu import (
-    calculate_portfolio_value_gpu,
-    _calculate_monthly_investment_gpu
-)
+from src.backtest.gpu.logic import _calculate_monthly_investment_gpu
 
 # A mock Position class to simulate the structure of the original data
 class MockPosition:
@@ -80,14 +76,6 @@ class TestBacktestStrategyGPU(unittest.TestCase):
         
         self.current_date = pd.to_datetime('2023-01-10')
         
-        # Mock GPU data for all_data_gpu
-        mock_data = {
-            'ticker': ['005930', '373220', '000660', '005380', '005930'],
-            'date': pd.to_datetime(['2023-01-09', '2023-01-10', '2023-01-10', '2023-01-09', '2023-01-10']),
-            'close_price': [70000, 450000, 130000, 200000, 71000]
-        }
-        self.all_data_gpu = cudf.from_pandas(pd.DataFrame(mock_data)).set_index(['ticker', 'date'])
-
     def test_calculate_portfolio_value_gpu(self):
         # ... (previous test remains here) ...
         pass
@@ -116,15 +104,16 @@ class TestBacktestStrategyGPU(unittest.TestCase):
             [sim0_capital, expected_inv_per_order_0],
             [sim1_capital, expected_inv_per_order_1]
         ])
+        evaluation_prices = cp.array([71000, 450000, 130000, 200000], dtype=cp.float32)
 
         # 2. Run the actual GPU function
         updated_portfolio_state = _calculate_monthly_investment_gpu(
-            self.current_date,
             self.portfolio_state,
             self.positions_state,
             self.param_combinations,
-            self.all_data_gpu,
-            self.all_tickers
+            evaluation_prices,
+            self.current_date,
+            False,
         )
 
         # 3. Assert that the results are close
