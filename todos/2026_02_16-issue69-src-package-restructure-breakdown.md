@@ -20,16 +20,18 @@
 - 현황:
   - `src`에 대형 파일과 중복 구현이 혼재되어 리뷰/유지보수 비용이 높음
   - 대형 모듈(예시):
-    - `src/backtest_strategy_gpu.py` (약 895 LOC)
-    - `src/parameter_simulation_gpu.py` (약 386 LOC)
-    - `src/walk_forward_analyzer.py` (약 333 LOC)
-    - `src/daily_stock_tier_batch.py` (약 325 LOC)
-    - `src/ohlcv_batch.py` (약 324 LOC)
-    - `src/strategy.py` (약 320 LOC)
+    - `src/backtest_strategy_gpu.py` (약 986 LOC, GPU 커널/로직 집중)
+    - `src/parameter_simulation_gpu_lib.py` (약 591 LOC, GPU 대규모 시뮬레이션/최적화)
+      - NOTE: `src/parameter_simulation_gpu.py`는 import-safe thin wrapper(약 29 LOC)
+    - `src/walk_forward_analyzer.py` (약 357 LOC, WFO 오케스트레이션/분석)
+    - `src/pipeline/ticker_universe_batch.py` (약 525 LOC, PIT 유니버스 배치)
+    - `src/pipeline/daily_stock_tier_batch.py` (약 490 LOC, Tier 사전계산 배치)
+    - `src/pipeline/ohlcv_batch.py` (약 477 LOC, OHLCV 장기 백필 배치)
+    - `src/strategy.py` (약 374 LOC, CPU 전략 로직)
   - 중복/분산 구현(예시):
     - `Position` 중복 정의 (`src/strategy.py`, `src/portfolio.py`)
     - CompanyInfo 캐시 관리 지점 분산 (`src/data_handler.py`, `src/company_info_manager.py`)
-    - GPU preload/bootstrap 로직 중복 (`src/parameter_simulation_gpu.py`, `src/debug_gpu_single_run.py`)
+    - GPU preload/bootstrap/runner 로직 중복 (`src/parameter_simulation_gpu_lib.py`, `src/debug_gpu_single_run.py`)
 
 - 선행/연관 이슈:
   - 제외 범위(별도 이슈에서 처리): #54, #57, #58, #60, #61
@@ -42,19 +44,21 @@
 
 ## 2. 요구사항(구현하고자 하는 필요한 기능)
 ### 2-1. `src` 하위 패키지 구조 도입
-- 예시 구조(초안):
+- 예시 구조(초안, Issue #69 목표 구조):
   - `src/backtest/cpu`
   - `src/backtest/gpu`
   - `src/data/collectors`
-  - `src/data/pipeline`
+  - `src/pipeline`
+  - `src/analysis`
+  - `src/optimization/gpu`
   - `src/common`
 
 ### 2-2. 대형 모듈을 책임 단위로 분해
 - 대상 후보:
   - `src/backtest_strategy_gpu.py`
-  - `src/parameter_simulation_gpu.py`
+  - `src/parameter_simulation_gpu_lib.py` (thin wrapper: `src/parameter_simulation_gpu.py`)
   - `src/walk_forward_analyzer.py`
-  - `src/daily_stock_tier_batch.py`, `src/ohlcv_batch.py`
+  - `src/pipeline/*_batch.py` (thin wrapper: `src/*_batch.py`)
   - `src/strategy.py`
 - 분해 방향:
   - entrypoint는 thin wrapper로 남기고, 내부 구현을 패키지 하위로 이동
@@ -77,11 +81,15 @@
 #### 2-5-1. 우선적으로 참조할 파일
 - `TODO.md`
 - `src/backtest_strategy_gpu.py`
-- `src/parameter_simulation_gpu.py`
+- `src/parameter_simulation_gpu.py` / `src/parameter_simulation_gpu_lib.py`
 - `src/walk_forward_analyzer.py`
 - `src/main_backtest.py`
 - `src/main_script.py`
-- `src/pipeline_batch.py` (존재 시)
+- `src/pipeline_batch.py` / `src/pipeline/batch.py`
+- `src/pipeline/ticker_universe_batch.py`
+- `src/pipeline/ohlcv_batch.py`
+- `src/pipeline/daily_stock_tier_batch.py`
+- `tests/test_issue69_entrypoint_compat.py`
 
 ---
 
@@ -188,6 +196,15 @@
 - PR-6: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
 - PR-7: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
 - PR-8: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
+- PR-9: `src/parameter_simulation_gpu_lib.py`를 `src/optimization/gpu/*`로 이동 + 책임 단위 분해(입출력/샘플링/러너/리포팅)
+  - 제약: `src/parameter_simulation_gpu.py`는 wrapper 유지 + `find_optimal_parameters()` API/무부작용(import-safe) 규칙 유지(#60)
+  - 제약: GPU deps lazy import 경계 유지(`cupy/cudf`는 호출 경로에서만 요구)
+- PR-10(DoD Gate): 엔트리포인트 호환성 가드 보강
+  - `tests/test_issue69_entrypoint_compat.py`에 `src.main_backtest`, `src.main_script` import 가드 추가
+  - `src.main_script.py`는 (A) import-only 가드로 충분한지, (B) `main()` 함수 도입(thin wrapper화)까지 할지 결정 후 반영
+- PR-11(DoD Gate): 변경 가이드(이전 import 경로 -> 신규 경로) 문서화
+  - 권장 위치: `docs/refactoring/issue69-import-path-mapping.md`
+  - 최소 포함: entrypoint wrapper(`src/*.py`) -> 구현 모듈(`src/pipeline/*`, `src/data/collectors/*`, `src/backtest/*`, `src/optimization/*`) 매핑 테이블
 
 ---
 
@@ -241,6 +258,35 @@
 - [x] `src/pipeline/batch.py`: 내부 import를 wrapper 대신 `src/data/collectors/*` 구현으로 전환
 - [x] 테스트 통과:
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_collector_normalization -v`
+
+### 6-7. PR-6: `walk_forward_analyzer` 구현을 `src/analysis`로 이동
+- [ ] `src/analysis/*`: WFO 로직을 책임 단위로 분리(엔트리포인트 wrapper 유지)
+- [ ] `src/walk_forward_analyzer.py`: thin wrapper + import-safe 유지(GPU deps 없이 import 가능)
+- [ ] 테스트 통과:
+  - `python -m unittest tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
+
+### 6-8. PR-7: `backtest_strategy_gpu` 분해(`src/backtest/gpu/*`)
+- [ ] `src/backtest/gpu/*`: GPU 커널/상태/runner를 책임 단위로 분리
+- [ ] `src/backtest_strategy_gpu.py`: wrapper 유지(직접 import 시 GPU deps 요구되는 구조는 허용, 단 호출 경계는 `parameter_simulation_gpu_lib`에서 통제)
+- [ ] CPU-GPU 정합성 확인(가능 범위): `src/debug_gpu_single_run.py` 기준 시나리오 스모크
+
+### 6-9. PR-8: CPU 백테스터(core) 계층 이동(`src/backtest/cpu/*`)
+- [ ] `src/backtest/cpu/*`: engine/strategy/portfolio/execution 책임 단위로 이동(기능 변경 금지)
+- [ ] 기존 `src/backtester.py`, `src/strategy.py`, `src/portfolio.py`, `src/execution.py`: wrapper 또는 re-export 정책 결정 후 적용
+- [ ] 기존 유닛 테스트 통과
+
+### 6-10. PR-9: `parameter_simulation_gpu_lib` 분해(`src/optimization/gpu/*`)
+- [ ] `src/optimization/gpu/*`: 시뮬레이션 설정/샘플링/실행/집계/저장 로직 분리
+- [ ] `src/parameter_simulation_gpu.py`: public API 유지(`find_optimal_parameters`) + import-safe 유지(#60)
+- [ ] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue69_entrypoint_compat -v`
+
+### 6-11. PR-10: 엔트리포인트 호환성 가드 보강(DoD Gate)
+- [ ] `tests/test_issue69_entrypoint_compat.py`: `src.main_backtest`, `src.main_script` import 가드 추가
+- [ ] (선택) `src/main_script.py`: `main()` 함수 도입 + `if __name__ == \"__main__\": main()`로 정리(동작 동일)
+
+### 6-12. PR-11: import 경로 변경 가이드 문서화(DoD Gate)
+- [ ] `docs/refactoring/issue69-import-path-mapping.md`: 이전 import 경로 -> 신규 경로 매핑 테이블 작성
 
 ---
 
