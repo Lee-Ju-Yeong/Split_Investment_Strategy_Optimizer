@@ -136,6 +136,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 
 ## 문서 맵
 - 전략 원칙: `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`
+- 전략/파라미터 운영 기준서: `docs/strategy/strategy_parameter_playbook.md`
 - DB 스키마: `docs/database/schema.md`
 - 작업 백로그: `TODO.md`
 - 이슈 작업 문서: `todos/`

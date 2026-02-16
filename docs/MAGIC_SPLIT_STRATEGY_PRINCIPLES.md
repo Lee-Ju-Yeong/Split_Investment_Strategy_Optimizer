@@ -1,5 +1,8 @@
 # 매직스플릿 투자 전략 원칙 (Magic Split Strategy Principles)
 
+> 운영용 요약 기준서: `docs/strategy/strategy_parameter_playbook.md`  
+> 본 문서는 로직 상세 원칙(why/how)을 설명하고, playbook은 실행 기준(what/checklist)을 제공합니다.
+
 ## I. 자금 관리 원칙 (Capital Management)
 
 ### 1. 월 1회 투자금 재산정 (Monthly Rebalancing of Investment Amount)
