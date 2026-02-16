@@ -17,7 +17,7 @@
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
-- [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
+- [x] 이슈 #56 CPU/GPU Parity 하네스(top-k): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
 
 ## 전체 우선순위 (Global Backlog)
 
@@ -123,15 +123,15 @@
   - [ ] 민감도 테스트 추가: 선택 파라미터 주변(±10%) perturbation 성능 저하율 측정(목표 `<= 15%`)
   - [ ] `robust_selection_enabled` feature flag와 `legacy` rollback 경로 추가
   - [ ] Ablation 매트릭스 고정: `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+BehaviorFeature`
-- [ ] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
+- [x] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
   - [x] `#67` Phase A parity blocker 선반영: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거)
-  - [ ] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`debug_gpu_single_run` 기반)
-  - [ ] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
-  - [ ] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장
-  - [ ] 스냅샷 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
-  - [ ] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
-  - [ ] 하드 게이트: parity mismatch `0건`만 pass
-  - [ ] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
+  - [x] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`src/cpu_gpu_parity_topk.py`)
+  - [x] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
+  - [x] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장
+  - [x] 스냅샷 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
+  - [x] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
+  - [x] 하드 게이트: parity mismatch `0건`만 pass
+  - [x] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
 - [ ] 도메인 모델/캐시 통합(Position, CompanyInfo 캐시) (이슈 #57): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57
 - [x] 테스트 인터페이스 갱신(test_integration.py) (이슈 #59): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59
 - [x] 스크립트 import 부작용 제거(parameter_simulation_gpu.py) (이슈 #60): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60

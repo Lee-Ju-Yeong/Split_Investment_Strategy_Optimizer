@@ -71,6 +71,7 @@ def run_magic_split_strategy_on_gpu(
     month_first_dates = monthly_grouper.first().dropna()
     month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
     data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
+    open_prices_tensor = data_tensors["open"]
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
     low_prices_tensor = data_tensors["low"]
@@ -92,9 +93,18 @@ def run_magic_split_strategy_on_gpu(
             current_date = trading_dates_pd_cpu[day_idx]
             signal_date, signal_day_idx = _resolve_signal_date_for_gpu(day_idx, trading_dates_pd_cpu)
             # 텐서에서 하루치 데이터 슬라이싱
+            current_opens_gpu = open_prices_tensor[day_idx]
             current_prices_gpu = close_prices_tensor[day_idx]
             current_highs_gpu  = high_prices_tensor[day_idx]
             current_lows_gpu   = low_prices_tensor[day_idx]
+            if signal_day_idx >= 0:
+                signal_closes_gpu = close_prices_tensor[signal_day_idx]
+                signal_highs_gpu = high_prices_tensor[signal_day_idx]
+                signal_lows_gpu = low_prices_tensor[signal_day_idx]
+            else:
+                signal_closes_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+                signal_highs_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+                signal_lows_gpu = cp.zeros(num_tickers, dtype=cp.float32)
 
             # --- [Issue #67] Candidate Selection Logic ---
             candidate_indices_list = []
@@ -180,19 +190,22 @@ def run_magic_split_strategy_on_gpu(
             # --- 신호 처리 함수 호출 (기존과 동일) ---
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_today_mask = _process_sell_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
-                param_combinations, current_prices_gpu, current_highs_gpu,
+                param_combinations,
+                current_opens_gpu, current_prices_gpu, current_highs_gpu,
+                signal_closes_gpu, signal_highs_gpu, signal_day_idx,
                 execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
                 debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
-                cooldown_period_days, param_combinations, current_prices_gpu,
+                cooldown_period_days, param_combinations, current_opens_gpu,
                 candidate_tickers_for_day, candidate_atrs_for_day,
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
                 portfolio_state, positions_state, last_trade_day_idx_state, sell_occurred_today_mask, day_idx,
-                param_combinations, current_prices_gpu, current_lows_gpu, current_highs_gpu,
+                param_combinations,
+                current_opens_gpu, signal_closes_gpu, signal_lows_gpu, signal_day_idx,
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
             )
         

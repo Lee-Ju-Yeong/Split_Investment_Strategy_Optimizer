@@ -23,11 +23,35 @@ class DataHandler:
                     "Install it (e.g. `pip install mysql-connector-python`) in your active environment."
                 ) from err
 
-            self.connection_pool = mysql_pooling.MySQLConnectionPool(
-                pool_name="data_pool",
-                pool_size=10,
-                **self.db_config,
-            )
+            base_pool_kwargs = dict(self.db_config)
+            try:
+                self.connection_pool = mysql_pooling.MySQLConnectionPool(
+                    pool_name="data_pool",
+                    pool_size=10,
+                    **base_pool_kwargs,
+                )
+            except Exception as pool_err:
+                error_msg = str(pool_err).lower()
+                need_pure_fallback = (
+                    "mysql_native_password" in error_msg
+                    and "cannot be loaded" in error_msg
+                    and not bool(base_pool_kwargs.get("use_pure", False))
+                )
+                if not need_pure_fallback:
+                    raise
+
+                pure_pool_kwargs = dict(base_pool_kwargs)
+                pure_pool_kwargs["use_pure"] = True
+                self.connection_pool = mysql_pooling.MySQLConnectionPool(
+                    pool_name="data_pool_pure",
+                    pool_size=10,
+                    **pure_pool_kwargs,
+                )
+                self.db_config = pure_pool_kwargs
+                print(
+                    "[DataHandler] mysql_native_password C-extension load failed. "
+                    "Retrying with use_pure=True."
+                )
             self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
@@ -79,12 +103,14 @@ class DataHandler:
 
     def get_trading_dates(self, start_date, end_date):
         conn = self.get_connection()
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         try:
             query = "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date"
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 # pd.read_sql 사용 시 날짜 파싱이 더 안정적
-                df = pd.read_sql(query, conn, params=(start_date, end_date))
+                df = pd.read_sql(query, conn, params=(start_date_str, end_date_str))
             return pd.to_datetime(df['date']).tolist()
         finally:
             conn.close()
@@ -94,6 +120,8 @@ class DataHandler:
         conn = self.get_connection()
         # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
         extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
+        extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
             SELECT
@@ -107,7 +135,7 @@ class DataHandler:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=(ticker, extended_start_date, end_date))
+                df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
             if df.empty:
                 return df
 
