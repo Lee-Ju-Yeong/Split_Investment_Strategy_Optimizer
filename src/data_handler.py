@@ -1,6 +1,5 @@
 import pandas as pd
 import warnings
-from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
 
@@ -16,9 +15,19 @@ class DataHandler:
     def __init__(self, db_config):
         self.db_config = db_config
         try:
-            self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
-                                                               pool_size=10,
-                                                               **self.db_config)
+            try:
+                from mysql.connector import pooling as mysql_pooling
+            except ModuleNotFoundError as err:
+                raise ModuleNotFoundError(
+                    "mysql-connector-python is required for DataHandler DB access. "
+                    "Install it (e.g. `pip install mysql-connector-python`) in your active environment."
+                ) from err
+
+            self.connection_pool = mysql_pooling.MySQLConnectionPool(
+                pool_name="data_pool",
+                pool_size=10,
+                **self.db_config,
+            )
             self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
