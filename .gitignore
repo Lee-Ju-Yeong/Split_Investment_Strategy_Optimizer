@@ -161,3 +161,7 @@ __pycache__
 # Allow Python package path under src/ (Issue #69)
 !src/data/
 !src/data/**
+
+# Keep runtime artifacts ignored even under src/data/ (negation above would unignore them)
+src/data/**/__pycache__/
+src/data/**/*.py[cod]
