@@ -13,8 +13,8 @@ from datetime import datetime
 import time
 
 from ..db_setup import create_tables, get_db_connection
-from ..financial_collector import run_financial_batch
-from ..investor_trading_collector import run_investor_trading_batch
+from ..data.collectors.financial_collector import run_financial_batch
+from ..data.collectors.investor_trading_collector import run_investor_trading_batch
 from .daily_stock_tier_batch import run_daily_stock_tier_batch
 from .ticker_universe_batch import run_ticker_universe_batch
 
