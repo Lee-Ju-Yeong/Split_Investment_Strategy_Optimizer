@@ -9,7 +9,9 @@ Batch orchestrator for:
 """
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime
+import os
 import time
 
 from .db_setup import create_tables, get_db_connection
@@ -19,6 +21,27 @@ from .investor_trading_collector import run_investor_trading_batch
 from .market_cap_collector import run_market_cap_batch
 from .short_selling_collector import run_short_selling_batch
 from .ticker_universe_batch import run_ticker_universe_batch
+
+
+@contextmanager
+def _temporary_proxy_env(proxy_url):
+    if not proxy_url:
+        yield
+        return
+
+    keys = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+    previous = {key: os.environ.get(key) for key in keys}
+    for key in keys:
+        os.environ[key] = proxy_url
+
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def run_pipeline_batch(
@@ -36,9 +59,21 @@ def run_pipeline_batch(
     financial_write_batch_size=20000,
     investor_workers=4,
     investor_write_batch_size=20000,
-    market_cap_workers=4,
+    market_cap_workers=1,
+    market_cap_delay=None,
+    market_cap_jitter_max_seconds=None,
+    market_cap_macro_pause_every=50,
+    market_cap_macro_pause_min_seconds=40.0,
+    market_cap_macro_pause_max_seconds=60.0,
     market_cap_write_batch_size=20000,
-    short_selling_workers=4,
+    short_selling_workers=1,
+    short_selling_delay=None,
+    short_selling_jitter_max_seconds=None,
+    short_selling_macro_pause_every=50,
+    short_selling_macro_pause_min_seconds=40.0,
+    short_selling_macro_pause_max_seconds=60.0,
+    krx_error_cooldown_seconds=600.0,
+    krx_preflight_retry_count=1,
     short_selling_write_batch_size=20000,
     short_selling_lag_trading_days=3,
     universe_markets=None,
@@ -52,6 +87,8 @@ def run_pipeline_batch(
     tier_v1_write_enabled=False,
     tier_v1_flow5_threshold=-500_000_000,
     log_interval=50,
+    allow_krx_unavailable=False,
+    krx_proxy_url=None,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -99,28 +136,53 @@ def run_pipeline_batch(
             log_interval=log_interval,
         )
 
-    if run_market_cap:
-        summary["market_cap"] = run_market_cap_batch(
-            conn=conn,
-            mode=mode,
-            start_date_str=start_date_str,
-            end_date_str=end_date_str,
-            workers=market_cap_workers,
-            write_batch_size=market_cap_write_batch_size,
-            log_interval=log_interval,
-        )
+    with _temporary_proxy_env(krx_proxy_url):
+        if run_market_cap:
+            summary["market_cap"] = run_market_cap_batch(
+                conn=conn,
+                mode=mode,
+                start_date_str=start_date_str,
+                end_date_str=end_date_str,
+                workers=market_cap_workers,
+                api_call_delay=market_cap_delay if market_cap_delay is not None else 3.5,
+                api_jitter_max_seconds=(
+                    market_cap_jitter_max_seconds
+                    if market_cap_jitter_max_seconds is not None
+                    else 3.0
+                ),
+                macro_pause_every=market_cap_macro_pause_every,
+                macro_pause_min_seconds=market_cap_macro_pause_min_seconds,
+                macro_pause_max_seconds=market_cap_macro_pause_max_seconds,
+                error_cooldown_seconds=krx_error_cooldown_seconds,
+                preflight_retry_count=krx_preflight_retry_count,
+                write_batch_size=market_cap_write_batch_size,
+                log_interval=log_interval,
+                fail_on_krx_unavailable=not bool(allow_krx_unavailable),
+            )
 
-    if run_short_selling:
-        summary["short_selling"] = run_short_selling_batch(
-            conn=conn,
-            mode=mode,
-            start_date_str=start_date_str,
-            end_date_str=end_date_str,
-            workers=short_selling_workers,
-            write_batch_size=short_selling_write_batch_size,
-            log_interval=log_interval,
-            lag_trading_days=short_selling_lag_trading_days,
-        )
+        if run_short_selling:
+            summary["short_selling"] = run_short_selling_batch(
+                conn=conn,
+                mode=mode,
+                start_date_str=start_date_str,
+                end_date_str=end_date_str,
+                workers=short_selling_workers,
+                api_call_delay=short_selling_delay if short_selling_delay is not None else 3.5,
+                api_jitter_max_seconds=(
+                    short_selling_jitter_max_seconds
+                    if short_selling_jitter_max_seconds is not None
+                    else 3.0
+                ),
+                macro_pause_every=short_selling_macro_pause_every,
+                macro_pause_min_seconds=short_selling_macro_pause_min_seconds,
+                macro_pause_max_seconds=short_selling_macro_pause_max_seconds,
+                error_cooldown_seconds=krx_error_cooldown_seconds,
+                preflight_retry_count=krx_preflight_retry_count,
+                write_batch_size=short_selling_write_batch_size,
+                log_interval=log_interval,
+                lag_trading_days=short_selling_lag_trading_days,
+                fail_on_krx_unavailable=not bool(allow_krx_unavailable),
+            )
 
     if run_tier:
         summary["tier"] = run_daily_stock_tier_batch(
@@ -237,8 +299,38 @@ def _build_arg_parser():
     parser.add_argument(
         "--marketcap-workers",
         type=int,
-        default=4,
+        default=1,
         help="Worker count for MarketCapDaily API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--marketcap-delay",
+        type=float,
+        default=3.5,
+        help="Global minimum interval(seconds) between MarketCapDaily API calls.",
+    )
+    parser.add_argument(
+        "--marketcap-jitter-max-seconds",
+        type=float,
+        default=3.0,
+        help="Random jitter upper bound(seconds) for MarketCapDaily calls. Capped at 5s.",
+    )
+    parser.add_argument(
+        "--marketcap-macro-pause-every",
+        type=int,
+        default=50,
+        help="Insert a long pause after every N MarketCapDaily calls.",
+    )
+    parser.add_argument(
+        "--marketcap-macro-pause-min-seconds",
+        type=float,
+        default=40.0,
+        help="Minimum long pause seconds for MarketCapDaily calls.",
+    )
+    parser.add_argument(
+        "--marketcap-macro-pause-max-seconds",
+        type=float,
+        default=60.0,
+        help="Maximum long pause seconds for MarketCapDaily calls.",
     )
     parser.add_argument(
         "--marketcap-write-batch-size",
@@ -254,8 +346,50 @@ def _build_arg_parser():
     parser.add_argument(
         "--shortsell-workers",
         type=int,
-        default=4,
+        default=1,
         help="Worker count for ShortSellingDaily API fetch/normalize pipeline.",
+    )
+    parser.add_argument(
+        "--shortsell-delay",
+        type=float,
+        default=3.5,
+        help="Global minimum interval(seconds) between ShortSellingDaily API calls.",
+    )
+    parser.add_argument(
+        "--shortsell-jitter-max-seconds",
+        type=float,
+        default=3.0,
+        help="Random jitter upper bound(seconds) for ShortSellingDaily calls. Capped at 5s.",
+    )
+    parser.add_argument(
+        "--shortsell-macro-pause-every",
+        type=int,
+        default=50,
+        help="Insert a long pause after every N ShortSellingDaily calls.",
+    )
+    parser.add_argument(
+        "--shortsell-macro-pause-min-seconds",
+        type=float,
+        default=40.0,
+        help="Minimum long pause seconds for ShortSellingDaily calls.",
+    )
+    parser.add_argument(
+        "--shortsell-macro-pause-max-seconds",
+        type=float,
+        default=60.0,
+        help="Maximum long pause seconds for ShortSellingDaily calls.",
+    )
+    parser.add_argument(
+        "--krx-error-cooldown-seconds",
+        type=float,
+        default=600.0,
+        help="Cooldown seconds after KRX preflight 403/non-JSON failure before retry.",
+    )
+    parser.add_argument(
+        "--krx-preflight-retry-count",
+        type=int,
+        default=1,
+        help="Retry count after KRX preflight cooldown. 1 means retry once.",
     )
     parser.add_argument(
         "--shortsell-write-batch-size",
@@ -268,6 +402,22 @@ def _build_arg_parser():
         type=int,
         default=3,
         help="Clamp end_date by N trading days to account for short-selling publication lag (default: 3).",
+    )
+    parser.add_argument(
+        "--allow-krx-unavailable",
+        action="store_true",
+        help=(
+            "When KRX endpoint is unavailable(403/non-JSON), "
+            "skip marketcap/shortsell collectors and continue pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--krx-proxy-url",
+        default=None,
+        help=(
+            "Optional proxy URL for KRX requests. "
+            "Temporarily sets HTTP(S)_PROXY while running marketcap/shortsell collectors."
+        ),
     )
     parser.add_argument(
         "--skip-tier",
@@ -332,10 +482,24 @@ def main():
             f"investor_workers={args.investor_workers}, "
             f"investor_write_batch_size={args.investor_write_batch_size}, "
             f"market_cap_workers={args.marketcap_workers}, "
+            f"market_cap_delay={args.marketcap_delay}, "
+            f"market_cap_jitter_max_seconds={args.marketcap_jitter_max_seconds}, "
+            f"market_cap_macro_pause_every={args.marketcap_macro_pause_every}, "
+            f"market_cap_macro_pause_min_seconds={args.marketcap_macro_pause_min_seconds}, "
+            f"market_cap_macro_pause_max_seconds={args.marketcap_macro_pause_max_seconds}, "
             f"market_cap_write_batch_size={args.marketcap_write_batch_size}, "
             f"short_selling_workers={args.shortsell_workers}, "
+            f"short_selling_delay={args.shortsell_delay}, "
+            f"short_selling_jitter_max_seconds={args.shortsell_jitter_max_seconds}, "
+            f"short_selling_macro_pause_every={args.shortsell_macro_pause_every}, "
+            f"short_selling_macro_pause_min_seconds={args.shortsell_macro_pause_min_seconds}, "
+            f"short_selling_macro_pause_max_seconds={args.shortsell_macro_pause_max_seconds}, "
             f"short_selling_write_batch_size={args.shortsell_write_batch_size}, "
             f"short_selling_lag_trading_days={args.shortsell_lag_trading_days}, "
+            f"krx_error_cooldown_seconds={args.krx_error_cooldown_seconds}, "
+            f"krx_preflight_retry_count={args.krx_preflight_retry_count}, "
+            f"allow_krx_unavailable={args.allow_krx_unavailable}, "
+            f"krx_proxy_url_set={bool(args.krx_proxy_url)}, "
             f"tier_v1_write_enabled={args.enable_tier_v1_write}, "
             f"log_interval={args.log_interval}"
         )
@@ -356,8 +520,29 @@ def main():
             investor_workers=max(int(args.investor_workers), 1),
             investor_write_batch_size=max(int(args.investor_write_batch_size), 1),
             market_cap_workers=max(int(args.marketcap_workers), 1),
+            market_cap_delay=max(float(args.marketcap_delay), 0.0),
+            market_cap_jitter_max_seconds=min(max(float(args.marketcap_jitter_max_seconds), 0.0), 5.0),
+            market_cap_macro_pause_every=max(int(args.marketcap_macro_pause_every), 0),
+            market_cap_macro_pause_min_seconds=max(float(args.marketcap_macro_pause_min_seconds), 0.0),
+            market_cap_macro_pause_max_seconds=max(
+                float(args.marketcap_macro_pause_max_seconds),
+                max(float(args.marketcap_macro_pause_min_seconds), 0.0),
+            ),
             market_cap_write_batch_size=max(int(args.marketcap_write_batch_size), 1),
             short_selling_workers=max(int(args.shortsell_workers), 1),
+            short_selling_delay=max(float(args.shortsell_delay), 0.0),
+            short_selling_jitter_max_seconds=min(
+                max(float(args.shortsell_jitter_max_seconds), 0.0),
+                5.0,
+            ),
+            short_selling_macro_pause_every=max(int(args.shortsell_macro_pause_every), 0),
+            short_selling_macro_pause_min_seconds=max(float(args.shortsell_macro_pause_min_seconds), 0.0),
+            short_selling_macro_pause_max_seconds=max(
+                float(args.shortsell_macro_pause_max_seconds),
+                max(float(args.shortsell_macro_pause_min_seconds), 0.0),
+            ),
+            krx_error_cooldown_seconds=max(float(args.krx_error_cooldown_seconds), 0.0),
+            krx_preflight_retry_count=max(int(args.krx_preflight_retry_count), 0),
             short_selling_write_batch_size=max(int(args.shortsell_write_batch_size), 1),
             short_selling_lag_trading_days=max(int(args.shortsell_lag_trading_days), 0),
             universe_markets=[
@@ -375,6 +560,8 @@ def main():
             tier_v1_write_enabled=args.enable_tier_v1_write,
             tier_v1_flow5_threshold=args.tier_v1_flow5_threshold,
             log_interval=args.log_interval,
+            allow_krx_unavailable=args.allow_krx_unavailable,
+            krx_proxy_url=args.krx_proxy_url,
         )
         elapsed_seconds = int(time.time() - started_at)
         print(f"[pipeline_batch] completed elapsed={elapsed_seconds}s")
