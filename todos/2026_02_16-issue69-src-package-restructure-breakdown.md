@@ -294,7 +294,8 @@
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
 
 ### 6-12. PR-11: import 경로 변경 가이드 문서화(DoD Gate)
-- [ ] `docs/refactoring/issue69-import-path-mapping.md`: 이전 import 경로 -> 신규 경로 매핑 테이블 작성
+- [x] `docs/refactoring/issue69-import-path-mapping.md`: 이전 import 경로 -> 신규 경로 매핑 테이블 작성
+- [x] 문서에 `PR-7(backtest_strategy_gpu 분해)` 미완료 상태를 Pending으로 명시
 
 ---
 
