@@ -278,10 +278,12 @@
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_issue69_cpu_backtest_wrapper_compat -v`
 
 ### 6-10. PR-9: `parameter_simulation_gpu_lib` 분해(`src/optimization/gpu/*`)
-- [ ] `src/optimization/gpu/*`: 시뮬레이션 설정/샘플링/실행/집계/저장 로직 분리
-- [ ] `src/parameter_simulation_gpu.py`: public API 유지(`find_optimal_parameters`) + import-safe 유지(#60)
-- [ ] 테스트 통과:
-  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue69_entrypoint_compat -v`
+- [x] `src/optimization/gpu/*`: 시뮬레이션 설정/샘플링/실행/집계/저장 로직 분리
+- [x] `src/parameter_simulation_gpu_lib.py`: backward-compatible wrapper 유지 + 구현 위임(`src/optimization/gpu/*`)
+- [x] `src/parameter_simulation_gpu.py`: public API 유지(`find_optimal_parameters`) + import-safe 유지(#60)
+- [x] `tests/test_issue69_parameter_simulation_wrapper_compat.py`: 패키지/legacy import 호환 가드 추가
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_issue69_parameter_simulation_wrapper_compat -v`
 
 ### 6-11. PR-10: 엔트리포인트 호환성 가드 보강(DoD Gate)
 - [ ] `tests/test_issue69_entrypoint_compat.py`: `src.main_backtest`, `src.main_script` import 가드 추가
