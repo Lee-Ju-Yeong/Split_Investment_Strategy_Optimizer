@@ -271,9 +271,11 @@
 - [ ] CPU-GPU 정합성 확인(가능 범위): `src/debug_gpu_single_run.py` 기준 시나리오 스모크
 
 ### 6-9. PR-8: CPU 백테스터(core) 계층 이동(`src/backtest/cpu/*`)
-- [ ] `src/backtest/cpu/*`: engine/strategy/portfolio/execution 책임 단위로 이동(기능 변경 금지)
-- [ ] 기존 `src/backtester.py`, `src/strategy.py`, `src/portfolio.py`, `src/execution.py`: wrapper 또는 re-export 정책 결정 후 적용
-- [ ] 기존 유닛 테스트 통과
+- [x] `src/backtest/cpu/*`: engine/strategy/portfolio/execution 책임 단위로 이동(기능 변경 금지)
+- [x] 기존 `src/backtester.py`, `src/strategy.py`, `src/portfolio.py`, `src/execution.py`: wrapper + legacy import 호환(`import strategy`/`import portfolio`) 유지
+- [x] `src/backtest/cpu/backtester.py`: `tqdm` optional import로 최소 환경 import-safe 유지
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_issue69_cpu_backtest_wrapper_compat -v`
 
 ### 6-10. PR-9: `parameter_simulation_gpu_lib` 분해(`src/optimization/gpu/*`)
 - [ ] `src/optimization/gpu/*`: 시뮬레이션 설정/샘플링/실행/집계/저장 로직 분리
