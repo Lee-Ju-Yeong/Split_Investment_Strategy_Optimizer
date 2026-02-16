@@ -184,9 +184,10 @@
 - PR-2: `src/ticker_universe_batch.py` 구현을 `src/pipeline/ticker_universe_batch.py`로 이동(엔트리포인트 wrapper 유지)
 - PR-3: `src/ohlcv_batch.py` 구현을 `src/pipeline/ohlcv_batch.py`로 이동(엔트리포인트 wrapper 유지)
 - PR-4: `src/daily_stock_tier_batch.py` 구현을 `src/pipeline/daily_stock_tier_batch.py`로 이동(필요 시 엔트리포인트 wrapper)
-- PR-5: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
-- PR-6: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
-- PR-7: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
+- PR-5: `src/financial_collector.py`, `src/investor_trading_collector.py` 구현을 `src/data/collectors/*`로 이동(wrapper 유지)
+- PR-6: `src/walk_forward_analyzer.py`의 분석/robust 로직을 `src/analysis/*`로 이동(무GPU import 보장 유지)
+- PR-7: `src/backtest_strategy_gpu.py`를 `src/backtest/gpu/*`로 분해(가능하면 GPU deps lazy), 상단 wrapper 유지
+- PR-8: CPU 백테스터(core) 계층을 `src/backtest/cpu/*`로 이동(기능 변경 금지)
 
 ---
 
@@ -231,6 +232,15 @@
 - [x] `tests/test_issue69_entrypoint_compat.py`: `src.daily_stock_tier_batch` import + 심볼(`run_daily_stock_tier_batch`) 가드 추가
 - [x] 테스트 통과:
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_daily_stock_tier_batch -v`
+
+### 6-6. PR-5: `financial_collector`/`investor_trading_collector` 구현을 `src/data/collectors`로 이동
+- [x] `src/data/collectors/financial_collector.py`: 기존 `src/financial_collector.py` 구현 이동
+- [x] `src/financial_collector.py`: backward-compatible wrapper로 재생성(주요 심볼 re-export)
+- [x] `src/data/collectors/investor_trading_collector.py`: 기존 `src/investor_trading_collector.py` 구현 이동
+- [x] `src/investor_trading_collector.py`: backward-compatible wrapper로 재생성(주요 심볼 re-export)
+- [x] `src/pipeline/batch.py`: 내부 import를 wrapper 대신 `src/data/collectors/*` 구현으로 전환
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_collector_normalization -v`
 
 ---
 
