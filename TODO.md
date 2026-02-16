@@ -12,7 +12,8 @@
 - [x] 이슈 #59 테스트 인터페이스 갱신: `todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md`
 - [x] 이슈 #60 스크립트 import 부작용 제거: `todos/done_2026_02_15-issue60-import-parameter-simulation-gpu-py.md`
 - [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
-- [ ] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/2026_02_16-issue69-src-package-restructure-breakdown.md`
+- [x] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md`
+- [ ] 이슈 #93 Wrapper deprecation/removal 계획: `todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
@@ -106,7 +107,8 @@
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
-- [ ] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
+- [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
+- [ ] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
 - [ ] `ohlcv_batch` legacy fallback 제거 (운영 1~2주 fallback 0회 확인 후) (이슈 #70 후속)
 - [ ] 구조화된 로깅 도입 및 하드코딩 디버그 출력 제거 (이슈 #55): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55
 - [ ] DB 접근 계층 표준화(connector/engine) (이슈 #58): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58
