@@ -8,7 +8,7 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.ohlcv_batch import (
+from src.pipeline.ohlcv_batch import (
     _build_universe_ranges_from_history_rows,
     _resolve_effective_collection_window,
     get_ohlcv_ticker_universe,

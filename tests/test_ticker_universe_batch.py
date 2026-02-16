@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.ticker_universe_batch import (
+from src.pipeline.ticker_universe_batch import (
     build_snapshot_dates,
     rebuild_ticker_universe_history,
     run_snapshot_batch,
