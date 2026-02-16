@@ -14,6 +14,7 @@
 - [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
 - [x] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md`
 - [ ] 이슈 #93 Wrapper deprecation/removal 계획: `todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md`
+- [ ] 이슈 #94 전략/파라미터 기준서 문서화: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/94 (`todos/2026_02_16-issue94-strategy-criteria-playbook.md`)
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
@@ -105,6 +106,7 @@
   - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
   - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
+- [ ] 전략/파라미터 운영 기준서 문서화 및 주기 업데이트 (이슈 #94): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/94 (`docs/strategy/strategy_parameter_playbook.md`)
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
@@ -117,6 +119,7 @@
 - [ ] ATR 단일 랭킹을 멀티팩터 랭킹으로 전환 + WFO/Ablation 검증 (이슈 #68): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68
   - [ ] `walk_forward_analyzer` 강건 점수 함수 도입: `robust_score = (mean - k*std) * log1p(cluster_size)` 형태 실험/고정
   - [ ] WFO 하드 게이트 도입: `median(OOS/IS) >= 0.60`, `fold pass rate >= 70%`, `OOS MDD p95 <= 25%`
+  - [ ] v1 실험 게이트(2026-02-16 합의): `median(OOS/IS, Calmar) >= 0.60`, `fold pass rate >= 70%`, `OOS MDD p95 <= 30%`
   - [ ] 검증 체계 고정: `deterministic baseline` + `seeded_stress` + `jackknife_drop_topN`
   - [ ] 집중도 리스크 지표(`max_single_stock_contribution`, `HHI`)를 승격 게이트에 포함
   - [ ] 클러스터링 feature 확장: 파라미터 4종 + 행동지표(`trade_count`, `avg_hold_days`) 비교
@@ -150,3 +153,11 @@
 - `random-only` 선택은 운영 기준으로 금지, 결정론적 baseline + seeded stress test로 강건성 검증
 - Trial 채택 하드게이트: parity(`#56`) + OOS/IS + fold pass rate + OOS MDD p95 동시 통과
 - 하나라도 fail이면 `STOP` (채택 금지), 모두 pass일 때만 `GO` (canary 후 승격)
+
+### P2-Notes (2026-02-16, 전략 기준서/실험 프로토콜 합의)
+- 데이터 학습/검증 시작일을 `2013-11-20` 이후로 고정
+- 후보군 모드는 `candidate_source_mode="tier"`를 기본으로 고정(초기 범위)
+- 탐색 목표는 `Calmar Ratio`로 통일하고 승격 판정은 OOS 강건 게이트로 분리
+- v1 승격 게이트 수치: `median(OOS/IS, Calmar) >= 0.60`, `fold pass rate >= 70%`, `OOS MDD p95 <= 30%`
+- CPU parity는 `Top-100` 파라미터 재검증을 기준으로 적용
+- 종목별/차수별 최적화는 보류하고 shared 파라미터 최적화를 우선 수행
