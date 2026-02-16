@@ -260,10 +260,10 @@
   - `python -m unittest tests.test_issue60_import_side_effects tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat tests.test_pipeline_batch tests.test_collector_normalization -v`
 
 ### 6-7. PR-6: `walk_forward_analyzer` 구현을 `src/analysis`로 이동
-- [ ] `src/analysis/*`: WFO 로직을 책임 단위로 분리(엔트리포인트 wrapper 유지)
-- [ ] `src/walk_forward_analyzer.py`: thin wrapper + import-safe 유지(GPU deps 없이 import 가능)
-- [ ] 테스트 통과:
-  - `python -m unittest tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
+- [x] `src/analysis/walk_forward_analyzer.py`: 기존 `src/walk_forward_analyzer.py` 구현 이동(BOOTSTRAP 제거 + 상대 import 레벨 조정)
+- [x] `src/walk_forward_analyzer.py`: entrypoint 호환 wrapper로 재생성(BOOTSTRAP + re-export)
+- [x] 테스트 통과:
+  - `python -m unittest tests.test_issue61_import_style_standardization tests.test_issue68_wfo_import_side_effects tests.test_issue69_entrypoint_compat -v`
 
 ### 6-8. PR-7: `backtest_strategy_gpu` 분해(`src/backtest/gpu/*`)
 - [ ] `src/backtest/gpu/*`: GPU 커널/상태/runner를 책임 단위로 분리
