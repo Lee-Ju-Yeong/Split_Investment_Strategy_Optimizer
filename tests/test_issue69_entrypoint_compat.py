@@ -37,6 +37,7 @@ for name in [
     "src.pipeline_batch",
     "src.ticker_universe_batch",
     "src.ohlcv_batch",
+    "src.daily_stock_tier_batch",
 ]:
     importlib.import_module(name)
 """
@@ -67,6 +68,9 @@ for name in [
 
         ohlcv_batch = importlib.import_module("src.ohlcv_batch")
         self.assertTrue(hasattr(ohlcv_batch, "run_ohlcv_batch"))
+
+        tier_batch = importlib.import_module("src.daily_stock_tier_batch")
+        self.assertTrue(hasattr(tier_batch, "run_daily_stock_tier_batch"))
 
         wfo = importlib.import_module("src.walk_forward_analyzer")
         self.assertTrue(hasattr(wfo, "run_walk_forward_analysis"))
