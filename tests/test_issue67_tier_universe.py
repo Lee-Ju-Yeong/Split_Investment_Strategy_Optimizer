@@ -4,12 +4,14 @@ import pandas as pd
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from data_handler import DataHandler
-from strategy import MagicSplitStrategy
-from portfolio import Portfolio
-from backtest_strategy_gpu import (
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.data_handler import DataHandler
+from src.backtest.cpu.strategy import MagicSplitStrategy
+from src.backtest.cpu.portfolio import Portfolio
+from src.backtest.gpu.data import (
     _collect_candidate_atr_asof,
+)
+from src.backtest.gpu.utils import (
     _resolve_signal_date_for_gpu,
     _sort_candidates_by_atr_then_ticker,
 )

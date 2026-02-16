@@ -34,13 +34,13 @@ class TestBacktestingIntegration(unittest.TestCase):
             raise unittest.SkipTest(f"DB driver not installed: {exc.name}")
 
         # Import inside to keep module import safe in non-DB environments.
-        from src.backtester import BacktestEngine
+        from src.backtest.cpu.backtester import BacktestEngine
         from src.data_handler import DataHandler
         from src.db_setup import create_tables, get_db_connection
         from src.config_loader import load_config
-        from src.execution import BasicExecutionHandler
-        from src.portfolio import Portfolio, Position
-        from src.strategy import Strategy
+        from src.backtest.cpu.execution import BasicExecutionHandler
+        from src.backtest.cpu.portfolio import Portfolio, Position
+        from src.backtest.cpu.strategy import Strategy
 
         cls.BacktestEngine = BacktestEngine
         cls.BasicExecutionHandler = BasicExecutionHandler

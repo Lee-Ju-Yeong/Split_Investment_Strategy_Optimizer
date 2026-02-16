@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src import pipeline_batch
+from src.pipeline import batch as pipeline_batch
 
 
 class TestPipelineBatch(unittest.TestCase):

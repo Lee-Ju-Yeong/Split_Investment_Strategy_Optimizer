@@ -6,8 +6,8 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.daily_stock_tier_batch import build_daily_stock_tier_frame
-from src.daily_stock_tier_batch import upsert_daily_stock_tier
+from src.pipeline.daily_stock_tier_batch import build_daily_stock_tier_frame
+from src.pipeline.daily_stock_tier_batch import upsert_daily_stock_tier
 
 
 class TestDailyStockTierBatch(unittest.TestCase):

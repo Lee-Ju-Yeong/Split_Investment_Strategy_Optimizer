@@ -268,7 +268,7 @@
 ### 6-8. PR-7: `backtest_strategy_gpu` 분해(`src/backtest/gpu/*`)
 - [x] `src/backtest/gpu/*`: GPU 커널/상태/runner를 책임 단위로 분리
 - [x] `src/backtest_strategy_gpu.py`: wrapper 유지(직접 import 시 GPU deps 요구되는 구조는 허용, 단 호출 경계는 `parameter_simulation_gpu_lib`에서 통제)
-- [ ] CPU-GPU 정합성 확인(가능 범위): `src/debug_gpu_single_run.py` 기준 시나리오 스모크
+- [x] CPU-GPU 정합성 확인(가능 범위): `src/debug_gpu_single_run.py` 기준 시나리오 스모크
 
 ### 6-9. PR-8: CPU 백테스터(core) 계층 이동(`src/backtest/cpu/*`)
 - [x] `src/backtest/cpu/*`: engine/strategy/portfolio/execution 책임 단위로 이동(기능 변경 금지)
@@ -296,6 +296,21 @@
 ### 6-12. PR-11: import 경로 변경 가이드 문서화(DoD Gate)
 - [x] `docs/refactoring/issue69-import-path-mapping.md`: 이전 import 경로 -> 신규 경로 매핑 테이블 작성
 - [x] 문서에 `PR-7(backtest_strategy_gpu 분해)` 미완료 상태를 Pending으로 명시
+
+### 6-13. PR-12: 테스트/내부 import 전환 + wrapper 정리 목록 확정
+- [x] `src/main_backtest.py`: CPU wrapper import(`src.strategy`/`src.portfolio`/`src.execution`/`src.backtester`)를 `src.backtest.cpu.*` 직접 import로 전환
+- [x] 테스트 import 전환(호환성 wrapper 테스트 제외):
+  - `tests/test_pipeline_batch.py` -> `src.pipeline.batch`
+  - `tests/test_ticker_universe_batch.py` -> `src.pipeline.ticker_universe_batch`
+  - `tests/test_ohlcv_batch.py` -> `src.pipeline.ohlcv_batch`
+  - `tests/test_daily_stock_tier_batch.py` -> `src.pipeline.daily_stock_tier_batch`
+  - `tests/test_collector_normalization.py` -> `src.data.collectors.*`
+  - `tests/test_integration.py` -> `src.backtest.cpu.*`
+  - `tests/test_point_in_time.py` -> `src.backtest.cpu.strategy`
+  - `tests/test_issue67_tier_universe.py` -> `src.backtest.cpu.*`, `src.backtest.gpu.*`
+  - `tests/test_portfolio.py` -> `src.backtest.cpu.portfolio`
+  - `tests/test_backtest_strategy_gpu.py` -> `src.backtest.gpu.logic`
+- [x] `docs/refactoring/issue69-import-path-mapping.md`: wrapper 정리 목록(유지 필수/조건부 제거 가능) 확정 반영
 
 ---
 
