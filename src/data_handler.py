@@ -1,7 +1,6 @@
 import pandas as pd
 import warnings
 from functools import lru_cache
-from datetime import timedelta
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
@@ -12,7 +11,7 @@ class PointInTimeViolation(ValueError):
 
 
 class DataHandler:
-    def __init__(self, db_config):
+    def __init__(self, db_config, *, load_company_cache=True):
         self.db_config = db_config
         try:
             try:
@@ -52,7 +51,8 @@ class DataHandler:
                     "[DataHandler] mysql_native_password C-extension load failed. "
                     "Retrying with use_pure=True."
                 )
-            self._load_company_info_cache()
+            if load_company_cache:
+                self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
             raise
@@ -118,9 +118,7 @@ class DataHandler:
     @lru_cache(maxsize=200)
     def load_stock_data(self, ticker, start_date, end_date):
         conn = self.get_connection()
-        # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
-        extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
-        extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
         end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
@@ -135,7 +133,7 @@ class DataHandler:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
+                df = pd.read_sql(query, conn, params=(ticker, start_date_str, end_date_str))
             if df.empty:
                 return df
 

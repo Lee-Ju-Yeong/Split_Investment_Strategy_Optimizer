@@ -18,6 +18,7 @@
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k, 부분 충족/재오픈): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
+- [ ] 이슈 #97 레거시 코드 전수조사 + 단계적 제거 거버넌스: `todos/2026_02_17-issue97-legacy-code-audit-governance.md`
 
 ## 전체 우선순위 (Global Backlog)
 
@@ -123,6 +124,12 @@
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
+- [ ] 레거시 코드 전수조사 및 단계적 제거 거버넌스 수립 (이슈 #97): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/97
+  - [ ] 전수조사 인벤토리(코드/설정/실행경로) 작성
+  - [ ] 사용자 확인 게이트 A: 인벤토리 확정
+  - [ ] 사용자 확인 게이트 B: 제거 대상 확정(항목별 승인)
+  - [ ] 승인된 항목만 단계적 제거 PR 진행
+  - [ ] 사용자 확인 게이트 C: 배포 전 최종 승인
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
 - [x] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
   - [x] Deprecation 정책/일정 문서화
@@ -153,6 +160,7 @@
   - [x] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
   - [ ] 하드 게이트: parity mismatch `0건`만 pass (Release Gate 미충족, 5거래일 `tier top-k=5` mismatch 잔존)
   - [x] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
+  - [x] 2단계 실행 경로 분리: `--pipeline-stage gpu/cpu` + snapshot replay + `--cpu-workers`
   - [x] Research Gate(탐색 단계) 기준 충족: 1일/스모크 기준 parity 증적 확보
   - [ ] Release Gate(승격 단계) 기준 미충족: decision-level parity `0 mismatch` 재검증 필요
 - [ ] 도메인 모델/캐시 통합(Position, CompanyInfo 캐시) (이슈 #57): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57

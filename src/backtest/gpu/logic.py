@@ -93,7 +93,9 @@ def _process_sell_signals_gpu(
     sell_profit_rates = param_combinations[:, 3:4, cp.newaxis]
     stop_loss_rates = param_combinations[:, 5:6, cp.newaxis]
     max_inactivity_periods = param_combinations[:, 7:8] # 최대 매매 미발생 기간
-    cost_factor = 1.0 - sell_commission_rate - sell_tax_rate
+    sell_commission_rate_f32 = cp.float32(sell_commission_rate)
+    sell_tax_rate_f32 = cp.float32(sell_tax_rate)
+    cost_factor = cp.float32(1.0) - sell_commission_rate_f32 - sell_tax_rate_f32
     
     # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
     sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
@@ -331,6 +333,8 @@ def _process_additional_buy_signals_gpu(
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
+    buy_commission_rate_f32 = cp.float32(buy_commission_rate)
+
     # 2. 모든 후보에 대한 비용 및 우선순위 계산 (벡터화)
     sim_indices, stock_indices = cp.where(initial_buy_mask)
     
@@ -345,7 +349,7 @@ def _process_additional_buy_signals_gpu(
     quantities[valid_price_mask] = cp.floor(candidate_investments[valid_price_mask] / exec_prices[valid_price_mask])
 
     costs = exec_prices * quantities
-    commissions = cp.floor(costs * buy_commission_rate)
+    commissions = cp.floor(costs * buy_commission_rate_f32)
     total_costs = costs + commissions
 
     # 우선순위 점수 계산
@@ -490,6 +494,8 @@ def _process_new_entry_signals_gpu(
     if not cp.any(available_slots > 0) or candidate_tickers_for_day.size == 0:
         return portfolio_state, positions_state, last_trade_day_idx_state
 
+    buy_commission_rate_f32 = cp.float32(buy_commission_rate)
+
     # --- [유지] 1. 모든 (시뮬레이션, 후보) 쌍에 대한 기본 정보 계산 ---
     num_simulations = param_combinations.shape[0]
     num_candidates = len(candidate_tickers_for_day)
@@ -513,7 +519,7 @@ def _process_new_entry_signals_gpu(
     quantities = cp.floor(investment_per_order / buy_prices)
     quantities[buy_prices <= 0] = 0
     costs = buy_prices * quantities
-    commissions = cp.floor(costs * buy_commission_rate)
+    commissions = cp.floor(costs * buy_commission_rate_f32)
     total_costs = costs + commissions
 
     # --- [정렬 규칙] ---

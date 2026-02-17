@@ -28,6 +28,11 @@
     - `results/parity_topk_tier_top5_5d.json` (`total_mismatches=5`)
     - `results/parity_topk_tier_top5_5d_retry1.json` (`total_mismatches=5`, 재시도 동일)
     - 공통 first mismatch: `2021-01-05`, `abs_diff=6538.0`
+  - 파이프라인 분리(2026-02-17):
+    - `src.cpu_gpu_parity_topk`에 2단계 실행 추가
+    - `--pipeline-stage gpu`: GPU 스냅샷만 생성
+    - `--pipeline-stage cpu --snapshot-in <...>`: 스냅샷 기반 CPU strict parity만 재실행
+    - CPU 병렬 옵션 `--cpu-workers` 추가(기본 1, 권장 2~4)
 
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙
@@ -62,6 +67,7 @@
 - [ ] mismatch 원인(class) 태깅 리포트 추가(선정 drift / 체결가 drift / 수치 오차)
 - [ ] `Tier v2 deterministic mapping/sort` 정책 적용(Release 기본)
 - [ ] `Tier v2` 운영 모니터링/롤백 지표 2주 관찰 통과
+- [x] GPU/CPU 분리 실행 경로 문서화(`--pipeline-stage gpu/cpu`, snapshot replay)
 
 ## 4. 브랜치 규칙 (A안 전환 연계)
 - [ ] `main` 직접 수정 금지, 기능 브랜치에서 parity 하네스 변경 수행
@@ -178,6 +184,27 @@ python -m src.cpu_gpu_parity_topk \
   --scenario baseline_deterministic \
   --candidate-source-mode tier \
   --parity-mode strict
+
+# 6) 2단계 분리 실행 - 1단계(GPU snapshot 생성)
+python -m src.cpu_gpu_parity_topk \
+  --pipeline-stage gpu \
+  --start-date 2021-01-04 \
+  --end-date 2021-01-08 \
+  --top-k 5 \
+  --scenario baseline_deterministic \
+  --candidate-source-mode tier \
+  --parity-mode strict \
+  --snapshot-out results/parity_topk_tier_top5_5d.snapshot.json \
+  --out results/parity_topk_tier_top5_5d_gpu_stage.json
+
+# 7) 2단계 분리 실행 - 2단계(CPU strict parity replay)
+python -m src.cpu_gpu_parity_topk \
+  --pipeline-stage cpu \
+  --snapshot-in results/parity_topk_tier_top5_5d.snapshot.json \
+  --cpu-workers 4 \
+  --tolerance 1e-3 \
+  --no-fail-on-mismatch \
+  --out results/parity_topk_tier_top5_5d_cpu_stage.json
 ```
 
 ## 8. 제외 범위
