@@ -10,7 +10,11 @@ import cupy as cp
 import pandas as pd
 
 # Import the functions to be tested
-from src.backtest.gpu.logic import _calculate_monthly_investment_gpu
+from src.backtest.gpu.logic import (
+    _calculate_monthly_investment_gpu,
+    _process_additional_buy_signals_gpu,
+    _process_sell_signals_gpu,
+)
 
 # A mock Position class to simulate the structure of the original data
 class MockPosition:
@@ -124,6 +128,92 @@ class TestBacktestStrategyGPU(unittest.TestCase):
             cp.allclose(expected_results, updated_portfolio_state),
             "GPU monthly investment calculation does not match CPU result."
         )
+
+
+class TestIssue56TierSignalExecutionParity(unittest.TestCase):
+    def _single_param_row(self, *, add_drop=0.05, sell_profit=0.10):
+        return cp.array(
+            [[10, 0.02, add_drop, sell_profit, 1, -0.50, 10, 999]],
+            dtype=cp.float32,
+        )
+
+    def test_sell_uses_tminus1_signal_and_executes_at_t0_open(self):
+        """
+        Regression guard:
+        - T-1 high crosses profit target (signal generated)
+        - execution policy is open-market, so fill occurs at T0 open
+        """
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0   # qty
+        positions_state[0, 0, 0, 1] = 100.0  # buy_price
+        positions_state[0, 0, 0, 2] = 0.0    # open_day_idx
+
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        params = self._single_param_row(sell_profit=0.10)
+
+        portfolio_state_after, positions_after, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=1,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([105.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_high_prices=cp.array([115.0], dtype=cp.float32),    # T-1 high >= target
+            signal_day_idx=0,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            debug_mode=False,
+            all_tickers=["TEST"],
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2021-01-05", "2021-01-06"]),
+        )
+
+        self.assertGreater(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
+        self.assertTrue(bool(sell_mask[0, 0].item()))
+
+    def test_additional_buy_uses_tminus1_low_for_trigger(self):
+        """
+        Regression guard:
+        - trigger = 95 from last buy=100 and drop=5%
+        - T-1 low=100 (no signal), even if intraday(T0) low were lower in reality
+        """
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_lows=cp.array([100.0], dtype=cp.float32),  # no trigger at T-1
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        # split index 1 should remain empty (no additional buy)
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
 
 
 if __name__ == '__main__':

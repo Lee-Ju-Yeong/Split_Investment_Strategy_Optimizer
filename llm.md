@@ -87,21 +87,22 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `walk_forward_analyzer.py`: WFO 전체 프로세스 제어
 
 **CPU Backtester (OOP, Single-threaded):**
-- `backtester.py`: BacktestEngine - 시간 순회 엔진
-- `strategy.py`: MagicSplitStrategy - 매수/매도 신호 생성
-- `portfolio.py`: Portfolio - 포지션/현금 상태 관리
-- `execution.py`: BasicExecutionHandler - 주문 체결, 수수료/호가 단위 처리
+- `backtest/cpu/backtester.py`: BacktestEngine - 시간 순회 엔진
+- `backtest/cpu/strategy.py`: MagicSplitStrategy - 매수/매도 신호 생성
+- `backtest/cpu/portfolio.py`: Portfolio - 포지션/현금 상태 관리
+- `backtest/cpu/execution.py`: BasicExecutionHandler - 주문 체결, 수수료/호가 단위 처리
 
 **GPU Backtester (State Arrays, Vectorized):**
-- `backtest_strategy_gpu.py`: GPU 커널 - CuPy 기반 벡터화 로직
+- `backtest/gpu/engine.py`: GPU 시뮬레이션 엔진
+- `backtest/gpu/logic.py`: GPU 매매 로직 커널
 - `debug_gpu_single_run.py`: GPU 단일 실행 및 CPU 결과 비교 검증
 
 **Data Layer:**
 - `data_handler.py`: DataHandler - DB 조회 및 캐싱
 - `db_setup.py`: 스키마 정의, 테이블 생성
-- `daily_stock_tier_batch.py`: Tier 사전 계산 워커
-- `financial_collector.py`: FinancialData 수집 워커
-- `investor_trading_collector.py`: InvestorTradingTrend 수집 워커
+- `pipeline/daily_stock_tier_batch.py`: Tier 사전 계산 워커
+- `data/collectors/financial_collector.py`: FinancialData 수집 워커
+- `data/collectors/investor_trading_collector.py`: InvestorTradingTrend 수집 워커
 - `config_loader.py`: `config/config.yaml` 로드
 
 ### Key Design Principles
@@ -140,7 +141,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `max_inactivity_period`: 비활성 청산 기간(거래일)
 
 **Note (`additional_buy_priority`):**
-- CPU 엔진(`src/strategy.py`)은 `lowest_order`가 아니면 하락폭 우선 분기로 처리합니다. 운영/문서 기본값은 `"highest_drop"`를 사용합니다.
+- CPU 엔진(`src.backtest.cpu.strategy`)은 `lowest_order`가 아니면 하락폭 우선 분기로 처리합니다. 운영/문서 기본값은 `"highest_drop"`를 사용합니다.
 - GPU/최적화 스크립트는 내부적으로 `0/1`로 매핑합니다(0=`lowest_order`, 1=`highest_drop`).
 - `"biggest_drop"` 표기는 레거시 문서 표현으로 간주하며 신규 설정/문서에서는 사용하지 않습니다.
 
@@ -228,7 +229,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 ## 7. Current Mission
 
-> 기준일: 2026-02-08
+> 기준일: 2026-02-17
 > 단일 상태 소스: `TODO.md`
 
 ### Immediate (P0: 운영 데이터 정합성)
@@ -239,11 +240,12 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 ### Next (P1: 운영 안정화)
 - `#71`: pykrx 확장 데이터셋 + Tier v2 로드맵 실행
 - `#67`: PIT 조인 확장 + `tier<=2` fallback 조회
-- `#53/#54/#55`: 설정 소스 표준화, 파이프라인 모듈화, 구조화 로깅
+- `#54`: 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리
+- `#93`: Wrapper deprecation/removal 단계적 정리
 
 ### Future (P2: 전략 고도화)
 - `#68`: 멀티팩터 랭킹 + WFO/Ablation
-- `#56`: CPU/GPU Parity 테스트 하네스 강화
+- `#57`: 도메인 모델/캐시 통합(Position, CompanyInfo 캐시)
 - WFO 결과 심층 분석, Web UI 고도화, 실시간 매매 신호 생성
 
 ---
