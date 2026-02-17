@@ -2,7 +2,8 @@
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93`
 - 요약:
   - Issue #69 이후 남아있는 compatibility wrapper를 단계적으로 정리
-  - 즉시 삭제가 아닌 deprecation -> removal 2단계로 진행
+  - deprecation -> removal 2단계 정책으로 진행
+  - Stage 2 제거 완료일: `2026-02-17`
 
 ## 목표
 - 내부 코드/테스트의 wrapper 의존 제거를 완료하고, 제거 가능한 wrapper를 안전하게 삭제한다.
@@ -16,7 +17,7 @@
 - `src.parameter_simulation_gpu`
 - `src.parameter_simulation_gpu_lib`
 
-### 조건부 제거 대상 wrapper
+### 제거 완료 wrapper (Stage 2)
 - `src.backtester`
 - `src.strategy`
 - `src.portfolio`
@@ -33,8 +34,15 @@
 - deprecation/migration 문서 업데이트
 
 ## 체크리스트
-- [ ] Deprecation 정책/일정 문서화
-- [ ] 조건부 wrapper 사용처 탐지 규칙(CI/테스트) 추가
-- [ ] 조건부 wrapper 제거 패치
-- [ ] wrapper compat 테스트/문서 정리
-- [ ] 지정 테스트 통과 기록
+- [x] Deprecation 정책/일정 문서화
+  - `docs/refactoring/wrapper-deprecation.md`에 Phase 1/2 정책 및 검증 커맨드 문서화
+- [x] 조건부 wrapper 사용처 탐지 규칙(CI/테스트) 추가
+  - `tests/test_wrapper_usage.py` AST 가드 추가 (`src` 런타임 모듈의 조건부 wrapper import 금지)
+- [x] 조건부 wrapper 제거 패치
+  - 대상 8개 wrapper 파일 삭제 완료
+- [x] wrapper compat 테스트/문서 정리
+  - 테스트: `tests/test_issue69_cpu_backtest_wrapper_compat.py`, `tests/test_issue69_entrypoint_compat.py`를 canonical import 기준으로 갱신
+  - 문서: `docs/refactoring/issue69-import-path-mapping.md`, `docs/refactoring/wrapper-deprecation.md`, `docs/database/backfill_validation_runbook.md`, `llm.md` 갱신
+- [x] 지정 테스트 통과 기록
+  - `python -m unittest tests.test_wrapper_usage -v` 통과
+  - `python -m unittest tests.test_issue69_cpu_backtest_wrapper_compat tests.test_issue69_entrypoint_compat -v` 통과

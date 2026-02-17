@@ -13,7 +13,7 @@
 - [x] 이슈 #60 스크립트 import 부작용 제거: `todos/done_2026_02_15-issue60-import-parameter-simulation-gpu-py.md`
 - [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
 - [x] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md`
-- [ ] 이슈 #93 Wrapper deprecation/removal 계획: `todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md`
+- [x] 이슈 #93 Wrapper deprecation/removal 계획: `todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md`
 - [ ] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
@@ -95,11 +95,24 @@
     - Forbidden: `candidate_source_mode`, execution/fee/tick/lag 규칙, WFO fold 분할 규칙
     - Preflight: `#67` 모드 고정 + `#56` parity mismatch `0건` + `#68` hard gate 설정 완료
     - Promotion: feature flag canary 통과 + 재현성(seed/기간/모드) 증적 확보 시에만 운영 반영
+  - [ ] P0 테이블 DDL/인덱스 확정
+  - [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
+  - [ ] Tier v2 read-only 실험 스크립트 추가
+  - [ ] PIT/왜곡 방지 검증 항목 테스트화
+  - [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+  - [ ] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정)
+  - [ ] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가
+  - [ ] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`)
+  - [ ] Optuna invalid trial 기준 명문화(`INVALID_REPRO`, `INVALID_PARITY`, `INVALID_DATA`)
+  - [ ] Optuna run manifest 저장(`config hash`, `data hash`, `env fingerprint`, `git sha`)
+  - [ ] mode 전환(`hybrid_transition` -> `tier`) 시 study 분리 강제(혼합 비교 금지)
+  - [ ] `docs/database/schema.md` 및 `TODO.md` 동기화
 - [ ] `DataHandler` PIT 조인 확장 + `tier=1 -> tier<=2` fallback 조회 적용 (이슈 #67): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67
   - [x] 후보군 조회 정책 플래그 도입: `weekly | tier | hybrid_transition`
   - [x] `tier=1` 우선, 빈 경우 `tier<=2` fallback 규칙을 CPU/GPU 동일 로직으로 고정
   - [x] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
   - [x] Phase A parity hardening: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거) 반영
+  - [ ] `#52` 연계: GPU 후보군/신규진입 경로 host 병목 제거(Phase B/C 우선 완료, top-level 중복 이슈로 분리하지 않음)
   - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
   - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
   - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
@@ -108,9 +121,14 @@
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
-- [ ] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
+- [x] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
+  - [x] Deprecation 정책/일정 문서화
+  - [x] 조건부 wrapper 사용처 탐지 규칙(CI/테스트) 추가
+  - [x] 조건부 wrapper 제거 패치
+  - [x] wrapper compat 테스트/문서 정리
+  - [x] 지정 테스트 통과 기록
 - [ ] `ohlcv_batch` legacy fallback 제거 (운영 1~2주 fallback 0회 확인 후) (이슈 #70 후속)
-- [ ] 구조화된 로깅 도입 및 하드코딩 디버그 출력 제거 (이슈 #55): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55
+- [x] 구조화된 로깅 도입 및 하드코딩 디버그 출력 제거 (이슈 #55): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55
 - [ ] DB 접근 계층 표준화(connector/engine) (이슈 #58): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58
 
 ### P2 (전략 고도화/개선)
@@ -150,3 +168,13 @@
 - `random-only` 선택은 운영 기준으로 금지, 결정론적 baseline + seeded stress test로 강건성 검증
 - Trial 채택 하드게이트: parity(`#56`) + OOS/IS + fold pass rate + OOS MDD p95 동시 통과
 - 하나라도 fail이면 `STOP` (채택 금지), 모두 pass일 때만 `GO` (canary 후 승격)
+
+### Parking Backlog (조건부 재검토)
+- [ ] `#19` CLI 단일 엔트리(`main.py`) 도입: 현재는 모듈별 CLI 체계 유지. 재검토 조건은 P1 핵심(`#54/#58/#93`) 안정화 이후 UX 관점 통합 필요성이 명확할 때
+- [ ] `#20` README 상세 문서화(legacy 스코프 재정의 필요): 기존 이슈 본문의 `config.ini` 전제가 현재 정책(`config.yaml` SSOT)과 불일치. 재검토 시 “README-현재상태 정합성 보수”로 재작성
+- [ ] `#21` 핵심 모듈 Docstring 확장: low-priority 문서 보강 작업. 재검토 조건은 P1/P2 기능 변경 안정화 이후 API/동작이 고정됐을 때
+- [ ] `#30` GPU 결과 리포팅 가독성 개선: 현재 출력 경로는 개편됨. 재검토 조건은 최신 실행 로그 기준 지표 표기 오류가 재현될 때
+- [ ] `#35` 최초 현금 고갈 이벤트 기반 동적 파라미터: 전략 확장 범위가 커서 parity/robust gate 선행 과제 완료 후 별도 실험 트랙에서 검토
+
+### Issue Hygiene (2026-02-17)
+- [x] `#28` 다양한 종목 선정 우선순위 전략: 사용자 수동 close 완료(2026-02-17)

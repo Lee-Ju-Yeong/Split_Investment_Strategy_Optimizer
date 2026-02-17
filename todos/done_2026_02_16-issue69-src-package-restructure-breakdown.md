@@ -1,6 +1,7 @@
 # src 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (Issue #69)
 (현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69`
+- 업데이트(2026-02-17): 본 문서에서 `wrapper 유지`로 기록된 일부 경로(`src.backtester` 등 8종)는 후속 이슈 `#93` Stage 2에서 제거됨. 최신 상태는 `TODO.md`, `docs/refactoring/issue69-import-path-mapping.md`를 기준으로 확인.
 - 요약:
   - `src`의 평면 구조/대형 모듈을 **기능 변경 없이** 단계적으로 정리
   - 대형 모듈을 책임 단위로 분해(헬퍼/서비스/러너)
