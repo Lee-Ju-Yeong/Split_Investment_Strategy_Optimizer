@@ -211,10 +211,10 @@ def _process_sell_signals_gpu(
     execution_sell_prices = adjust_price_up_gpu(current_open_prices_3d)
     execution_reachable_mask = cp.ones_like(execution_sell_prices, dtype=cp.bool_)
 
-    signal_target_prices = adjust_price_up_gpu(target_sell_prices)
     # 1) T-1 고가가 목표가에 도달했을 때만 신호 생성
     # 2) T0 시가 체결
-    profit_signal_mask = signal_high_prices_3d >= signal_target_prices
+    # CPU와 동일하게 신호 생성은 보정 전 목표가(target_sell_prices) 기준으로 판정
+    profit_signal_mask = signal_high_prices_3d >= target_sell_prices
     profit_taking_mask = profit_signal_mask & execution_reachable_mask & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):

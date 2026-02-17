@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -421,6 +421,9 @@ def _run_single_scenario(
     scenario_type = scenario["scenario_type"]
     seed_id = scenario["seed_id"]
     drop_top_n = scenario["drop_top_n"]
+    total_params = int(len(params_df))
+    progress_interval = 10 if total_params >= 10 else 1
+    scenario_started_at = datetime.now()
 
     print(
         f"[parity_topk] mode={candidate_source_mode}, scenario={scenario_type}, seed_id={seed_id}, "
@@ -464,6 +467,18 @@ def _run_single_scenario(
                     "params": {key: row_dict[key] for key in PARAM_ORDER},
                     **cmp_result,
                 }
+            )
+        processed = row_idx + 1
+        if processed % progress_interval == 0 or processed == total_params:
+            elapsed = datetime.now() - scenario_started_at
+            elapsed_sec = max(elapsed.total_seconds(), 1e-6)
+            avg_sec_per_param = elapsed_sec / processed
+            remaining = total_params - processed
+            eta = timedelta(seconds=int(avg_sec_per_param * remaining))
+            progress_pct = (processed / total_params) * 100 if total_params else 100.0
+            print(
+                f"[parity_topk] cpu progress {processed}/{total_params} ({progress_pct:.1f}%) "
+                f"mismatches={len(mismatches)} elapsed={elapsed} eta={eta}"
             )
 
     return {

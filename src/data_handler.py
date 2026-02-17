@@ -174,7 +174,20 @@ class DataHandler:
         return data_row
 
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
-        return self.get_stock_row_as_of(ticker, date, start_date, end_date)
+        stock_data = self.load_stock_data(ticker, start_date, end_date)
+        if stock_data is None or stock_data.empty:
+            return None
+
+        target_date = pd.to_datetime(date)
+        if target_date not in stock_data.index:
+            return None
+
+        row = stock_data.loc[target_date]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[-1]
+        row = row.copy()
+        row.name = target_date
+        return row
 
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()
