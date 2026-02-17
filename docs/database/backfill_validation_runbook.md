@@ -248,7 +248,7 @@ PY
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
 from src.db_setup import get_db_connection
-from src.daily_stock_tier_batch import fetch_price_history, fetch_financial_history, build_daily_stock_tier_frame
+from src.pipeline.daily_stock_tier_batch import fetch_price_history, fetch_financial_history, build_daily_stock_tier_frame
 
 START = "2024-01-01"
 END = "2026-02-06"
@@ -365,7 +365,7 @@ Codex 2개 + Gemini(`gemini-3-pro-preview`) 교차 검토 후, 아래 3개 시�
 ```bash
 PYTHONPATH=$PWD conda run --no-capture-output -n rapids-env python -u - <<'PY'
 from src.db_setup import get_db_connection
-from src.daily_stock_tier_batch import (
+from src.pipeline.daily_stock_tier_batch import (
     fetch_price_history,
     fetch_financial_history,
     fetch_investor_history,
