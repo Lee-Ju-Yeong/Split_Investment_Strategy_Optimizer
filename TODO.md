@@ -113,7 +113,10 @@
   - [x] 후보군 선택은 결정론 baseline 고정(`random-only` 금지), 동점/정렬 규칙 명문화
   - [x] Phase A parity hardening: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거) 반영
   - [ ] `#52` 연계: GPU 후보군/신규진입 경로 host 병목 제거(Phase B/C 우선 완료, top-level 중복 이슈로 분리하지 않음)
-  - [ ] Entry/Hold hysteresis 규칙 문서화(`Entry=tier1`, `Hold=tier1/2`, `tier3` 리스크 경로)
+  - [x] Entry/Hold hysteresis 규칙 반영/문서화(`tier_hysteresis_mode`):
+    - `legacy`: `Entry=tier1 -> empty면 tier<=2 fallback`
+    - `strict_hysteresis_v1`: `Entry=tier1 only`, `Hold/Add=tier<=2`, `tier3` 강제청산
+  - [x] 현재 동작 기준 hysteresis 문서/테스트 보강(2026-02-17): `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`, `tests/test_issue67_tier_universe.py` (`invalid mode`, `ATR tie-break`, `T-1 호출 인자`, `T+0/T+1`)
   - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
   - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
   - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가

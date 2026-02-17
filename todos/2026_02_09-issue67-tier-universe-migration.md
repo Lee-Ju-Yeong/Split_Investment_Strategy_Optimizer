@@ -13,6 +13,24 @@
 - 완료(검증):
   - `tests/test_issue67_tier_universe.py` 확장(전략 모드, T-1 helper, 정렬 helper, ATR as-of helper, Tier 예외 fallback)
   - 로컬 테스트: `python -m unittest tests.test_issue67_tier_universe tests.test_data_handler_tier tests.test_pipeline_batch -v` 통과(17 tests)
+- 업데이트(2026-02-17):
+  - `tests/test_issue67_tier_universe.py` 추가 확장:
+    - invalid `candidate_source_mode` -> weekly fallback
+    - 동일 ATR 후보군 ticker tie-break 결정론 검증
+    - `generate_additional_buy_signals`의 T-1 조회 인자 검증
+    - T+0 진입 추가매수 차단 / T+1 허용 검증
+  - `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`에 Entry/Hold hysteresis 현재 동작과 Tier3 정책 gap 명시
+  - 검증: `conda run --no-capture-output -n rapids-env python -m unittest tests.test_issue67_tier_universe -v` 통과(16 tests)
+- 업데이트(2026-02-17, strict hysteresis v1):
+  - `strategy_params.tier_hysteresis_mode` 도입(`legacy | strict_hysteresis_v1`)
+  - strict 모드 동작:
+    - Entry: Tier1 only, Tier1 empty면 신규진입 skip
+    - Hold/Add: T-1 Tier<=2만 추가 매수 허용
+    - Sell: T-1 Tier3 강제 청산
+  - CPU/GPU 동시 반영:
+    - CPU: `MagicSplitStrategy`에 Tier map 기반 Hold/Add/Sell 게이트 추가
+    - GPU: candidate fallback 제거(strict), add-buy tier gate, tier3 liquidation mask 추가
+  - 검증: `conda run --no-capture-output -n rapids-env python -m unittest tests.test_issue67_tier_universe tests.test_backtest_strategy_gpu -v` 통과(25 tests)
 - 남은 핵심:
   - 모드별 end-to-end CPU/GPU parity 하네스(`tests/test_backtest_universe_mode.py`, `tests/test_cpu_gpu_parity_topk.py`)
   - Phase B 계측/Phase C 구조 최적화
@@ -56,9 +74,10 @@
 ### 3-5. 후보군 선택 강건성 규칙(결정론 baseline)
 - [x] `random-only` 후보군 선택 금지(운영/최적화 기준)
 - [x] 동일 입력일 때 동일 `Top-K`가 재현되도록 점수식/정렬 키/동점 규칙 고정
-- [ ] Entry/Hold hysteresis 규칙 명문화:
-  - Entry: `tier=1` 우선(`empty -> tier<=2 fallback`)
-  - Hold: `tier=1/2` 유지 허용, `tier=3`만 강한 리스크 대응 경로 사용
+- [x] Entry/Hold hysteresis 규칙 명문화/구현:
+  - config: `tier_hysteresis_mode = legacy | strict_hysteresis_v1`
+  - strict 모드: `Entry=tier1 only`, `Hold/Add=tier<=2`, `tier3 forced liquidation`
+- [x] 현재 구현 기준 hysteresis 동작 문서/테스트 보강(2026-02-17)
 - [ ] `Top-K` 구성 로그에 `score`, `rank`, `tie_break_key` 저장(실험 재현용)
 
 ### 3-6. Hybrid 성능 최적화 단계 계획 (2026-02-09 업데이트)

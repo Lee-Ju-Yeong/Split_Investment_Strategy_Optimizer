@@ -37,6 +37,14 @@ def run_magic_split_strategy_on_gpu(
     # Config from exec_params
     candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
     use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
+    strict_hysteresis_enabled = (
+        tier_hysteresis_mode == "strict_hysteresis_v1"
+        and candidate_source_mode in {"tier", "hybrid_transition"}
+    )
+    entry_tier1_only = strict_hysteresis_enabled
+    hold_max_tier = 2 if strict_hysteresis_enabled else 0
+    force_liquidate_tier3 = strict_hysteresis_enabled
     valid_modes = {'weekly', 'tier', 'hybrid_transition'}
     if candidate_source_mode not in valid_modes:
         print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'weekly'.")
@@ -101,10 +109,15 @@ def run_magic_split_strategy_on_gpu(
                 signal_closes_gpu = close_prices_tensor[signal_day_idx]
                 signal_highs_gpu = high_prices_tensor[signal_day_idx]
                 signal_lows_gpu = low_prices_tensor[signal_day_idx]
+                if tier_tensor is not None:
+                    signal_tiers_gpu = tier_tensor[signal_day_idx]
+                else:
+                    signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
             else:
                 signal_closes_gpu = cp.zeros(num_tickers, dtype=cp.float32)
                 signal_highs_gpu = cp.zeros(num_tickers, dtype=cp.float32)
                 signal_lows_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+                signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
 
             # --- [Issue #67] Candidate Selection Logic ---
             candidate_indices_list = []
@@ -118,6 +131,8 @@ def run_magic_split_strategy_on_gpu(
 
                     if cp.any(tier1_mask):
                         candidate_indices = cp.where(tier1_mask)[0]
+                    elif entry_tier1_only:
+                        candidate_indices = cp.array([], dtype=cp.int32)
                     else:
                         # Fallback to Tier 2 (<= 2)
                         tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
@@ -194,6 +209,8 @@ def run_magic_split_strategy_on_gpu(
                 current_opens_gpu, current_prices_gpu, current_highs_gpu,
                 signal_closes_gpu, signal_highs_gpu, signal_day_idx,
                 execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
+                signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
+                force_liquidate_tier3=force_liquidate_tier3,
                 debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
@@ -206,7 +223,10 @@ def run_magic_split_strategy_on_gpu(
                 portfolio_state, positions_state, last_trade_day_idx_state, sell_occurred_today_mask, day_idx,
                 param_combinations,
                 current_opens_gpu, signal_closes_gpu, signal_lows_gpu, signal_day_idx,
-                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
+                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
+                all_tickers=all_tickers,
+                signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
+                hold_max_tier=hold_max_tier,
             )
         
             # --- 일일 포트폴리오 가치 업데이트 (기존과 동일) ---

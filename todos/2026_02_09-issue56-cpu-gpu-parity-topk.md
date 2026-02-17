@@ -22,6 +22,9 @@
     - `results/parity_topk_tier_scenariopack_1d.json` (`baseline/seeded/jackknife`, `total_mismatches=0`)
     - `results/parity_topk_smoke_hybrid_1d.json` (`hybrid_transition`, `total_mismatches=0`)
     - `results/parity_topk_tier_top100_1d.json` (`top-k=100`, `total_mismatches=0`)
+  - 체크포인트(2026-02-17):
+    - `strict_hysteresis_v1` 적용 후 parity 스모크(`cpu_gpu_parity_topk` 짧은 구간)는 다음 실행 슬롯에서 수행하기로 보류
+    - TODO/Triage 목적의 파킹이며, 병합 전 재실행 및 결과 증적 갱신 예정
 
 ## 1. 배경
 - CPU는 SSOT, GPU는 동일 결과 보장 원칙

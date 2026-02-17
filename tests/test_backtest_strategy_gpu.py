@@ -215,6 +215,148 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
         # split index 1 should remain empty (no additional buy)
         self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
 
+    def test_additional_buy_blocked_when_tier_is_3_under_strict_hysteresis(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+            signal_tiers=cp.array([3], dtype=cp.int8),
+            hold_max_tier=2,
+        )
+
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
+
+    def test_additional_buy_blocked_when_tier_is_0_under_strict_hysteresis(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+            signal_tiers=cp.array([0], dtype=cp.int8),
+            hold_max_tier=2,
+        )
+
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
+
+    def test_sell_forces_liquidation_when_tier_is_3_under_strict_hysteresis(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        params = self._single_param_row(sell_profit=0.10)
+
+        portfolio_state_after, positions_after, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=1,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            signal_tiers=cp.array([3], dtype=cp.int8),
+            force_liquidate_tier3=True,
+            debug_mode=False,
+            all_tickers=["TEST"],
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2021-01-05", "2021-01-06"]),
+        )
+
+        self.assertGreater(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
+        self.assertTrue(bool(sell_mask[0, 0].item()))
+
+    def test_sell_forces_liquidation_when_tier_is_4_under_strict_hysteresis(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        params = self._single_param_row(sell_profit=0.10)
+
+        portfolio_state_after, positions_after, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=1,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            signal_tiers=cp.array([4], dtype=cp.int8),
+            force_liquidate_tier3=True,
+            debug_mode=False,
+            all_tickers=["TEST"],
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2021-01-05", "2021-01-06"]),
+        )
+
+        self.assertGreater(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
+        self.assertTrue(bool(sell_mask[0, 0].item()))
+
 
 if __name__ == '__main__':
     unittest.main()

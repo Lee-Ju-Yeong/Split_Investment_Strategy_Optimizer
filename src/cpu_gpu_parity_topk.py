@@ -212,6 +212,7 @@ def _load_gpu_shared_state(
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
     execution_params["candidate_source_mode"] = candidate_source_mode
     execution_params["use_weekly_alpha_gate"] = bool(use_weekly_alpha_gate)
+    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
     weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)

@@ -64,6 +64,8 @@ def _process_sell_signals_gpu(
     signal_day_idx: int,
     sell_commission_rate: float,
     sell_tax_rate: float,
+    signal_tiers: cp.ndarray = None,
+    force_liquidate_tier3: bool = False,
     debug_mode: bool = False,
     all_tickers: list = None,
     trading_dates_pd_cpu: pd.DatetimeIndex = None,
@@ -114,13 +116,20 @@ def _process_sell_signals_gpu(
     has_traded_before = last_trade_day_idx_state != -1
     days_inactive = current_day_idx - last_trade_day_idx_state
     stock_inactivity_mask = (days_inactive >= max_inactivity_periods - 1) & has_traded_before & has_any_position
+
     stock_liquidation_mask_base = stock_stop_loss_mask | stock_inactivity_mask
-    stock_liquidation_mask = stock_liquidation_mask_base
+    tier3_liquidation_mask = cp.zeros_like(stock_liquidation_mask_base)
+    if force_liquidate_tier3 and signal_tiers is not None:
+        signal_tiers_2d = cp.broadcast_to(signal_tiers.reshape(1, -1), stock_liquidation_mask_base.shape)
+        tier3_liquidation_mask = (signal_tiers_2d >= 3) & has_any_position
+
+    stock_liquidation_mask = stock_liquidation_mask_base | tier3_liquidation_mask
     liquidation_price_basis = current_open_prices_2d
         
     if debug_mode and cp.any(stock_liquidation_mask):
         sim0_stop_loss_indices = cp.where(stock_stop_loss_mask[0])[0].get()
         sim0_inactivity_indices = cp.where(stock_inactivity_mask[0])[0].get()
+        sim0_tier3_indices = cp.where(tier3_liquidation_mask[0])[0].get()
         # 인덱스를 티커로 변환하여 로그 출력
         if sim0_stop_loss_indices.size > 0:
             tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_stop_loss_indices])
@@ -128,6 +137,9 @@ def _process_sell_signals_gpu(
         if sim0_inactivity_indices.size > 0:
             tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_inactivity_indices])
             print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Inactivity triggered for Stocks [{tickers_str}]")
+        if sim0_tier3_indices.size > 0:
+            tickers_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in sim0_tier3_indices])
+            print(f"  [GPU_SELL_DEBUG] Day {current_day_idx}: Tier3 forced liquidation for Stocks [{tickers_str}]")
     if cp.any(stock_liquidation_mask):
         if debug_mode:
             sim0_liquidation_mask = stock_liquidation_mask[0]
@@ -140,7 +152,12 @@ def _process_sell_signals_gpu(
                     target_price = liquidation_price_basis[0, idx].item()
                     exec_price = adjust_price_up_gpu(liquidation_price_basis[0, idx]).item()
                     high_price = current_high_prices[idx].item()
-                    reason = "Stop-Loss" if stock_stop_loss_mask[0, idx] else "Inactivity"
+                    if tier3_liquidation_mask[0, idx]:
+                        reason = "Tier3"
+                    elif stock_stop_loss_mask[0, idx]:
+                        reason = "Stop-Loss"
+                    else:
+                        reason = "Inactivity"
                     # 실제 계산에 사용할 수량을 가져와 정확한 예상 수익 계산
                     qty_to_log = cp.sum(quantities[0, idx, :]).item()
                     net_proceeds_sim0 = qty_to_log * exec_price
@@ -273,6 +290,8 @@ def _process_additional_buy_signals_gpu(
     log_counter: cp.ndarray,
     debug_mode: bool = False,
     all_tickers: list = None,
+    signal_tiers: cp.ndarray = None,
+    hold_max_tier: int = 0,
 ):
     """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
@@ -299,6 +318,10 @@ def _process_additional_buy_signals_gpu(
     
     signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
     initial_buy_mask = (signal_lows_2d <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today & has_first_split
+    if hold_max_tier > 0 and signal_tiers is not None:
+        signal_tiers_2d = cp.broadcast_to(signal_tiers.reshape(1, -1), trigger_prices.shape)
+        tier_hold_mask = (signal_tiers_2d > 0) & (signal_tiers_2d <= hold_max_tier)
+        initial_buy_mask &= tier_hold_mask
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 

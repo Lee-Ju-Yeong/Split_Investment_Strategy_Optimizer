@@ -30,6 +30,11 @@ strategy_params:
   candidate_source_mode: "hybrid_transition"
   use_weekly_alpha_gate: true
 
+  # [Issue #67] Entry/Hold Hysteresis Policy
+  # legacy: Entry(Tier1 -> fallback Tier2), Hold/Add path ignores Tier recheck
+  # strict_hysteresis_v1: Entry(Tier1 only, empty=>skip), Hold/Add(Tier<=2), Tier3 forced liquidation
+  tier_hysteresis_mode: "legacy"
+
 execution_params:
   buy_commission_rate: 0.00015
   sell_commission_rate: 0.00015
