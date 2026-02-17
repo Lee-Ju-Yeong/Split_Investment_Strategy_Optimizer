@@ -60,6 +60,8 @@
 - [x] CI/로컬 실행 명령 문서화
 - [ ] 승격 게이트용 5거래일 이상 `tier top-k>=5` decision-level parity `0 mismatch` 충족
 - [ ] mismatch 원인(class) 태깅 리포트 추가(선정 drift / 체결가 drift / 수치 오차)
+- [ ] `Tier v2 deterministic mapping/sort` 정책 적용(Release 기본)
+- [ ] `Tier v2` 운영 모니터링/롤백 지표 2주 관찰 통과
 
 ## 4. 브랜치 규칙 (A안 전환 연계)
 - [ ] `main` 직접 수정 금지, 기능 브랜치에서 parity 하네스 변경 수행
@@ -84,6 +86,50 @@
 - `Release Gate`: **미충족**
   - `tier` 5거래일 `top-k=5` 재시도 포함 mismatch `5` 지속
 - `Issue #56 전체`: **부분 충족(재오픈 유지 권장)**
+
+## 6. Tier v2 매핑/정렬 정책 (2026-02-17 합의안)
+목표: `tier` 경로의 decision-level parity 안정화와 ATR 영향 완화.
+
+### 6-1. Release 기본 정책(결정론 고정)
+- 시점 앵커:
+  - `signal_date = T-1`
+  - `tier_date = max(DailyStockTier.date <= signal_date)`
+  - `snapshot_date = max(TickerUniverseSnapshot.snapshot_date <= signal_date)`
+  - `mcap_date = max(MarketCapDaily.date <= signal_date)`
+- 후보군:
+  - `tier in (1,2)` + `tier@tier_date ∩ snapshot@snapshot_date` 교집합
+- 정렬 키(고정):
+  - primary: `tier_rank asc` (`tier1=0`, `tier2=1`)
+  - secondary: `market_cap` 내림차순(정수 quantize)
+  - tertiary: `atr_14_ratio` 내림차순(정수 quantize)
+  - final tie-breaker: `stock_code asc`
+- ATR 규칙:
+  - `atr_14_ratio > 0`인 후보만 정렬 대상
+  - cap은 적용하지 않음(이미 후순위)
+- 결측/지연 처리:
+  - `market_cap NULL -> 0`, `atr NULL or <=0 -> 제외`
+  - `snapshot/tier` as-of staleness가 3 거래일 초과 시 fail-close
+  - `ShortSellingDaily`는 lag 구조로 ranking key에서 제외
+
+### 6-2. Research 실험 정책(선택)
+- 정렬 키 실험 허용:
+  - `tier_rank asc -> liquidity desc -> capped_atr desc -> stock_code asc`
+- 단, Release 승격 전에는 반드시 Release 기본 정책으로 재검증하고 parity gate 통과 필요.
+
+### 6-3. 구현 템플릿(Python key)
+```python
+tier_rank = 0 if tier == 1 else 1
+mcap_q = int((market_cap or 0) // 1_000_000)
+atr_q = int(round(atr_14_ratio * 10000))
+sort_key = (tier_rank, -mcap_q, -atr_q, stock_code)
+```
+
+### 6-4. 롤백 트리거(운영)
+- `parity mismatch_count > 0` (decision-level)
+- `top-k ordered hash` CPU/GPU 불일치 발생
+- `candidate coverage < 99%` (tier/snapshot/mcap 조인 기준)
+- `as-of staleness > 3 trading days`
+- `empty_entry_day_rate > 20%`가 3일 연속 발생
 
 ## 7. 실행 명령 (로컬/CI)
 ```bash
@@ -121,6 +167,6 @@ python -m src.tier_parity_monitor \
   --config-path /tmp/config_parity_use_pure.yaml
 ```
 
-## 6. 제외 범위
+## 8. 제외 범위
 - CPU/GPU 공통 코드로 강제 통합
 - 전략 성능 개선 목적 로직 변경

@@ -510,13 +510,13 @@ def _process_new_entry_signals_gpu(
     commissions = cp.floor(costs * buy_commission_rate)
     total_costs = costs + commissions
 
-    # --- [유지] 2. 우선순위에 따라 후보 정렬 ---
-    priority_scores = cp.full(num_simulations * num_candidates, float('inf'), dtype=cp.float32)
-    initial_buy_mask = ~is_holding & ~is_in_cooldown & (quantities > 0)
-    priority_scores[initial_buy_mask] = -candidate_atrs_for_day[candidate_indices_in_list[initial_buy_mask]]
+    # --- [정렬 규칙] ---
+    # candidate_tickers_for_day는 엔진에서 이미 결정론적으로 정렬되어 들어온다.
+    # (tier -> market_cap -> atr -> ticker)
+    # 본 함수는 전달된 순서를 그대로 사용해 CPU 경로와 동일한 top-k 실행 순서를 보장한다.
+    _ = candidate_atrs_for_day
 
-    priority_scores_2d = priority_scores.reshape(num_simulations, num_candidates)
-    sorted_candidate_indices_in_sim = cp.argsort(priority_scores_2d, axis=1, kind='stable')
+    initial_buy_mask = ~is_holding & ~is_in_cooldown & (quantities > 0)
 
     # --- 3. [핵심 수정] 순차적 자본 차감을 통한 최종 매수 실행 ---
     # CPU의 순차적 로직을 모방하기 위해, 우선순위 루프(k)를 유지하되
@@ -529,12 +529,9 @@ def _process_new_entry_signals_gpu(
         temp_cap_log = portfolio_state[0, 0].item()
 
     for k in range(num_candidates):
-        # k번째 우선순위 후보들의 '후보 리스트 내 인덱스'
-        candidate_idx_k = sorted_candidate_indices_in_sim[:, k]
-        
         # (sim, candidate) 형태의 1D 인덱스로 변환
-        # 각 시뮬레이션의 k번째 우선순위 후보를 가리키는 고유 인덱스
-        flat_indices_k = cp.arange(num_simulations) * num_candidates + candidate_idx_k
+        # 각 시뮬레이션의 k번째(이미 정렬된) 후보를 가리키는 고유 인덱스
+        flat_indices_k = cp.arange(num_simulations) * num_candidates + k
 
         # 이 후보들이 매수 가능한지 판단합니다.
         # CPU 실행 경로와 동일하게, "실제 매수 비용(total_cost)" 기준으로만 자금 가능 여부를 판단합니다.

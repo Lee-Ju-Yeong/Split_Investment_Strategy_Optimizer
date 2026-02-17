@@ -6,14 +6,14 @@ import cudf
 import cupy as cp
 import pandas as pd
 
-from .data import _collect_candidate_atr_asof, create_gpu_data_tensors
+from .data import _collect_candidate_rank_metrics_asof, create_gpu_data_tensors
 from .logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
 )
-from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_atr_then_ticker
+from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_market_cap_then_atr_then_ticker
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -166,32 +166,48 @@ def run_magic_split_strategy_on_gpu(
                 else:
                     final_candidate_indices = candidate_indices_list
 
-            # (D) Valid Data Check (ATR)
-            # Re-use existing logic to filter valid ATR
+            # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
             if final_candidate_indices and signal_date is not None:
                 final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
-                valid_candidate_atr_series = _collect_candidate_atr_asof(
+                valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
                     final_candidate_tickers=final_candidate_tickers,
                     signal_date=signal_date,
                 )
 
-                if valid_candidate_atr_series is None or valid_candidate_atr_series.empty:
+                if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
-                    valid_atrs = valid_candidate_atr_series.values
-                    candidate_pairs = [
-                        (ticker, float(atr))
-                        for ticker, atr in zip(valid_tickers, valid_atrs)
-                        if ticker in ticker_to_idx
-                    ]
-                    ranked_pairs = _sort_candidates_by_atr_then_ticker(candidate_pairs)
+                    valid_tickers = valid_candidate_metrics_df.index.to_arrow().to_pylist()
+                    candidate_records = []
+                    for ticker in valid_tickers:
+                        if ticker not in ticker_to_idx:
+                            continue
 
-                    if ranked_pairs:
-                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _ in ranked_pairs]
-                        valid_atrs_final = [atr for _, atr in ranked_pairs]
+                        atr_value = valid_candidate_metrics_df.loc[ticker, "atr_14_ratio"]
+                        if pd.isna(atr_value):
+                            continue
+
+                        atr_float = float(atr_value)
+                        if atr_float <= 0.0:
+                            continue
+
+                        market_cap_value = valid_candidate_metrics_df.loc[ticker, "market_cap"]
+                        if pd.isna(market_cap_value):
+                            market_cap_q = 0
+                        else:
+                            market_cap_float = float(market_cap_value)
+                            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
+
+                        atr_q = int(round(atr_float * 10000))
+                        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
+
+                    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
+
+                    if ranked_records:
+                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
+                        valid_atrs_final = [atr for _, _, _, atr in ranked_records]
                         candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
                         candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
                     else:

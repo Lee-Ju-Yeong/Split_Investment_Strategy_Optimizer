@@ -303,6 +303,44 @@ class DataHandler:
             return []
         return [code for code in candidate_codes if code in tier_map]
 
+    def get_market_caps_as_of(self, as_of_date, tickers):
+        tickers = list(tickers) if tickers else []
+        if not tickers:
+            return {}
+
+        conn = self.get_connection()
+        as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
+        ticker_placeholders = ", ".join(["%s"] * len(tickers))
+        query = f"""
+            SELECT m.stock_code, m.date, m.market_cap
+            FROM MarketCapDaily m
+            JOIN (
+                SELECT stock_code, MAX(date) AS max_date
+                FROM MarketCapDaily
+                WHERE date <= %s AND stock_code IN ({ticker_placeholders})
+                GROUP BY stock_code
+            ) latest ON m.stock_code = latest.stock_code AND m.date = latest.max_date
+            ORDER BY m.stock_code
+        """
+        params = [as_of_date_str, *tickers]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=params)
+            if df.empty:
+                return {}
+
+            result = {}
+            for _, row in df.iterrows():
+                self.assert_point_in_time(row["date"], as_of_date)
+                mcap_val = row.get("market_cap")
+                result[row["stock_code"]] = None if pd.isna(mcap_val) else float(mcap_val)
+            return result
+        except Exception:
+            return {}
+        finally:
+            conn.close()
+
     def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
         query = """
             SELECT t.stock_code

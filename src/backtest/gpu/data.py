@@ -56,16 +56,17 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 
 
-def _collect_candidate_atr_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
+def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
     if signal_date is None or not final_candidate_tickers:
         return None
 
     # CPU get_stock_row_as_of(ticker, signal_date)의 PIT(as-of <= date) 동작을 맞추기 위해
     # 우선 signal_date 당일 값을 사용하고, 결측 티커만 직전 최신 행으로 보완한다.
+    # Ranking metrics: atr_14_ratio, market_cap
     same_day_rows = all_data_reset_idx[
         (all_data_reset_idx['date'] == signal_date) &
         (all_data_reset_idx['ticker'].isin(final_candidate_tickers))
-    ][['ticker', 'atr_14_ratio']]
+    ][['ticker', 'atr_14_ratio', 'market_cap']]
 
     available_tickers = set(same_day_rows['ticker'].to_arrow().to_pylist()) if not same_day_rows.empty else set()
     missing_tickers = [ticker for ticker in final_candidate_tickers if ticker not in available_tickers]
@@ -74,14 +75,15 @@ def _collect_candidate_atr_asof(all_data_reset_idx, final_candidate_tickers, sig
         historical_rows = all_data_reset_idx[
             (all_data_reset_idx['date'] < signal_date) &
             (all_data_reset_idx['ticker'].isin(missing_tickers))
-        ][['ticker', 'date', 'atr_14_ratio']]
+        ][['ticker', 'date', 'atr_14_ratio', 'market_cap']]
         if not historical_rows.empty:
             latest_history_rows = historical_rows.sort_values('date').drop_duplicates(subset=['ticker'], keep='last')
             same_day_rows = cudf.concat(
-                [same_day_rows, latest_history_rows[['ticker', 'atr_14_ratio']]],
+                [same_day_rows, latest_history_rows[['ticker', 'atr_14_ratio', 'market_cap']]],
                 ignore_index=True
             )
 
     if same_day_rows.empty:
         return None
-    return same_day_rows.set_index('ticker')['atr_14_ratio'].dropna()
+    dedup_rows = same_day_rows.drop_duplicates(subset=['ticker'], keep='first')
+    return dedup_rows.set_index('ticker')[['atr_14_ratio', 'market_cap']]
