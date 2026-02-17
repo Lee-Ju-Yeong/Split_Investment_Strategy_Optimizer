@@ -6,14 +6,14 @@ import cudf
 import cupy as cp
 import pandas as pd
 
-from .data import _collect_candidate_atr_asof, create_gpu_data_tensors
+from .data import _collect_candidate_rank_metrics_asof, create_gpu_data_tensors
 from .logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
 )
-from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_atr_then_ticker
+from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_market_cap_then_atr_then_ticker
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -37,6 +37,8 @@ def run_magic_split_strategy_on_gpu(
     # Config from exec_params
     candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
     use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
+    strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
     strict_hysteresis_enabled = (
         tier_hysteresis_mode == "strict_hysteresis_v1"
@@ -166,40 +168,74 @@ def run_magic_split_strategy_on_gpu(
                 else:
                     final_candidate_indices = candidate_indices_list
 
-            # (D) Valid Data Check (ATR)
-            # Re-use existing logic to filter valid ATR
+            # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
             if final_candidate_indices and signal_date is not None:
                 final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
-                valid_candidate_atr_series = _collect_candidate_atr_asof(
+                valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
                     final_candidate_tickers=final_candidate_tickers,
                     signal_date=signal_date,
                 )
 
-                if valid_candidate_atr_series is None or valid_candidate_atr_series.empty:
+                if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    valid_tickers = valid_candidate_atr_series.index.to_arrow().to_pylist()
-                    valid_atrs = valid_candidate_atr_series.values
-                    candidate_pairs = [
-                        (ticker, float(atr))
-                        for ticker, atr in zip(valid_tickers, valid_atrs)
-                        if ticker in ticker_to_idx
-                    ]
-                    ranked_pairs = _sort_candidates_by_atr_then_ticker(candidate_pairs)
+                    valid_tickers = valid_candidate_metrics_df.index.to_arrow().to_pylist()
+                    candidate_records = []
+                    for ticker in valid_tickers:
+                        if ticker not in ticker_to_idx:
+                            continue
 
-                    if ranked_pairs:
-                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _ in ranked_pairs]
-                        valid_atrs_final = [atr for _, atr in ranked_pairs]
+                        atr_value = valid_candidate_metrics_df.loc[ticker, "atr_14_ratio"]
+                        if pd.isna(atr_value):
+                            continue
+
+                        atr_float = float(atr_value)
+                        if atr_float <= 0.0:
+                            continue
+
+                        market_cap_value = valid_candidate_metrics_df.loc[ticker, "market_cap"]
+                        if pd.isna(market_cap_value):
+                            market_cap_q = 0
+                        else:
+                            market_cap_float = float(market_cap_value)
+                            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
+
+                        atr_q = int(round(atr_float * 10000))
+                        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
+
+                    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
+
+                    if ranked_records:
+                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
+                        valid_atrs_final = [atr for _, _, _, atr in ranked_records]
                         candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
                         candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
+                        if debug_mode:
+                            preview = ", ".join([f"{ticker}" for ticker, _, _, _ in ranked_records[:10]])
+                            print(
+                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                                f"(signal={signal_date.strftime('%Y-%m-%d')}) "
+                                f"ranked={len(ranked_records)} top10=[{preview}]"
+                            )
                     else:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                         candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                        if debug_mode:
+                            print(
+                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                                f"(signal={signal_date.strftime('%Y-%m-%d')}) ranked=0"
+                            )
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                if debug_mode:
+                    signal_str = signal_date.strftime('%Y-%m-%d') if signal_date is not None else "None"
+                    print(
+                        f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                        f"(signal={signal_str}) ranked=0 (no candidates before metric filter)"
+                    )
 
             # 2-2. 월별 투자금 재계산
             # --- 신호 처리 함수 호출 (기존과 동일) ---
@@ -211,6 +247,7 @@ def run_magic_split_strategy_on_gpu(
                 execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
                 signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
                 force_liquidate_tier3=force_liquidate_tier3,
+                strict_cash_rounding=strict_cash_rounding,
                 debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(

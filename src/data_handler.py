@@ -1,7 +1,6 @@
 import pandas as pd
 import warnings
 from functools import lru_cache
-from datetime import timedelta
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
@@ -12,7 +11,7 @@ class PointInTimeViolation(ValueError):
 
 
 class DataHandler:
-    def __init__(self, db_config):
+    def __init__(self, db_config, *, load_company_cache=True):
         self.db_config = db_config
         try:
             try:
@@ -52,7 +51,8 @@ class DataHandler:
                     "[DataHandler] mysql_native_password C-extension load failed. "
                     "Retrying with use_pure=True."
                 )
-            self._load_company_info_cache()
+            if load_company_cache:
+                self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
             raise
@@ -118,9 +118,7 @@ class DataHandler:
     @lru_cache(maxsize=200)
     def load_stock_data(self, ticker, start_date, end_date):
         conn = self.get_connection()
-        # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
-        extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
-        extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
         end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
@@ -135,7 +133,7 @@ class DataHandler:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
+                df = pd.read_sql(query, conn, params=(ticker, start_date_str, end_date_str))
             if df.empty:
                 return df
 
@@ -174,7 +172,20 @@ class DataHandler:
         return data_row
 
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
-        return self.get_stock_row_as_of(ticker, date, start_date, end_date)
+        stock_data = self.load_stock_data(ticker, start_date, end_date)
+        if stock_data is None or stock_data.empty:
+            return None
+
+        target_date = pd.to_datetime(date)
+        if target_date not in stock_data.index:
+            return None
+
+        row = stock_data.loc[target_date]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[-1]
+        row = row.copy()
+        row.name = target_date
+        return row
 
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()
@@ -289,6 +300,44 @@ class DataHandler:
         if not tier_map:
             return []
         return [code for code in candidate_codes if code in tier_map]
+
+    def get_market_caps_as_of(self, as_of_date, tickers):
+        tickers = list(tickers) if tickers else []
+        if not tickers:
+            return {}
+
+        conn = self.get_connection()
+        as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
+        ticker_placeholders = ", ".join(["%s"] * len(tickers))
+        query = f"""
+            SELECT m.stock_code, m.date, m.market_cap
+            FROM MarketCapDaily m
+            JOIN (
+                SELECT stock_code, MAX(date) AS max_date
+                FROM MarketCapDaily
+                WHERE date <= %s AND stock_code IN ({ticker_placeholders})
+                GROUP BY stock_code
+            ) latest ON m.stock_code = latest.stock_code AND m.date = latest.max_date
+            ORDER BY m.stock_code
+        """
+        params = [as_of_date_str, *tickers]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn, params=params)
+            if df.empty:
+                return {}
+
+            result = {}
+            for _, row in df.iterrows():
+                self.assert_point_in_time(row["date"], as_of_date)
+                mcap_val = row.get("market_cap")
+                result[row["stock_code"]] = None if pd.isna(mcap_val) else float(mcap_val)
+            return result
+        except Exception:
+            return {}
+        finally:
+            conn.close()
 
     def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
         query = """

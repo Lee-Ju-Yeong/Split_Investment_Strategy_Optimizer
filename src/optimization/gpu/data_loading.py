@@ -28,11 +28,14 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
         dsp.low_price,
         dsp.close_price,
         dsp.volume,
-        ci.atr_14_ratio
+        ci.atr_14_ratio,
+        mcd.market_cap
     FROM
         DailyStockPrice AS dsp
     LEFT JOIN
         CalculatedIndicators AS ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
+    LEFT JOIN
+        MarketCapDaily AS mcd ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
     WHERE
         dsp.date BETWEEN '{start_date}' AND '{end_date}'
     """

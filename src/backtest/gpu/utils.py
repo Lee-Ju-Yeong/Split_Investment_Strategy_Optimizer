@@ -24,13 +24,13 @@ def get_tick_size_gpu(price_array):
 
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
-    tick_size = get_tick_size_gpu(price_array)
-    # [수정] float32 나눗셈에서 발생할 수 있는 미세한 오차를 보정하기 위해
-    # 소수점 5자리에서 반올림(round)한 후 올림(ceil)을 적용합니다.
-    # 예: 18430 / 10 = 1843.0000001 -> round -> 1843.0 -> ceil -> 1843.0
-    divided = price_array / tick_size
+    # CPU 경로(_adjust_price_up)의 python float round/ceil 동작과 정합을 맞추기 위해
+    # 연산 구간을 float64로 승격 후 반올림/올림을 수행합니다.
+    tick_size = get_tick_size_gpu(price_array).astype(cp.float64)
+    divided = price_array.astype(cp.float64) / tick_size
     rounded = cp.round(divided, 5) 
-    return cp.ceil(rounded) * tick_size
+    adjusted = cp.ceil(rounded) * tick_size
+    return adjusted.astype(cp.float32)
 
 
 def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.DatetimeIndex):
@@ -39,7 +39,13 @@ def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.Datetime
     signal_day_idx = day_idx - 1
     return trading_dates_pd_cpu[signal_day_idx], signal_day_idx
 
-def _sort_candidates_by_atr_then_ticker(candidate_pairs):
-    pairs_sorted_by_ticker = sorted(candidate_pairs, key=lambda pair: pair[0])
-    return sorted(pairs_sorted_by_ticker, key=lambda pair: pair[1], reverse=True)
-
+def _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records):
+    """
+    Deterministic candidate ranking for parity:
+    1) market_cap_q desc
+    2) atr_q desc
+    3) ticker asc
+    candidate_records item format:
+      (ticker, market_cap_q, atr_q, ...)
+    """
+    return sorted(candidate_records, key=lambda item: (-item[1], -item[2], item[0]))
