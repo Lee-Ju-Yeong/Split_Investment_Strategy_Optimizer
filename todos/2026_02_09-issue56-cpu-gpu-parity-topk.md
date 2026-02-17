@@ -28,6 +28,16 @@
     - `results/parity_topk_tier_top5_5d.json` (`total_mismatches=5`)
     - `results/parity_topk_tier_top5_5d_retry1.json` (`total_mismatches=5`, 재시도 동일)
     - 공통 first mismatch: `2021-01-05`, `abs_diff=6538.0`
+  - 원인 추적/수정(2026-02-17):
+    - 진단 도구 추가: `src/parity_sell_event_dump.py` (CPU/GPU 매수/매도 이벤트 1:1 비교)
+    - 원인 확인: GPU 신규진입 루프가 `max_slots` 범위만 순회하여, 앞선 보유/쿨다운 후보로 인해 뒤쪽 유효 후보를 누락
+    - 수정: `src/backtest/gpu/logic.py` 신규진입 후보 순회를 `range(num_candidates)`로 확장
+  - 수정 후 재검증(동일일자 5거래일):
+    - `results/parity_trade_events_param0_5d_after_slotloopfix.json`
+      - `sell: 5 vs 5, mismatch=0`
+      - `buy: 8 vs 8, mismatch=0`
+    - `results/parity_topk_tier_param0_5d_after_slotloopfix.json` (`total_mismatches=0`)
+    - `results/parity_topk_tier_top5_5d_after_slotloopfix.json` (`total_mismatches=0`)
   - 파이프라인 분리(2026-02-17):
     - `src.cpu_gpu_parity_topk`에 2단계 실행 추가
     - `--pipeline-stage gpu`: GPU 스냅샷만 생성
@@ -63,11 +73,13 @@
 - [x] snapshot 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
 - [x] GPU 미사용 환경 skip 처리 유지
 - [x] CI/로컬 실행 명령 문서화
-- [ ] 승격 게이트용 5거래일 이상 `tier top-k>=5` decision-level parity `0 mismatch` 충족
+- [x] 승격 게이트용 5거래일 이상 `tier top-k>=5` decision-level parity `0 mismatch` 충족(기준 시나리오/기간)
 - [ ] mismatch 원인(class) 태깅 리포트 추가(선정 drift / 체결가 drift / 수치 오차)
 - [ ] `Tier v2 deterministic mapping/sort` 정책 적용(Release 기본)
 - [ ] `Tier v2` 운영 모니터링/롤백 지표 2주 관찰 통과
 - [x] GPU/CPU 분리 실행 경로 문서화(`--pipeline-stage gpu/cpu`, snapshot replay)
+- [ ] 장기 strict 게이트(최소 6개월, `top-k=1/5`) `0 mismatch` 증적 추가
+- [ ] 전략/체결/후보선정 로직 변경 시 parity 재검증 트리거 규칙을 CI 문서/체크리스트에 연결
 
 ## 4. 브랜치 규칙 (A안 전환 연계)
 - [ ] `main` 직접 수정 금지, 기능 브랜치에서 parity 하네스 변경 수행
@@ -89,9 +101,11 @@
   - `hybrid_transition` 1일 증적: mismatch `0`
   - `top-k 100` 1일 증적: mismatch `0`
   - scenario pack 1일 증적: mismatch `0`
-- `Release Gate`: **미충족**
-  - `tier` 5거래일 `top-k=5` 재시도 포함 mismatch `5` 지속
-- `Issue #56 전체`: **부분 충족(재오픈 유지 권장)**
+- `Release Gate`: **단기 strict 기준 충족(조건부)**
+  - `tier` 5거래일 `param0` mismatch `0`
+  - `tier` 5거래일 `top-k=5` mismatch `0`
+- `Issue #56 전체`: **부분 충족(지속 추적 유지)**
+  - 이유: 로직 변경 시 parity 재발 가능성이 있어 장기 strict 증적 및 운영 트리거 관리 필요
 
 ## 6. Tier v2 매핑/정렬 정책 (2026-02-17 합의안)
 목표: `tier` 경로의 decision-level parity 안정화와 ATR 영향 완화.
@@ -210,3 +224,15 @@ python -m src.cpu_gpu_parity_topk \
 ## 8. 제외 범위
 - CPU/GPU 공통 코드로 강제 통합
 - 전략 성능 개선 목적 로직 변경
+
+## 9. 운영 추적 규칙 (Follow-up)
+- 이 이슈는 완료 후 닫는 성격이 아니라, parity 회귀 리스크를 추적하는 운영 이슈로 유지한다.
+- 아래 변경이 발생하면 `tier strict` parity를 재실행한다.
+  - `src/backtest/cpu/*` 전략/체결 로직 변경
+  - `src/backtest/gpu/engine.py`, `src/backtest/gpu/logic.py` 변경
+  - 후보 선정/정렬 키(Tier/ATR/시총/stock_code) 또는 슬롯 배정 규칙 변경
+  - 수수료/세금/호가/rounding/dtype(float32) 규칙 변경
+  - 관련 DB join/as-of 매핑 규칙 변경
+- 최소 재검증 세트:
+  - 단기 스모크: 5거래일 `param0`, `top-k=5`, `parity-mode strict`
+  - 장기 게이트: 6개월 이상 `top-k=1/5`, `parity-mode strict`
