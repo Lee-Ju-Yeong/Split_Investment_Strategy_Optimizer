@@ -10,9 +10,11 @@ CPU/GPU parity harness for top-k parameter batches with scenario packs:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
+from multiprocessing import get_context
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -60,6 +62,7 @@ FLOAT_PARAM_COLS = {
     "stop_loss_rate",
 }
 EXECUTION_PARAM_KEYS = ("buy_commission_rate", "sell_commission_rate", "sell_tax_rate")
+_WORKER_DATA_HANDLER: Optional[DataHandler] = None
 
 
 def _resolve_code_version() -> str:
@@ -196,12 +199,118 @@ def _build_scenarios(base_params: Any, scenario: str, seeded_stress_count: int, 
     return scenarios
 
 
+def _params_df_to_rows(params_df: Any) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for _, row in params_df.iterrows():
+        item: Dict[str, Any] = {"param_id": int(row["param_id"])}
+        for key in PARAM_ORDER:
+            value = row[key]
+            if key in INT_PARAM_COLS:
+                item[key] = int(value)
+            else:
+                item[key] = float(value)
+        rows.append(item)
+    return rows
+
+
+def _params_rows_to_df(params_rows: List[Dict[str, Any]]) -> Any:
+    _, pd = _ensure_core_deps()
+    df = pd.DataFrame(params_rows)
+    if df.empty:
+        return df
+    return _normalize_param_rows(df)
+
+
+def _create_gpu_snapshot(
+    *,
+    config: Dict[str, Any],
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    base_params: Any,
+    scenarios: List[Dict[str, Any]],
+    candidate_modes: List[str],
+    use_weekly_alpha_gate: bool,
+    parity_mode: str,
+) -> Dict[str, Any]:
+    _, pd = _ensure_core_deps()
+    mode_snapshots: List[Dict[str, Any]] = []
+    gpu_skip_reasons: Dict[str, str] = {}
+
+    for mode in candidate_modes:
+        try:
+            shared_state = _load_gpu_shared_state(
+                config=config,
+                start_date=start_date,
+                end_date=end_date,
+                candidate_source_mode=mode,
+                use_weekly_alpha_gate=use_weekly_alpha_gate,
+                parity_mode=parity_mode,
+            )
+        except Exception as exc:
+            if _is_gpu_unavailable_error(exc):
+                reason = f"gpu_unavailable: {exc}"
+                gpu_skip_reasons[mode] = reason
+                mode_snapshots.append(
+                    {
+                        "candidate_source_mode": mode,
+                        "skipped": True,
+                        "skip_reason": reason,
+                        "scenario_snapshots": [],
+                    }
+                )
+                continue
+            raise
+
+        trading_dates = [pd.to_datetime(dt).strftime("%Y-%m-%d") for dt in shared_state["trading_dates_pd"]]
+        scenario_snapshots: List[Dict[str, Any]] = []
+        for scenario in scenarios:
+            params_df = scenario["params_df"]
+            gpu_daily_values = _run_gpu_curves(shared_state, params_df, initial_cash=initial_cash)
+            scenario_snapshots.append(
+                {
+                    "scenario_type": scenario["scenario_type"],
+                    "seed_id": scenario["seed_id"],
+                    "drop_top_n": int(scenario["drop_top_n"]),
+                    "params_count": int(len(params_df)),
+                    "params_rows": _params_df_to_rows(params_df),
+                    "trading_dates": trading_dates,
+                    "gpu_daily_values": gpu_daily_values.tolist(),
+                }
+            )
+        mode_snapshots.append(
+            {
+                "candidate_source_mode": mode,
+                "skipped": False,
+                "skip_reason": None,
+                "scenario_snapshots": scenario_snapshots,
+            }
+        )
+
+    return {
+        "snapshot_type": "parity_topk_gpu_snapshot_v1",
+        "generated_at": datetime.now().isoformat(),
+        "code_version": _resolve_code_version(),
+        "start_date": start_date,
+        "end_date": end_date,
+        "initial_cash": float(initial_cash),
+        "candidate_source_mode_input": "all" if len(candidate_modes) > 1 else candidate_modes[0],
+        "use_weekly_alpha_gate": bool(use_weekly_alpha_gate),
+        "parity_mode": str(parity_mode).strip().lower(),
+        "parameter_columns": list(PARAM_ORDER),
+        "base_param_ids": [int(value) for value in base_params["param_id"].tolist()],
+        "mode_snapshots": mode_snapshots,
+        "skip_reasons": gpu_skip_reasons,
+    }
+
+
 def _load_gpu_shared_state(
     config: Dict[str, Any],
     start_date: str,
     end_date: str,
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
+    parity_mode: str,
 ) -> Dict[str, Any]:
     cp, _, create_engine, _ = _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
@@ -212,6 +321,7 @@ def _load_gpu_shared_state(
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
     execution_params["candidate_source_mode"] = candidate_source_mode
     execution_params["use_weekly_alpha_gate"] = bool(use_weekly_alpha_gate)
+    execution_params["parity_mode"] = str(parity_mode).strip().lower()
     execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
@@ -327,6 +437,49 @@ def _run_cpu_curve(
     return curve, snapshots
 
 
+def _init_cpu_worker(db_config: Dict[str, Any]) -> None:
+    global _WORKER_DATA_HANDLER
+    _WORKER_DATA_HANDLER = DataHandler(db_config=db_config, load_company_cache=False)
+
+
+def _run_cpu_compare_worker(
+    row_idx: int,
+    row_dict: Dict[str, Any],
+    config: Dict[str, Any],
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    candidate_source_mode: str,
+    use_weekly_alpha_gate: bool,
+    tolerance: float,
+    trading_dates: List[str],
+    gpu_values: List[float],
+) -> Tuple[int, Dict[str, Any]]:
+    global _WORKER_DATA_HANDLER
+    _, pd = _ensure_core_deps()
+    data_handler = _WORKER_DATA_HANDLER
+    if data_handler is None:
+        raise RuntimeError("CPU worker is not initialized. Expected _init_cpu_worker to run first.")
+    cpu_curve, cpu_snapshots = _run_cpu_curve(
+        data_handler=data_handler,
+        config=config,
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+        param_row=row_dict,
+        candidate_source_mode=candidate_source_mode,
+        use_weekly_alpha_gate=use_weekly_alpha_gate,
+    )
+    gpu_curve = pd.Series(gpu_values, index=pd.to_datetime(trading_dates))
+    cmp_result = _compare_curves(
+        cpu_curve=cpu_curve,
+        gpu_curve=gpu_curve,
+        cpu_snapshots=cpu_snapshots,
+        tolerance=tolerance,
+    )
+    return row_idx, cmp_result
+
+
 def _build_value_dump(merged: Any, diffs: Any, first_mismatch_index: int, window_size: int = 2) -> List[Dict[str, Any]]:
     _, pd = _ensure_core_deps()
     start_idx = max(first_mismatch_index - window_size, 0)
@@ -409,62 +562,131 @@ def _compare_curves(cpu_curve: Any, gpu_curve: Any, cpu_snapshots: Any, toleranc
 def _run_single_scenario(
     scenario: Dict[str, Any],
     config: Dict[str, Any],
-    shared_state: Dict[str, Any],
+    trading_dates: Any,
+    gpu_daily_values: Any,
     start_date: str,
     end_date: str,
     initial_cash: float,
     tolerance: float,
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
+    cpu_workers: int,
 ) -> Dict[str, Any]:
     params_df = scenario["params_df"]
     scenario_type = scenario["scenario_type"]
     seed_id = scenario["seed_id"]
     drop_top_n = scenario["drop_top_n"]
+    total_params = int(len(params_df))
+    progress_interval = 10 if total_params >= 10 else 1
+    scenario_started_at = datetime.now()
 
     print(
         f"[parity_topk] mode={candidate_source_mode}, scenario={scenario_type}, seed_id={seed_id}, "
         f"drop_top_n={drop_top_n}, params={len(params_df)}"
     )
 
-    gpu_daily_values = _run_gpu_curves(shared_state, params_df, initial_cash=initial_cash)
-    trading_dates = shared_state["trading_dates_pd"]
-    _, pd = _ensure_core_deps()
-    data_handler = DataHandler(db_config=config["database"])
-
-    mismatches: List[Dict[str, Any]] = []
+    row_payloads: List[Tuple[int, Dict[str, Any]]] = []
+    row_payload_map: Dict[int, Dict[str, Any]] = {}
     for row_idx, (_, row) in enumerate(params_df.iterrows()):
         row_dict = row.to_dict()
-        cpu_curve, cpu_snapshots = _run_cpu_curve(
-            data_handler=data_handler,
-            config=config,
-            start_date=start_date,
-            end_date=end_date,
-            initial_cash=initial_cash,
-            param_row=row_dict,
-            candidate_source_mode=candidate_source_mode,
-            use_weekly_alpha_gate=use_weekly_alpha_gate,
-        )
-        gpu_curve = pd.Series(gpu_daily_values[row_idx], index=trading_dates)
-        cmp_result = _compare_curves(
-            cpu_curve=cpu_curve,
-            gpu_curve=gpu_curve,
-            cpu_snapshots=cpu_snapshots,
-            tolerance=tolerance,
-        )
-        if not cmp_result["matched"]:
-            mismatches.append(
-                {
-                    "candidate_source_mode": candidate_source_mode,
-                    "scenario_type": scenario_type,
-                    "seed_id": seed_id,
-                    "drop_top_n": drop_top_n,
-                    "row_index": int(row_idx),
-                    "param_id": int(row_dict.get("param_id", row_idx)),
-                    "params": {key: row_dict[key] for key in PARAM_ORDER},
-                    **cmp_result,
-                }
+        row_payloads.append((row_idx, row_dict))
+        row_payload_map[row_idx] = row_dict
+    mismatches: List[Dict[str, Any]] = []
+
+    def _print_progress(processed: int) -> None:
+        if processed % progress_interval == 0 or processed == total_params:
+            elapsed = datetime.now() - scenario_started_at
+            elapsed_sec = max(elapsed.total_seconds(), 1e-6)
+            avg_sec_per_param = elapsed_sec / processed
+            remaining = total_params - processed
+            eta = timedelta(seconds=int(avg_sec_per_param * remaining))
+            progress_pct = (processed / total_params) * 100 if total_params else 100.0
+            print(
+                f"[parity_topk] cpu progress {processed}/{total_params} ({progress_pct:.1f}%) "
+                f"mismatches={len(mismatches)} elapsed={elapsed} eta={eta}"
             )
+
+    if int(cpu_workers) <= 1 or total_params <= 1:
+        _, pd = _ensure_core_deps()
+        data_handler = DataHandler(db_config=config["database"], load_company_cache=False)
+        for processed, (row_idx, row_dict) in enumerate(row_payloads, start=1):
+            cpu_curve, cpu_snapshots = _run_cpu_curve(
+                data_handler=data_handler,
+                config=config,
+                start_date=start_date,
+                end_date=end_date,
+                initial_cash=initial_cash,
+                param_row=row_dict,
+                candidate_source_mode=candidate_source_mode,
+                use_weekly_alpha_gate=use_weekly_alpha_gate,
+            )
+            gpu_curve = pd.Series(gpu_daily_values[row_idx], index=trading_dates)
+            cmp_result = _compare_curves(
+                cpu_curve=cpu_curve,
+                gpu_curve=gpu_curve,
+                cpu_snapshots=cpu_snapshots,
+                tolerance=tolerance,
+            )
+            if not cmp_result["matched"]:
+                mismatches.append(
+                    {
+                        "candidate_source_mode": candidate_source_mode,
+                        "scenario_type": scenario_type,
+                        "seed_id": seed_id,
+                        "drop_top_n": drop_top_n,
+                        "row_index": int(row_idx),
+                        "param_id": int(row_dict.get("param_id", row_idx)),
+                        "params": {key: row_dict[key] for key in PARAM_ORDER},
+                        **cmp_result,
+                    }
+                )
+            _print_progress(processed)
+    else:
+        trading_dates_serialized = [dt.strftime("%Y-%m-%d") for dt in trading_dates]
+        processed = 0
+        with ProcessPoolExecutor(
+            max_workers=int(cpu_workers),
+            mp_context=get_context("spawn"),
+            initializer=_init_cpu_worker,
+            initargs=(config["database"],),
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _run_cpu_compare_worker,
+                    row_idx=row_idx,
+                    row_dict=row_dict,
+                    config=config,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=initial_cash,
+                    candidate_source_mode=candidate_source_mode,
+                    use_weekly_alpha_gate=use_weekly_alpha_gate,
+                    tolerance=tolerance,
+                    trading_dates=trading_dates_serialized,
+                    gpu_values=gpu_daily_values[row_idx].tolist(),
+                )
+                for row_idx, row_dict in row_payloads
+            ]
+            for future in as_completed(futures):
+                row_idx, cmp_result = future.result()
+                row_dict = row_payload_map[row_idx]
+                if not cmp_result["matched"]:
+                    mismatches.append(
+                        {
+                            "candidate_source_mode": candidate_source_mode,
+                            "scenario_type": scenario_type,
+                            "seed_id": seed_id,
+                            "drop_top_n": drop_top_n,
+                            "row_index": int(row_idx),
+                            "param_id": int(row_dict.get("param_id", row_idx)),
+                            "params": {key: row_dict[key] for key in PARAM_ORDER},
+                            **cmp_result,
+                        }
+                    )
+                processed += 1
+                _print_progress(processed)
+
+    mismatches.sort(key=lambda item: int(item["row_index"]))
 
     return {
         "candidate_source_mode": candidate_source_mode,
@@ -479,6 +701,12 @@ def _run_single_scenario(
 
 def _build_parser(defaults: Dict[str, Any]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CPU/GPU top-k parity harness with scenario packs.")
+    parser.add_argument(
+        "--pipeline-stage",
+        choices=["all", "gpu", "cpu"],
+        default="all",
+        help="all=GPU snapshot 생성+CPU parity 실행, gpu=GPU snapshot만, cpu=기존 snapshot으로 CPU parity만.",
+    )
     parser.add_argument("--start-date", default=defaults["start_date"], help="Backtest start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", default=defaults["end_date"], help="Backtest end date (YYYY-MM-DD).")
     parser.add_argument("--initial-cash", type=float, default=defaults["initial_cash"], help="Initial cash.")
@@ -508,6 +736,18 @@ def _build_parser(defaults: Dict[str, Any]) -> argparse.ArgumentParser:
     )
     parser.add_argument("--tolerance", type=float, default=1e-3, help="Absolute tolerance for parity check.")
     parser.add_argument(
+        "--cpu-workers",
+        type=int,
+        default=1,
+        help="CPU parity worker count. 1=sequential, >1=process parallel (spawn).",
+    )
+    parser.add_argument(
+        "--parity-mode",
+        choices=["fast", "strict"],
+        default="fast",
+        help="Parity execution mode. fast=GPU throughput priority, strict=CPU settlement parity priority.",
+    )
+    parser.add_argument(
         "--candidate-source-mode",
         default=defaults["candidate_source_mode"],
         choices=[*CANDIDATE_MODES, "all"],
@@ -523,6 +763,16 @@ def _build_parser(defaults: Dict[str, Any]) -> argparse.ArgumentParser:
         "--out",
         default=None,
         help="Output JSON path. Default: results/parity_topk_<timestamp>.json",
+    )
+    parser.add_argument(
+        "--snapshot-in",
+        default=None,
+        help="CPU stage input snapshot JSON path.",
+    )
+    parser.add_argument(
+        "--snapshot-out",
+        default=None,
+        help="GPU stage output snapshot JSON path. Default: results/parity_topk_snapshot_<timestamp>.json",
     )
     parser.set_defaults(fail_on_mismatch=True)
     parser.add_argument(
@@ -545,12 +795,90 @@ def _build_default_out_path() -> str:
     return os.path.join("results", f"parity_topk_{timestamp}.json")
 
 
+def _build_default_snapshot_path() -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join("results", f"parity_topk_snapshot_{timestamp}.json")
+
+
 def _save_json_report(out_path: str, payload: Dict[str, Any]) -> None:
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
+
+
+def _load_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+def _run_cpu_parity_from_snapshot(
+    *,
+    config: Dict[str, Any],
+    snapshot: Dict[str, Any],
+    tolerance: float,
+    cpu_workers: int,
+) -> List[Dict[str, Any]]:
+    np, pd = _ensure_core_deps()
+    mode_reports: List[Dict[str, Any]] = []
+
+    start_date = snapshot["start_date"]
+    end_date = snapshot["end_date"]
+    initial_cash = float(snapshot["initial_cash"])
+    use_weekly_alpha_gate = bool(snapshot.get("use_weekly_alpha_gate", False))
+
+    for mode_snapshot in snapshot.get("mode_snapshots", []):
+        mode = mode_snapshot["candidate_source_mode"]
+        if mode_snapshot.get("skipped", False):
+            mode_reports.append(
+                {
+                    "candidate_source_mode": mode,
+                    "skipped": True,
+                    "skip_reason": mode_snapshot.get("skip_reason"),
+                    "scenario_reports": [],
+                    "mode_mismatches": 0,
+                }
+            )
+            continue
+
+        scenario_reports: List[Dict[str, Any]] = []
+        for scenario_snapshot in mode_snapshot.get("scenario_snapshots", []):
+            params_df = _params_rows_to_df(scenario_snapshot.get("params_rows", []))
+            scenario = {
+                "scenario_type": scenario_snapshot["scenario_type"],
+                "seed_id": scenario_snapshot.get("seed_id"),
+                "drop_top_n": int(scenario_snapshot.get("drop_top_n", 0)),
+                "params_df": params_df,
+            }
+            trading_dates = pd.to_datetime(scenario_snapshot.get("trading_dates", []))
+            gpu_daily_values = np.asarray(scenario_snapshot.get("gpu_daily_values", []), dtype=float)
+            scenario_report = _run_single_scenario(
+                scenario=scenario,
+                config=config,
+                trading_dates=trading_dates,
+                gpu_daily_values=gpu_daily_values,
+                start_date=start_date,
+                end_date=end_date,
+                initial_cash=initial_cash,
+                tolerance=tolerance,
+                candidate_source_mode=mode,
+                use_weekly_alpha_gate=use_weekly_alpha_gate,
+                cpu_workers=cpu_workers,
+            )
+            scenario_reports.append(scenario_report)
+
+        mode_mismatches = int(sum(item["mismatch_count"] for item in scenario_reports))
+        mode_reports.append(
+            {
+                "candidate_source_mode": mode,
+                "skipped": False,
+                "skip_reason": None,
+                "scenario_reports": scenario_reports,
+                "mode_mismatches": mode_mismatches,
+            }
+        )
+    return mode_reports
 
 
 def main() -> None:
@@ -569,76 +897,95 @@ def main() -> None:
         "use_weekly_alpha_gate": bool(strategy_params.get("use_weekly_alpha_gate", False)),
     }
     args = _build_parser(defaults).parse_args()
+    if args.cpu_workers < 1:
+        raise ValueError("--cpu-workers must be >= 1")
+    if args.pipeline_stage == "cpu" and not args.snapshot_in:
+        raise ValueError("--pipeline-stage cpu requires --snapshot-in")
 
     started_at = datetime.now()
-    base_params = _load_topk_params(
-        params_csv=args.params_csv,
-        top_k=args.top_k,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        initial_cash=args.initial_cash,
-    )
-    scenarios = _build_scenarios(
-        base_params=base_params,
-        scenario=args.scenario,
-        seeded_stress_count=args.seeded_stress_count,
-        jackknife_max_drop=args.jackknife_max_drop,
-    )
+    snapshot_path_used: Optional[str] = None
 
-    candidate_modes = list(CANDIDATE_MODES) if args.candidate_source_mode == "all" else [args.candidate_source_mode]
-    mode_reports: List[Dict[str, Any]] = []
-    gpu_skip_reasons: Dict[str, str] = {}
-
-    for mode in candidate_modes:
-        try:
-            shared_state = _load_gpu_shared_state(
-                config=config,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                candidate_source_mode=mode,
-                use_weekly_alpha_gate=args.use_weekly_alpha_gate,
-            )
-        except Exception as exc:
-            if _is_gpu_unavailable_error(exc):
-                reason = f"gpu_unavailable: {exc}"
-                gpu_skip_reasons[mode] = reason
-                mode_reports.append(
-                    {
-                        "candidate_source_mode": mode,
-                        "skipped": True,
-                        "skip_reason": reason,
-                        "scenario_reports": [],
-                        "mode_mismatches": 0,
-                    }
-                )
-                continue
-            raise
-
-        scenario_reports: List[Dict[str, Any]] = []
-        for scenario in scenarios:
-            report = _run_single_scenario(
-                scenario=scenario,
-                config=config,
-                shared_state=shared_state,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                initial_cash=args.initial_cash,
-                tolerance=args.tolerance,
-                candidate_source_mode=mode,
-                use_weekly_alpha_gate=args.use_weekly_alpha_gate,
-            )
-            scenario_reports.append(report)
-
-        mode_mismatches = int(sum(item["mismatch_count"] for item in scenario_reports))
-        mode_reports.append(
-            {
-                "candidate_source_mode": mode,
-                "skipped": False,
-                "skip_reason": None,
-                "scenario_reports": scenario_reports,
-                "mode_mismatches": mode_mismatches,
-            }
+    if args.pipeline_stage == "cpu":
+        snapshot = _load_json(args.snapshot_in)
+        snapshot_path_used = args.snapshot_in
+        mode_reports = _run_cpu_parity_from_snapshot(
+            config=config,
+            snapshot=snapshot,
+            tolerance=args.tolerance,
+            cpu_workers=args.cpu_workers,
         )
+        summary_start_date = snapshot["start_date"]
+        summary_end_date = snapshot["end_date"]
+        summary_initial_cash = float(snapshot["initial_cash"])
+        summary_top_k = int(len(snapshot.get("base_param_ids", [])))
+        summary_parity_mode = str(snapshot.get("parity_mode", args.parity_mode)).strip().lower()
+        summary_scenario_input = "snapshot_replay"
+        summary_candidate_mode_input = snapshot.get("candidate_source_mode_input", "all")
+        summary_weekly_alpha_gate = bool(snapshot.get("use_weekly_alpha_gate", False))
+        base_param_ids = [int(v) for v in snapshot.get("base_param_ids", [])]
+        params_source = f"snapshot:{args.snapshot_in}"
+        gpu_skip_reasons = dict(snapshot.get("skip_reasons", {}))
+        snapshot_out_path: Optional[str] = None
+    else:
+        base_params = _load_topk_params(
+            params_csv=args.params_csv,
+            top_k=args.top_k,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            initial_cash=args.initial_cash,
+        )
+        scenarios = _build_scenarios(
+            base_params=base_params,
+            scenario=args.scenario,
+            seeded_stress_count=args.seeded_stress_count,
+            jackknife_max_drop=args.jackknife_max_drop,
+        )
+        candidate_modes = list(CANDIDATE_MODES) if args.candidate_source_mode == "all" else [args.candidate_source_mode]
+        snapshot = _create_gpu_snapshot(
+            config=config,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            initial_cash=args.initial_cash,
+            base_params=base_params,
+            scenarios=scenarios,
+            candidate_modes=candidate_modes,
+            use_weekly_alpha_gate=args.use_weekly_alpha_gate,
+            parity_mode=args.parity_mode,
+        )
+        snapshot_out_path = args.snapshot_out or _build_default_snapshot_path()
+        _save_json_report(out_path=snapshot_out_path, payload=snapshot)
+        snapshot_path_used = snapshot_out_path
+
+        if args.pipeline_stage == "gpu":
+            mode_reports = [
+                {
+                    "candidate_source_mode": mode_snapshot["candidate_source_mode"],
+                    "skipped": bool(mode_snapshot.get("skipped", False)),
+                    "skip_reason": mode_snapshot.get("skip_reason"),
+                    "scenario_reports": [],
+                    "mode_mismatches": 0,
+                }
+                for mode_snapshot in snapshot.get("mode_snapshots", [])
+            ]
+        else:
+            mode_reports = _run_cpu_parity_from_snapshot(
+                config=config,
+                snapshot=snapshot,
+                tolerance=args.tolerance,
+                cpu_workers=args.cpu_workers,
+            )
+
+        summary_start_date = args.start_date
+        summary_end_date = args.end_date
+        summary_initial_cash = float(args.initial_cash)
+        summary_top_k = int(args.top_k)
+        summary_parity_mode = args.parity_mode
+        summary_scenario_input = args.scenario
+        summary_candidate_mode_input = args.candidate_source_mode
+        summary_weekly_alpha_gate = bool(args.use_weekly_alpha_gate)
+        base_param_ids = [int(value) for value in base_params["param_id"].tolist()]
+        params_source = args.params_csv if args.params_csv else "gpu_optimization_result"
+        gpu_skip_reasons = dict(snapshot.get("skip_reasons", {}))
 
     total_mismatches = int(sum(item["mode_mismatches"] for item in mode_reports))
     finished_at = datetime.now()
@@ -658,33 +1005,39 @@ def main() -> None:
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
         "elapsed_seconds": (finished_at - started_at).total_seconds(),
-        "start_date": args.start_date,
-        "end_date": args.end_date,
-        "initial_cash": float(args.initial_cash),
-        "top_k": int(args.top_k),
+        "pipeline_stage": args.pipeline_stage,
+        "snapshot_path": snapshot_path_used,
+        "start_date": summary_start_date,
+        "end_date": summary_end_date,
+        "initial_cash": summary_initial_cash,
+        "top_k": summary_top_k,
         "tolerance": float(args.tolerance),
-        "scenario_input": args.scenario,
-        "candidate_source_mode_input": args.candidate_source_mode,
-        "use_weekly_alpha_gate": bool(args.use_weekly_alpha_gate),
+        "cpu_workers": int(args.cpu_workers),
+        "parity_mode": summary_parity_mode,
+        "scenario_input": summary_scenario_input,
+        "candidate_source_mode_input": summary_candidate_mode_input,
+        "use_weekly_alpha_gate": summary_weekly_alpha_gate,
         "snapshot_metadata": {
             "generated_at": finished_at.isoformat(),
             "code_version": _resolve_code_version(),
-            "params_source": args.params_csv if args.params_csv else "gpu_optimization_result",
+            "params_source": params_source,
             "parameter_columns": list(PARAM_ORDER),
-            "param_ids": [int(value) for value in base_params["param_id"].tolist()],
+            "param_ids": base_param_ids,
         },
         "scenario_metadata": scenario_metadata,
         "mode_reports": mode_reports,
         "total_modes": len(mode_reports),
         "total_scenarios": len(scenario_metadata),
         "total_mismatches": total_mismatches,
-        "skipped": len(gpu_skip_reasons) == len(candidate_modes),
+        "skipped": len(mode_reports) > 0 and all(item.get("skipped", False) for item in mode_reports),
         "skip_reasons": gpu_skip_reasons,
     }
 
     out_path = args.out or _build_default_out_path()
     _save_json_report(out_path=out_path, payload=summary)
 
+    if args.pipeline_stage in ("all", "gpu") and snapshot_path_used:
+        print(f"[parity_topk] snapshot saved: {snapshot_path_used}")
     print(f"[parity_topk] report saved: {out_path}")
     print(f"[parity_topk] total_mismatches={total_mismatches}")
     if summary["skipped"]:

@@ -232,6 +232,19 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
+
+            market_cap_map = {}
+            get_market_caps_as_of = getattr(data_handler, "get_market_caps_as_of", None)
+            if callable(get_market_caps_as_of) and active_candidates:
+                try:
+                    market_cap_map = get_market_caps_as_of(signal_date, active_candidates)
+                except Exception as exc:
+                    exc_info = logger.isEnabledFor(logging.DEBUG)
+                    logger.warning(
+                        "MarketCap as-of lookup failed (%s). Falling back to 0 for ranking.",
+                        exc,
+                        exc_info=exc_info,
+                    )
             
             candidate_atrs = []
             for ticker in active_candidates:
@@ -242,22 +255,29 @@ class MagicSplitStrategy(Strategy):
                     continue
                 latest_atr = signal_row["atr_14_ratio"]
                 signal_close = signal_row.get("close_price")
-                if pd.notna(latest_atr) and pd.notna(signal_close):
+                if pd.notna(latest_atr) and float(latest_atr) > 0 and pd.notna(signal_close):
+                    market_cap_raw = market_cap_map.get(ticker)
+                    market_cap_q = int(float(market_cap_raw) // 1_000_000) if market_cap_raw and market_cap_raw > 0 else 0
+                    atr_q = int(round(float(latest_atr) * 10000))
                     candidate_atrs.append(
                         {
                             "ticker": ticker,
                             "atr_14_ratio": latest_atr,
+                            "market_cap_q": market_cap_q,
+                            "atr_q": atr_q,
                             "signal_close_price": signal_close,
                         }
                     )
                         
-            # GPU와 동일한 정렬 기준 적용 (1. ATR 내림차순, 2. Ticker 오름차순)
-            # Python의 stable sort 특성을 활용: 먼저 2차 기준으로 정렬 후, 1차 기준으로 정렬
-            candidates_sorted_by_ticker = sorted(candidate_atrs, key=lambda x: x["ticker"])
-            sorted_candidates = sorted(candidates_sorted_by_ticker, key=lambda x: x["atr_14_ratio"], reverse=True)
+            # GPU와 동일한 결정론 정렬 기준:
+            # 1) market_cap_q desc, 2) atr_q desc, 3) ticker asc
+            sorted_candidates = sorted(
+                candidate_atrs,
+                key=lambda x: (-x["market_cap_q"], -x["atr_q"], x["ticker"]),
+            )
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
-            for candidate in sorted_candidates:
+            for entry_rank, candidate in enumerate(sorted_candidates):
                 if num_new_entries >= available_slots: break
                 ticker = candidate["ticker"]
                 signal_close_price = candidate["signal_close_price"]
@@ -270,7 +290,7 @@ class MagicSplitStrategy(Strategy):
                             self.investment_per_order,
                             new_pos,
                             1,
-                            -candidate["atr_14_ratio"],
+                            entry_rank,
                             "신규 진입",
                             signal_close_price,
                         )
