@@ -212,12 +212,30 @@ def run_magic_split_strategy_on_gpu(
                         valid_atrs_final = [atr for _, _, _, atr in ranked_records]
                         candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
                         candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
+                        if debug_mode:
+                            preview = ", ".join([f"{ticker}" for ticker, _, _, _ in ranked_records[:10]])
+                            print(
+                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                                f"(signal={signal_date.strftime('%Y-%m-%d')}) "
+                                f"ranked={len(ranked_records)} top10=[{preview}]"
+                            )
                     else:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                         candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                        if debug_mode:
+                            print(
+                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                                f"(signal={signal_date.strftime('%Y-%m-%d')}) ranked=0"
+                            )
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                if debug_mode:
+                    signal_str = signal_date.strftime('%Y-%m-%d') if signal_date is not None else "None"
+                    print(
+                        f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                        f"(signal={signal_str}) ranked=0 (no candidates before metric filter)"
+                    )
 
             # 2-2. 월별 투자금 재계산
             # --- 신호 처리 함수 호출 (기존과 동일) ---

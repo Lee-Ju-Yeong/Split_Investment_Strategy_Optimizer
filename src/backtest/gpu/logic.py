@@ -243,6 +243,13 @@ def _process_sell_signals_gpu(
                     high_price = current_high_prices[stock_idx].item()
                     target_price = target_sell_prices[0, stock_idx, split_idx].item()
                     exec_price = execution_sell_prices[0, stock_idx, split_idx].item()
+                    qty_to_log = quantities[0, stock_idx, split_idx].item()
+                    revenue_to_log = qty_to_log * exec_price
+
+                    print(
+                        f"[GPU_SELL_CALC] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} (Split {split_idx}) | "
+                        f"Qty: {qty_to_log:,.0f} * ExecPrice: {exec_price:,.0f} = Revenue: {revenue_to_log:,.0f}"
+                    )
                     
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
@@ -528,28 +535,31 @@ def _process_new_entry_signals_gpu(
     # 본 함수는 전달된 순서를 그대로 사용해 CPU 경로와 동일한 top-k 실행 순서를 보장한다.
     _ = candidate_atrs_for_day
 
-    # CPU 경로와 동일하게 "신호 슬롯(top-k)"은 보유/쿨다운 기준으로만 확정한다.
-    # 수량(quantities) 0 여부는 실행 단계에서 실패 처리하되, 하위 후보로 대체하지 않는다.
-    signal_slot_mask = ~is_holding & ~is_in_cooldown
+    # CPU 경로와 동일하게 "보유/쿨다운 필터 적용 후 순위(top-k 슬롯)"를 확정한다.
+    # (중요) 보유/쿨다운 후보가 상위에 있어도 신규진입 슬롯을 소모하지 않도록,
+    # eligible 후보들만의 누적 순위(rank among eligible)로 top-k를 계산한다.
+    signal_slot_mask = (~is_holding & ~is_in_cooldown).reshape(num_simulations, num_candidates)
+    signal_slot_rank = cp.cumsum(signal_slot_mask.astype(cp.int32), axis=1) - 1
+    topk_slot_mask = signal_slot_mask & (
+        signal_slot_rank < cp.broadcast_to(available_slots[:, cp.newaxis], signal_slot_rank.shape)
+    )
+    topk_slot_mask_flat = topk_slot_mask.reshape(-1)
 
     # --- 3. [핵심 수정] 순차적 자본 차감을 통한 최종 매수 실행 ---
     # CPU의 순차적 로직을 모방하기 위해, 우선순위 루프(k)를 유지하되
     # 각 루프에서 자본과 슬롯을 즉시 업데이트하여 다음 루프에 반영합니다.
     temp_capital = portfolio_state[:, 0].copy()
-    temp_available_slots = available_slots.copy()
-    
     # 디버깅을 위한 임시 로그 변수 (실제 계산과 분리)
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
 
-    max_slots = int(cp.max(temp_available_slots).item()) if num_candidates > 0 else 0
-    for k in range(min(num_candidates, max_slots)):
+    # 주의: CPU 경로는 "후보 리스트 전체"를 순회하며 슬롯이 찰 때까지
+    # 유효 후보를 채운다. 앞쪽 후보가 보유/쿨다운으로 무효인 경우를
+    # 놓치지 않도록 GPU도 전체 후보 인덱스를 순회해야 한다.
+    for k in range(num_candidates):
         # (sim, candidate) 형태의 1D 인덱스로 변환
         # 각 시뮬레이션의 k번째(이미 정렬된) 후보를 가리키는 고유 인덱스
         flat_indices_k = cp.arange(num_simulations) * num_candidates + k
-
-        # 각 시뮬레이션에서 top-k 슬롯 이내 후보만 고려
-        in_topk_slot = temp_available_slots > k
 
         # 이 후보들이 매수 가능한지 판단합니다.
         # CPU 실행 경로와 동일하게, "실제 매수 비용(total_cost)" 기준으로만 자금 가능 여부를 판단합니다.
@@ -557,7 +567,7 @@ def _process_new_entry_signals_gpu(
         can_afford_actual_cost = temp_capital >= total_costs[flat_indices_k]
 
         # 최종 매수 가능 여부
-        still_valid_mask = signal_slot_mask[flat_indices_k] & can_afford_actual_cost & in_topk_slot & (quantities[flat_indices_k] > 0)
+        still_valid_mask = topk_slot_mask_flat[flat_indices_k] & can_afford_actual_cost & (quantities[flat_indices_k] > 0)
 
         if not cp.any(still_valid_mask):
             continue
