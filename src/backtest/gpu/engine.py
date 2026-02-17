@@ -37,6 +37,8 @@ def run_magic_split_strategy_on_gpu(
     # Config from exec_params
     candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
     use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
+    strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
     strict_hysteresis_enabled = (
         tier_hysteresis_mode == "strict_hysteresis_v1"
@@ -227,6 +229,7 @@ def run_magic_split_strategy_on_gpu(
                 execution_params["sell_commission_rate"], execution_params["sell_tax_rate"],
                 signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
                 force_liquidate_tier3=force_liquidate_tier3,
+                strict_cash_rounding=strict_cash_rounding,
                 debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(

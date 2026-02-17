@@ -202,6 +202,7 @@ def _load_gpu_shared_state(
     end_date: str,
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
+    parity_mode: str,
 ) -> Dict[str, Any]:
     cp, _, create_engine, _ = _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
@@ -212,6 +213,7 @@ def _load_gpu_shared_state(
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
     execution_params["candidate_source_mode"] = candidate_source_mode
     execution_params["use_weekly_alpha_gate"] = bool(use_weekly_alpha_gate)
+    execution_params["parity_mode"] = str(parity_mode).strip().lower()
     execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
@@ -523,6 +525,12 @@ def _build_parser(defaults: Dict[str, Any]) -> argparse.ArgumentParser:
     )
     parser.add_argument("--tolerance", type=float, default=1e-3, help="Absolute tolerance for parity check.")
     parser.add_argument(
+        "--parity-mode",
+        choices=["fast", "strict"],
+        default="fast",
+        help="Parity execution mode. fast=GPU throughput priority, strict=CPU settlement parity priority.",
+    )
+    parser.add_argument(
         "--candidate-source-mode",
         default=defaults["candidate_source_mode"],
         choices=[*CANDIDATE_MODES, "all"],
@@ -612,6 +620,7 @@ def main() -> None:
                 end_date=args.end_date,
                 candidate_source_mode=mode,
                 use_weekly_alpha_gate=args.use_weekly_alpha_gate,
+                parity_mode=args.parity_mode,
             )
         except Exception as exc:
             if _is_gpu_unavailable_error(exc):
@@ -678,6 +687,7 @@ def main() -> None:
         "initial_cash": float(args.initial_cash),
         "top_k": int(args.top_k),
         "tolerance": float(args.tolerance),
+        "parity_mode": args.parity_mode,
         "scenario_input": args.scenario,
         "candidate_source_mode_input": args.candidate_source_mode,
         "use_weekly_alpha_gate": bool(args.use_weekly_alpha_gate),

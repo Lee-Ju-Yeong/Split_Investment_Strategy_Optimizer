@@ -110,6 +110,9 @@
   - `market_cap NULL -> 0`, `atr NULL or <=0 -> 제외`
   - `snapshot/tier` as-of staleness가 3 거래일 초과 시 fail-close
   - `ShortSellingDaily`는 lag 구조로 ranking key에서 제외
+- 실행 모드:
+  - `parity_mode=strict`: 체결 정산을 포지션(차수) 단위 floor로 계산(CPU 정산 정합 우선)
+  - `parity_mode=fast`(기본): 체결 정산 합산 후 floor 1회(GPU 처리량 우선)
 
 ### 6-2. Research 실험 정책(선택)
 - 정렬 키 실험 허용:
@@ -155,6 +158,7 @@ python -m src.cpu_gpu_parity_topk \
   --end-date 2024-12-31 \
   --top-k 20 \
   --scenario baseline_deterministic \
+  --parity-mode fast \
   --no-fail-on-mismatch
 
 # 4) tier 전용 회귀 모니터(운영 전 체크, PASS/FAIL 한 줄 출력)
@@ -165,6 +169,15 @@ python -m src.tier_parity_monitor \
   --params-csv /tmp/parity_params_smoke.csv \
   --scenario baseline_deterministic \
   --config-path /tmp/config_parity_use_pure.yaml
+
+# 5) 승격/배포 전 strict 검증(정산 정합 우선)
+python -m src.cpu_gpu_parity_topk \
+  --start-date 2021-01-04 \
+  --end-date 2021-01-08 \
+  --top-k 5 \
+  --scenario baseline_deterministic \
+  --candidate-source-mode tier \
+  --parity-mode strict
 ```
 
 ## 8. 제외 범위

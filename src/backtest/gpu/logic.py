@@ -66,6 +66,7 @@ def _process_sell_signals_gpu(
     sell_tax_rate: float,
     signal_tiers: cp.ndarray = None,
     force_liquidate_tier3: bool = False,
+    strict_cash_rounding: bool = False,
     debug_mode: bool = False,
     all_tickers: list = None,
     trading_dates_pd_cpu: pd.DatetimeIndex = None,
@@ -175,13 +176,16 @@ def _process_sell_signals_gpu(
         broadcasted_liquidation_prices = cp.broadcast_to(liquidation_price_basis.reshape(positions_state.shape[0], -1, 1), buy_prices.shape)
         adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_liquidation_prices)
 
-        # 청산 대상 종목의 모든 포지션에 대한 수익 계산
         revenue_matrix = quantities * adjusted_liquidation_prices
-        # 청산 대상 종목(stock_liquidation_mask)만 필터링하여 수익 계산
-        liquidation_revenue = cp.sum(revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis], axis=(1, 2))
-        
-
-        net_proceeds = cp.floor(liquidation_revenue * cost_factor)
+        liquidation_revenue_matrix = revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis]
+        if strict_cash_rounding:
+            # strict: CPU 체결 정산과 동일하게 포지션(차수) 단위 floor 후 합산
+            liquidation_net_matrix = cp.floor(liquidation_revenue_matrix * cost_factor)
+            net_proceeds = cp.sum(liquidation_net_matrix, axis=(1, 2))
+        else:
+            # fast: 종목/차수 합산 후 1회 floor (GPU throughput 우선)
+            liquidation_revenue = cp.sum(liquidation_revenue_matrix, axis=(1, 2))
+            net_proceeds = cp.floor(liquidation_revenue * cost_factor)
         
         # 자본 업데이트
         portfolio_state[:, 0] += net_proceeds
@@ -244,14 +248,16 @@ def _process_sell_signals_gpu(
                         f"Target: {target_price:.2f} -> Exec: {exec_price} | "
                         f"High: {high_price}"
                     )
-        # 수익 실현 금액은 'exec_prices'로 계산
         revenue_matrix = quantities * execution_sell_prices
-
-        # profit_taking_mask가 True인 차수들의 수익만 합산
-        total_profit_revenue = cp.sum(revenue_matrix * profit_taking_mask, axis=(1, 2))
-
-        # 비용은 매출액에 일괄 곱(벡터화) — CPU와 동일 효과
-        net_proceeds = cp.floor(total_profit_revenue * cost_factor)
+        profit_revenue_matrix = revenue_matrix * profit_taking_mask
+        if strict_cash_rounding:
+            # strict: CPU 체결 정산과 동일하게 포지션(차수) 단위 floor 후 합산
+            profit_net_matrix = cp.floor(profit_revenue_matrix * cost_factor)
+            net_proceeds = cp.sum(profit_net_matrix, axis=(1, 2))
+        else:
+            # fast: 종목/차수 합산 후 1회 floor (GPU throughput 우선)
+            total_profit_revenue = cp.sum(profit_revenue_matrix, axis=(1, 2))
+            net_proceeds = cp.floor(total_profit_revenue * cost_factor)
 
         # 자본 업데이트
         portfolio_state[:, 0] += net_proceeds
@@ -516,7 +522,9 @@ def _process_new_entry_signals_gpu(
     # 본 함수는 전달된 순서를 그대로 사용해 CPU 경로와 동일한 top-k 실행 순서를 보장한다.
     _ = candidate_atrs_for_day
 
-    initial_buy_mask = ~is_holding & ~is_in_cooldown & (quantities > 0)
+    # CPU 경로와 동일하게 "신호 슬롯(top-k)"은 보유/쿨다운 기준으로만 확정한다.
+    # 수량(quantities) 0 여부는 실행 단계에서 실패 처리하되, 하위 후보로 대체하지 않는다.
+    signal_slot_mask = ~is_holding & ~is_in_cooldown
 
     # --- 3. [핵심 수정] 순차적 자본 차감을 통한 최종 매수 실행 ---
     # CPU의 순차적 로직을 모방하기 위해, 우선순위 루프(k)를 유지하되
@@ -528,21 +536,22 @@ def _process_new_entry_signals_gpu(
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
 
-    for k in range(num_candidates):
+    max_slots = int(cp.max(temp_available_slots).item()) if num_candidates > 0 else 0
+    for k in range(min(num_candidates, max_slots)):
         # (sim, candidate) 형태의 1D 인덱스로 변환
         # 각 시뮬레이션의 k번째(이미 정렬된) 후보를 가리키는 고유 인덱스
         flat_indices_k = cp.arange(num_simulations) * num_candidates + k
+
+        # 각 시뮬레이션에서 top-k 슬롯 이내 후보만 고려
+        in_topk_slot = temp_available_slots > k
 
         # 이 후보들이 매수 가능한지 판단합니다.
         # CPU 실행 경로와 동일하게, "실제 매수 비용(total_cost)" 기준으로만 자금 가능 여부를 판단합니다.
         # (budget(investment_per_order) 자체를 추가 제약으로 사용하지 않음)
         can_afford_actual_cost = temp_capital >= total_costs[flat_indices_k]
-        
-        # 포트폴리오에 빈 슬롯이 있어야 합니다.
-        has_slot = temp_available_slots > 0
-        
+
         # 최종 매수 가능 여부
-        still_valid_mask = initial_buy_mask[flat_indices_k] & can_afford_actual_cost & has_slot
+        still_valid_mask = signal_slot_mask[flat_indices_k] & can_afford_actual_cost & in_topk_slot & (quantities[flat_indices_k] > 0)
 
         if not cp.any(still_valid_mask):
             continue
@@ -564,9 +573,8 @@ def _process_new_entry_signals_gpu(
         # 3. 상태 업데이트
         capital_before_buy = temp_capital[active_sim_indices].copy() # 로그 기록용
         
-        # [핵심] 실제 자본과 슬롯을 '즉시' 차감하여 다음 k 루프에 영향을 줌
+        # CPU 경로와 동일하게 자본은 순차 차감하되, 슬롯 수는 신호 생성 시점(top-k) 고정.
         temp_capital[active_sim_indices] -= final_costs
-        temp_available_slots[active_sim_indices] -= 1
 
         positions_state[active_sim_indices, final_stock_indices, 0, 0] = final_quantities
         positions_state[active_sim_indices, final_stock_indices, 0, 1] = final_buy_prices
