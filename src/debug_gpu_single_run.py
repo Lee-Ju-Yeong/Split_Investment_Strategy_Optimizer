@@ -281,6 +281,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     run_execution_params = execution_params.copy()
     run_execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'weekly')
     run_execution_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
+    run_execution_params['tier_hysteresis_mode'] = params_dict.get('tier_hysteresis_mode', 'legacy')
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 

@@ -72,6 +72,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "weekly")
     execution_params["use_weekly_alpha_gate"] = strategy_params.get("use_weekly_alpha_gate", False)
+    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)

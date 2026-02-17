@@ -58,6 +58,7 @@ class MagicSplitStrategy(Strategy):
         # --- [Issue #67] Candidate Source Config ---
         candidate_source_mode="weekly", # weekly | hybrid_transition | tier
         use_weekly_alpha_gate=False,
+        tier_hysteresis_mode="legacy",  # legacy | strict_hysteresis_v1
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -74,10 +75,48 @@ class MagicSplitStrategy(Strategy):
         # [Issue #67]
         self.candidate_source_mode = candidate_source_mode
         self.use_weekly_alpha_gate = use_weekly_alpha_gate
+        self.tier_hysteresis_mode = tier_hysteresis_mode
         
         self.investment_per_order = 0
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
+
+    def _use_strict_hysteresis(self):
+        mode = str(self.tier_hysteresis_mode).strip().lower()
+        return mode == "strict_hysteresis_v1" and self.candidate_source_mode in {"tier", "hybrid_transition"}
+
+    def _load_tier_map_for_holdings(self, data_handler, signal_date, tickers):
+        if not tickers:
+            return {}
+
+        get_tiers_as_of = getattr(data_handler, "get_tiers_as_of", None)
+        if callable(get_tiers_as_of):
+            try:
+                tier_rows = get_tiers_as_of(as_of_date=signal_date, tickers=tickers)
+                return {
+                    code: int(meta["tier"])
+                    for code, meta in tier_rows.items()
+                    if meta is not None and meta.get("tier") is not None
+                }
+            except Exception as exc:
+                exc_info = logger.isEnabledFor(logging.DEBUG)
+                logger.warning(
+                    "Tier map lookup failed (%s). Falling back to per-ticker lookup.",
+                    exc,
+                    exc_info=exc_info,
+                )
+
+        get_stock_tier_as_of = getattr(data_handler, "get_stock_tier_as_of", None)
+        if not callable(get_stock_tier_as_of):
+            return {}
+
+        tier_map = {}
+        for ticker in tickers:
+            tier_info = get_stock_tier_as_of(ticker, signal_date)
+            if tier_info is None or tier_info.get("tier") is None:
+                continue
+            tier_map[ticker] = int(tier_info["tier"])
+        return tier_map
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -142,6 +181,14 @@ class MagicSplitStrategy(Strategy):
                                  current_date.date(),
                                  len(candidate_codes),
                              )
+
+                        if self._use_strict_hysteresis() and used_tier == "TIER_2_FALLBACK":
+                            logger.debug(
+                                "[Strategy] %s | Strict hysteresis: Tier1 empty -> skip new entry",
+                                current_date.date(),
+                            )
+                            candidate_codes = []
+                            used_tier = "NO_TIER1_CANDIDATES"
 
                         if mode == "hybrid_transition" and self.use_weekly_alpha_gate:
                             weekly_codes = data_handler.get_filtered_stock_codes(current_date)
@@ -247,12 +294,25 @@ class MagicSplitStrategy(Strategy):
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
         if signal_date is None:
             return buy_signals
+        strict_hysteresis = self._use_strict_hysteresis()
+        tier_map = {}
+        if strict_hysteresis:
+            tier_map = self._load_tier_map_for_holdings(
+                data_handler,
+                signal_date,
+                list(portfolio.positions.keys()),
+            )
 
         # 추가 매수 신호 생성 로직
         for ticker in list(portfolio.positions.keys()):
             # 당일 매도된 종목은 추가 매수 안 함
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
+
+            if strict_hysteresis:
+                ticker_tier = tier_map.get(ticker)
+                if ticker_tier is None or ticker_tier < 1 or ticker_tier > 2:
+                    continue
             
             positions = portfolio.positions[ticker]
             # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
@@ -310,6 +370,14 @@ class MagicSplitStrategy(Strategy):
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
         if signal_date is None:
             return signals
+        strict_hysteresis = self._use_strict_hysteresis()
+        tier_map = {}
+        if strict_hysteresis:
+            tier_map = self._load_tier_map_for_holdings(
+                data_handler,
+                signal_date,
+                list(portfolio.positions.keys()),
+            )
 
         for ticker in list(portfolio.positions.keys()):
             row = data_handler.get_stock_row_as_of(
@@ -330,7 +398,12 @@ class MagicSplitStrategy(Strategy):
             reason = ""
             trigger_price = current_price
 
-            if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
+            if strict_hysteresis and tier_map.get(ticker) is not None and tier_map.get(ticker) >= 3:
+                liquidate = True
+                reason = "Tier3 강제 청산"
+                trigger_price = current_price
+
+            if not liquidate and current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
                 liquidate = True
                 reason = "손절매 (평균가 기준)"
                 trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
