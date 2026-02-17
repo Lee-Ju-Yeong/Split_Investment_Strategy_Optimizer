@@ -56,8 +56,12 @@ def _process_sell_signals_gpu(
     last_trade_day_idx_state: cp.ndarray,
     current_day_idx: int,
     param_combinations: cp.ndarray,
+    current_open_prices: cp.ndarray,    # 시가(T0 체결 기본)
     current_close_prices: cp.ndarray,   # 종가(기존 용도 유지)
     current_high_prices: cp.ndarray,    # intraday high (익절 비교용)
+    signal_close_prices: cp.ndarray,    # T-1 종가 (신호 생성용)
+    signal_high_prices: cp.ndarray,     # T-1 고가 (신호 생성용)
+    signal_day_idx: int,
     sell_commission_rate: float,
     sell_tax_rate: float,
     debug_mode: bool = False,
@@ -71,6 +75,10 @@ def _process_sell_signals_gpu(
     """
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
+
+    if signal_day_idx < 0:
+        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
+        return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
@@ -88,8 +96,9 @@ def _process_sell_signals_gpu(
     sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
-    # (sim, stock) 형태로 현재가를 브로드캐스팅 준비
-    current_prices_2d = cp.broadcast_to(current_close_prices, (positions_state.shape[0], positions_state.shape[1]))
+    # (sim, stock) 형태로 현재가(T0 체결용) / 신호가(T-1 신호용) 브로드캐스팅 준비
+    current_open_prices_2d = cp.broadcast_to(current_open_prices, (positions_state.shape[0], positions_state.shape[1]))
+    signal_close_prices_2d = cp.broadcast_to(signal_close_prices, (positions_state.shape[0], positions_state.shape[1]))
     
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생 기간) ---
     total_quantities = cp.sum(quantities, axis=2)
@@ -99,7 +108,7 @@ def _process_sell_signals_gpu(
     safe_total_quantities = cp.where(has_any_position, total_quantities, 1)
     avg_buy_prices = cp.sum(buy_prices * quantities, axis=2) / safe_total_quantities
      # 손절매 조건
-    stock_stop_loss_mask = (current_prices_2d <= avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))) & has_any_position
+    stock_stop_loss_mask = (signal_close_prices_2d <= avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))) & has_any_position
     
     # 비활성 기간 조건
     has_traded_before = last_trade_day_idx_state != -1
@@ -107,26 +116,7 @@ def _process_sell_signals_gpu(
     stock_inactivity_mask = (days_inactive >= max_inactivity_periods - 1) & has_traded_before & has_any_position
     stock_liquidation_mask_base = stock_stop_loss_mask | stock_inactivity_mask
     stock_liquidation_mask = stock_liquidation_mask_base
-    #  현실적인 손절매 체결 로직을 적용하여 최종 청산 마스크를 결정
-    if cp.any(stock_liquidation_mask_base):
-        # 현실적인 손절매 체결가(price_basis) 계산
-        stop_loss_prices = avg_buy_prices * (1 + stop_loss_rates.squeeze(-1))
-        high_prices_2d = cp.broadcast_to(current_high_prices, stop_loss_prices.shape)
-
-        # 시나리오 1(A): 장중 손절가 도달 시, Target Price를 기준가로 사용
-        # 시나리오 2(B): 갭하락으로 미도달 시, 당일 종가(current_prices_2d)를 기준가로 사용
-        stop_loss_basis = cp.where(high_prices_2d >= stop_loss_prices, stop_loss_prices, current_prices_2d)
-
-        # 최종 청산 기준가(liquidation_price_basis) 결정:
-        # - 손절매의 경우: 위에서 계산한 stop_loss_basis 사용
-        # - 비활성 청산의 경우: 기존처럼 당일 종가(current_prices_2d) 사용
-        liquidation_price_basis = cp.where(stock_stop_loss_mask, stop_loss_basis, current_prices_2d)
-
-        # [핵심] 가격 결정 로직이 체결 가능성을 이미 포함하므로, 최종 마스크는 base 마스크와 동일
-        stock_liquidation_mask = stock_liquidation_mask_base
-    else:
-        # 청산 후보가 없으면 빈 마스크로 초기화
-        stock_liquidation_mask = stock_liquidation_mask_base
+    liquidation_price_basis = current_open_prices_2d
         
     if debug_mode and cp.any(stock_liquidation_mask):
         sim0_stop_loss_indices = cp.where(stock_stop_loss_mask[0])[0].get()
@@ -146,7 +136,7 @@ def _process_sell_signals_gpu(
                 for idx_cupy in sim0_indices_to_log:
                     idx = idx_cupy.item()
                     ticker = all_tickers[idx]
-                    # 청산 기준가는 '당일 종가'
+                    # 청산 기준가는 당일 시가 체결가
                     target_price = liquidation_price_basis[0, idx].item()
                     exec_price = adjust_price_up_gpu(liquidation_price_basis[0, idx]).item()
                     high_price = current_high_prices[idx].item()
@@ -193,20 +183,22 @@ def _process_sell_signals_gpu(
 
 
     # --- 시나리오 2: 부분 매도 (수익 실현) ---
-    #  목표가 계산은 이미 단순 계산 방식으로 구현되어 있습니다.
     target_sell_prices = buy_prices * (1 + sell_profit_rates)
-    # 실제 체결가는 목표가를 호가 단위에 맞게 올림 처리합니다.
-    execution_sell_prices = adjust_price_up_gpu(target_sell_prices)
-
-    # 체결 조건: 당일 '고가(high)'가 계산된 체결가에 도달했는지 확인하도록 변경
-    high_prices_3d = cp.broadcast_to(current_high_prices.reshape(1, -1, 1), buy_prices.shape) # close_prices 대신 high_prices 사용
+    signal_high_prices_3d = cp.broadcast_to(signal_high_prices.reshape(1, -1, 1), buy_prices.shape)
+    current_open_prices_3d = cp.broadcast_to(current_open_prices.reshape(1, -1, 1), buy_prices.shape)
     
     #  현실적인 백테스팅을 위해 당일(T0) 매수분은 매도 금지
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    # 체결 마스크 생성 시 high_prices_3d를 사용합니다.
-    profit_taking_mask = (high_prices_3d >= execution_sell_prices) & valid_positions & sellable_time_mask
+    execution_sell_prices = adjust_price_up_gpu(current_open_prices_3d)
+    execution_reachable_mask = cp.ones_like(execution_sell_prices, dtype=cp.bool_)
+
+    signal_target_prices = adjust_price_up_gpu(target_sell_prices)
+    # 1) T-1 고가가 목표가에 도달했을 때만 신호 생성
+    # 2) T0 시가 체결
+    profit_signal_mask = signal_high_prices_3d >= signal_target_prices
+    profit_taking_mask = profit_signal_mask & execution_reachable_mask & valid_positions & sellable_time_mask
 
     if debug_mode and cp.any(profit_taking_mask):
         sim0_profit_taking_indices = cp.where(cp.any(profit_taking_mask[0], axis=1))[0].get()
@@ -272,14 +264,15 @@ def _process_additional_buy_signals_gpu(
     sell_occurred_today_mask: cp.ndarray,
     current_day_idx: int,
     param_combinations: cp.ndarray,
-    current_prices: cp.ndarray,
-    current_lows: cp.ndarray,
-    current_highs: cp.ndarray,
+    current_opens: cp.ndarray,
+    signal_close_prices: cp.ndarray,
+    signal_lows: cp.ndarray,
+    signal_day_idx: int,
     buy_commission_rate: float,
     log_buffer: cp.ndarray,
     log_counter: cp.ndarray,
     debug_mode: bool = False,
-    all_tickers: list = None
+    all_tickers: list = None,
 ):
     """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
@@ -291,7 +284,7 @@ def _process_additional_buy_signals_gpu(
     has_positions = quantities_state > 0
     num_positions = cp.sum(has_positions, axis=2)
     has_any_position = num_positions > 0
-    if not cp.any(has_any_position):
+    if signal_day_idx < 0 or not cp.any(has_any_position):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
     last_pos_mask = (cp.cumsum(has_positions, axis=2) == num_positions[:, :, cp.newaxis]) & has_positions
@@ -304,7 +297,8 @@ def _process_additional_buy_signals_gpu(
     first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
     is_not_new_today = (first_open_day_idx < current_day_idx)
     
-    initial_buy_mask = (current_lows <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today & has_first_split
+    signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
+    initial_buy_mask = (signal_lows_2d <= trigger_prices) & has_any_position & under_max_splits & can_add_buy & is_not_new_today & has_first_split
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
@@ -314,10 +308,8 @@ def _process_additional_buy_signals_gpu(
     # 비용 계산
     candidate_investments = portfolio_state[sim_indices, 1]
     candidate_trigger_prices = trigger_prices[sim_indices, stock_indices]
-    candidate_highs = current_highs[stock_indices]
-    epsilon = cp.float32(1.0)
-    price_basis = cp.where(candidate_highs <= candidate_trigger_prices - epsilon, candidate_highs, candidate_trigger_prices)
-    exec_prices = adjust_price_up_gpu(price_basis)
+    candidate_opens = current_opens[stock_indices]
+    exec_prices = adjust_price_up_gpu(candidate_opens)
     
     quantities = cp.zeros_like(exec_prices, dtype=cp.int32)
     valid_price_mask = exec_prices > 0
@@ -331,9 +323,9 @@ def _process_additional_buy_signals_gpu(
     add_buy_priorities = param_combinations[sim_indices, 4]
     scores_lowest_order = num_positions[sim_indices, stock_indices]
     candidate_last_buy_prices = last_buy_prices[sim_indices, stock_indices]
-    candidate_current_prices = current_prices[stock_indices]
+    candidate_signal_closes = signal_close_prices[stock_indices]
     price_epsilon = 1e-9
-    scores_highest_drop = (candidate_last_buy_prices - candidate_current_prices) / (candidate_last_buy_prices + price_epsilon)
+    scores_highest_drop = (candidate_last_buy_prices - candidate_signal_closes) / (candidate_last_buy_prices + price_epsilon)
     priority_scores = cp.where(add_buy_priorities == 0, scores_lowest_order, -scores_highest_drop)
 
     # 3. 시뮬레이션 ID와 우선순위로 후보 정렬
@@ -521,23 +513,16 @@ def _process_new_entry_signals_gpu(
         # 각 시뮬레이션의 k번째 우선순위 후보를 가리키는 고유 인덱스
         flat_indices_k = cp.arange(num_simulations) * num_candidates + candidate_idx_k
 
-        # 이 후보들이 매수 가능한지 판단할 때 '자금 관리 원칙'을 추가합니다.
-        
-        # 원칙 1: (CPU와 동일) 전략이 요구하는 이상적인 투자금이 현재 가용 현금보다 많으면 매수하지 않습니다.
-        # flat_indices_k에 해당하는 시뮬레이션들의 'investment_per_order' 값을 가져옵니다.
-        # portfolio_state의 shape은 (num_sim, 2) 이므로, arange로 sim_indices를 만들어 접근합니다.
-        sim_indices_k = cp.arange(num_simulations)
-        investment_per_order_k = portfolio_state[sim_indices_k, 1]
-        has_sufficient_cash_for_budget = temp_capital >= investment_per_order_k
-
-        # 원칙 2: (기존 로직) 실제 매수 비용을 감당할 수 있어야 합니다.
+        # 이 후보들이 매수 가능한지 판단합니다.
+        # CPU 실행 경로와 동일하게, "실제 매수 비용(total_cost)" 기준으로만 자금 가능 여부를 판단합니다.
+        # (budget(investment_per_order) 자체를 추가 제약으로 사용하지 않음)
         can_afford_actual_cost = temp_capital >= total_costs[flat_indices_k]
         
-        # 원칙 3: (기존 로직) 포트폴리오에 빈 슬롯이 있어야 합니다.
+        # 포트폴리오에 빈 슬롯이 있어야 합니다.
         has_slot = temp_available_slots > 0
         
-        # 모든 원칙을 결합하여 최종 매수 가능 여부를 결정합니다.
-        still_valid_mask = initial_buy_mask[flat_indices_k] & has_sufficient_cash_for_budget & can_afford_actual_cost & has_slot
+        # 최종 매수 가능 여부
+        still_valid_mask = initial_buy_mask[flat_indices_k] & can_afford_actual_cost & has_slot
 
         if not cp.any(still_valid_mask):
             continue
