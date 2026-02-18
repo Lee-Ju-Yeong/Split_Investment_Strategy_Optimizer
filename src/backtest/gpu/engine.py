@@ -2,6 +2,9 @@
 GPU backtest engine runner.
 """
 
+from datetime import timedelta
+import time
+
 import cudf
 import cupy as cp
 import pandas as pd
@@ -72,6 +75,10 @@ def run_magic_split_strategy_on_gpu(
     all_data_reset_idx = all_data_gpu.reset_index()
     weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
+    progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
+    progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
+    run_start_ts = time.time()
+    processed_days = 0
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
@@ -306,6 +313,25 @@ def run_magic_split_strategy_on_gpu(
 
                 log_message += footer
                 print(log_message)
+            processed_days += 1
+            if (
+                progress_log_enabled
+                and progress_log_interval_days > 0
+                and (
+                    processed_days % progress_log_interval_days == 0
+                    or processed_days == num_trading_days
+                )
+            ):
+                elapsed_sec = max(time.time() - run_start_ts, 1e-6)
+                progress = processed_days / max(num_trading_days, 1)
+                remaining_days = max(num_trading_days - processed_days, 0)
+                eta_sec = (elapsed_sec / processed_days) * remaining_days if processed_days > 0 else 0.0
+                print(
+                    "[GPU_PROGRESS] "
+                    f"{processed_days}/{num_trading_days} ({progress*100:.1f}%) "
+                    f"elapsed={timedelta(seconds=int(elapsed_sec))} "
+                    f"eta={timedelta(seconds=int(eta_sec))}"
+                )
             # 월 블록의 마지막 날 종가를 다음 리밸런싱을 위한 평가 기준으로 저장
         previous_prices_gpu = close_prices_tensor[end_idx - 1].copy()
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
