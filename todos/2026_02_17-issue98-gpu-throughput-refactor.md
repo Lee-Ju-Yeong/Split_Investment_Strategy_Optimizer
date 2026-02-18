@@ -280,3 +280,20 @@
 - `float64` 혼용 또는 CPU와 다른 rounding 경로 도입
 - GPU 후보 결과를 Python 리스트로 반복 왕복하며 임의 재정렬
 - PIT 조회 기준(`as-of`) 변경 후 strict gate 미실행
+
+### 11-6. PR-98B-1 (PO) 1차 반영: T-001/T-002/T-003 (2026-02-18)
+- 반영 범위:
+  - `src/backtest/gpu/engine.py`
+    - `all_data_gpu.reset_index()` 결과를 텐서 빌더에 재사용(중복 materialize 제거)
+    - `candidate_source_mode=tier` 경로에서는 `weekly_filtered_gpu.reset_index()` 선계산 생략
+  - `src/backtest/gpu/data.py`
+    - 텐서 생성 시 `day_idx`/`ticker_idx`를 컬럼 반복마다 변환하지 않고 1회 계산 후 재사용
+- 의미/정합성:
+  - 후보 선정/정렬/체결 규칙은 변경하지 않음 (PO 유지)
+  - strict parity gate 대상 변경 없음
+- 테스트:
+  - 신규: `tests/test_gpu_engine_prep_path.py`
+    - tier 모드에서 weekly reset 생략 확인
+    - weekly 모드에서 weekly reset 유지 확인
+    - all_data reset 결과 재사용 확인
+  - 기존 회귀: `tests/test_gpu_tier_tensor_pit.py`
