@@ -2,6 +2,7 @@
 
 database:
   host: "127.0.0.1"
+  port: 3306
   user: "root"
   password: "CHANGE_ME"
   database: "stocks"
@@ -23,12 +24,11 @@ strategy_params:
   max_splits_limit: 10
   max_inactivity_period: 90
   
-  # [Issue #67] Candidate Selection Mode
-  # weekly: Legacy WeeklyFilteredStocks
-  # hybrid_transition: Tier-based with optional Weekly intersection
-  # tier: Pure DailyStockTier (Tier 1 -> Fallback Tier 2)
-  candidate_source_mode: "hybrid_transition"
-  use_weekly_alpha_gate: true
+  # [Issue #67] Candidate Selection Mode (A-path only)
+  # tier: PIT universe + DailyStockTier (Tier 1 -> Fallback Tier 2)
+  candidate_source_mode: "tier"
+  min_liquidity_20d_avg_value: 0
+  min_tier12_coverage_ratio: 0.0
 
   # [Issue #67] Entry/Hold Hysteresis Policy
   # legacy: Entry(Tier1 -> fallback Tier2), Hold/Add path ignores Tier recheck

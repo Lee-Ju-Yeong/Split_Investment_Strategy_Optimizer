@@ -2,16 +2,8 @@
 This script is used to debug the GPU single run.
 It is used to test the GPU single run with the parameters from the config.yaml file.
 """
-import sys
-from pathlib import Path
-
-# BOOTSTRAP: allow direct execution (`python src/debug_gpu_single_run.py`) while keeping package imports.
-if __name__ == "__main__" and (__package__ is None or __package__ == ""):
-    file_path = Path(__file__).resolve()
-    sys.path.insert(0, str(file_path.parent.parent))
-    __package__ = file_path.parent.name  # "src"
-
 import time
+import argparse
 import cudf
 import cupy as cp
 import pandas as pd
@@ -21,10 +13,10 @@ import os
 import urllib.parse
 
 # --- 필요한 모듈 추가 임포트 ---
-from .config_loader import load_config
-from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
+from src.config_loader import load_config
+from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
-from .performance_analyzer import PerformanceAnalyzer
+from src.performance_analyzer import PerformanceAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
@@ -35,7 +27,7 @@ config = load_config()
 db_config = config['database']
 backtest_settings = config['backtest_settings']
 strategy_params = config['strategy_params']
-execution_params = config['execution_params']
+execution_params = config['execution_params'].copy()
 
 # GPU 커널에 쿨다운 기간 전달을 위해 execution_params에 추가
 execution_params['cooldown_period_days'] = strategy_params.get('cooldown_period_days', 5)
@@ -155,11 +147,11 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
     start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
     end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
     query = f"""
-        SELECT date, stock_code as ticker, tier
+        SELECT date, stock_code as ticker, tier, liquidity_20d_avg_value
         FROM DailyStockTier
         WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
         UNION ALL
-        SELECT t.date, t.stock_code as ticker, t.tier
+        SELECT t.date, t.stock_code as ticker, t.tier, t.liquidity_20d_avg_value
         FROM DailyStockTier t
         JOIN (
             SELECT stock_code, MAX(date) AS max_date
@@ -175,16 +167,40 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
         print("⚠️ No Tier data found. Returning empty tensor.")
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
-    # Pivot to (date, ticker) -> tier
-    # index=date, columns=ticker, values=tier
-    df_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    min_liq = int(strategy_params.get("min_liquidity_20d_avg_value", 0) or 0)
+
+    # index=date, columns=ticker
+    tier_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
+    liq_wide = df_pd.pivot_table(index='date', columns='ticker', values='liquidity_20d_avg_value')
     
-    # Reindex to full trading dates and all tickers
-    # Forward fill to propagate the latest tier
-    df_reindexed = df_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
-    
+    tier_asof = tier_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    liq_asof = liq_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill()
+
+    if min_liq > 0:
+        liq_mask = liq_asof.fillna(-1) >= min_liq
+        tier_asof = tier_asof.where(liq_mask, 0)
+
+    tier1_count = (tier_asof == 1).sum(axis=1).astype(int)
+    tier12_count = ((tier_asof > 0) & (tier_asof <= 2)).sum(axis=1).astype(int)
+    universe_count = len(all_tickers)
+    print(
+        f"[TierCoverage][GPU] min_tier1={int(tier1_count.min())} "
+        f"min_tier12={int(tier12_count.min())} universe={universe_count}"
+    )
+
+    min_ratio = float(strategy_params.get("min_tier12_coverage_ratio", 0.0) or 0.0)
+    if min_ratio > 0 and universe_count > 0:
+        ratio = tier12_count / float(universe_count)
+        failed = ratio[ratio < min_ratio]
+        if not failed.empty:
+            fail_date = failed.index[0]
+            raise ValueError(
+                f"Tier coverage gate failed on {pd.to_datetime(fail_date).date()}: "
+                f"tier12_ratio={float(failed.iloc[0]):.4f} < threshold={min_ratio:.4f}"
+            )
+
     # Convert to CuPy
-    tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
+    tier_tensor = cp.asarray(tier_asof.values, dtype=cp.int8)
     
     print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
     return tier_tensor
@@ -278,10 +294,9 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     start_time_kernel = time.time()
     
     # exec_params에 모드 정보 추가
-    run_execution_params = execution_params.copy()
-    run_execution_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'weekly')
-    run_execution_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
-    run_execution_params['tier_hysteresis_mode'] = params_dict.get('tier_hysteresis_mode', 'legacy')
+    run_exec_params = execution_params.copy()
+    run_exec_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
+    run_exec_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
@@ -291,7 +306,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         trading_date_indices_gpu,
         trading_dates_pd,
         initial_cash,
-        run_execution_params,
+        run_exec_params,
         debug_mode=debug_mode,
         tier_tensor=tier_tensor
     )
@@ -307,11 +322,67 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     equity_curve_series = pd.Series(daily_values_cpu, index=trading_dates_pd)
     
     return equity_curve_series
+
+
+def _cpu_daily_values_to_series(cpu_result):
+    if not cpu_result or not cpu_result.get("success"):
+        raise ValueError(f"CPU backtest failed: {cpu_result.get('error') if cpu_result else 'empty result'}")
+    daily_values = cpu_result.get("daily_values", [])
+    if not daily_values:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(daily_values)
+    if df.empty or "x" not in df.columns or "y" not in df.columns:
+        return pd.Series(dtype=float)
+    df["x"] = pd.to_datetime(df["x"])
+    df = df.sort_values("x")
+    return pd.Series(df["y"].values, index=df["x"])
+
+
+def run_tier_parity_gate(config_dict, gpu_equity_curve, tolerance=1e-3):
+    from src.main_backtest import run_backtest_from_config
+
+    cfg = dict(config_dict)
+    cfg["strategy_params"] = dict(cfg.get("strategy_params", {}))
+    cfg["strategy_params"]["candidate_source_mode"] = "tier"
+
+    cpu_result = run_backtest_from_config(cfg)
+    cpu_curve = _cpu_daily_values_to_series(cpu_result)
+    if cpu_curve.empty or gpu_equity_curve.empty:
+        raise ValueError("Parity gate input is empty. cpu_curve or gpu_curve has no data.")
+
+    aligned = pd.concat(
+        [cpu_curve.rename("cpu"), gpu_equity_curve.rename("gpu")],
+        axis=1,
+        join="inner",
+    ).dropna()
+    if aligned.empty:
+        raise ValueError("Parity gate aligned series is empty.")
+
+    diff = (aligned["cpu"] - aligned["gpu"]).abs()
+    mismatches = diff > float(tolerance)
+    mismatch_count = int(mismatches.sum())
+    print(
+        f"[ParityGate] mode=tier points={len(aligned)} "
+        f"mismatch_count={mismatch_count} tolerance={tolerance}"
+    )
+    if mismatch_count > 0:
+        first_idx = diff[mismatches].index[0]
+        raise AssertionError(
+            f"Tier parity gate failed at {pd.to_datetime(first_idx).date()}: "
+            f"cpu={aligned.loc[first_idx, 'cpu']}, "
+            f"gpu={aligned.loc[first_idx, 'gpu']}, diff={diff.loc[first_idx]}"
+        )
+    return {"mismatch_count": mismatch_count, "points": len(aligned)}
 # -----------------------------------------------------------------------------
 # 5. Main Execution Block
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="GPU single-run debug and optional CPU/GPU parity gate.")
+    parser.add_argument("--parity-gate", action="store_true", help="Run tier-only parity gate and fail on mismatch.")
+    parser.add_argument("--parity-tolerance", type=float, default=1e-3, help="Absolute tolerance for parity gate.")
+    args = parser.parse_args()
+
     # 이 파일이 단독으로 실행될 때, config.yaml의 설정으로 CPU-GPU 비교 검증을 수행합니다.
     backtest_start_date = backtest_settings['start_date']
     backtest_end_date = backtest_settings['end_date']
@@ -348,4 +419,8 @@ if __name__ == "__main__":
         print("Error: No backtesting result data to analyze.")
 
     print("="*60)
+    if args.parity_gate:
+        run_tier_parity_gate(config, equity_curve, tolerance=args.parity_tolerance)
+        print("✅ Tier-only parity gate passed.")
+
     print(f"\n✅ GPU standalone run and analysis complete!")

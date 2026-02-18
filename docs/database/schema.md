@@ -91,7 +91,56 @@
 - `idx_investor_date_stock` ON `(date, stock_code)`
 - `idx_investor_date_flow` ON `(date, foreigner_net_buy, institution_net_buy)`
 
-### 2-3. `DailyStockTier`
+### 2-3. `MarketCapDaily`
+시가총액/상장주식수 일별 스냅샷 테이블(정규화 분모).
+
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `market_cap` | `BIGINT` | `NULL` | 시가총액 |
+| `shares_outstanding` | `BIGINT` | `NULL` | 상장주식수 |
+| `source` | `VARCHAR(50)` | `DEFAULT 'pykrx'` | 데이터 소스 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
+
+인덱스:
+- `idx_mcap_date_stock` ON `(date, stock_code)`
+
+### 2-4. `ShortSellingDaily`
+공매도 일별 스냅샷 테이블(거래/잔고).
+
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `date` | `DATE` | `PRIMARY KEY` | 기준일 |
+| `short_volume` | `BIGINT` | `NULL` | 공매도 거래량 |
+| `short_value` | `BIGINT` | `NULL` | 공매도 거래대금 |
+| `short_balance` | `BIGINT` | `NULL` | 공매도 잔고 |
+| `short_balance_value` | `BIGINT` | `NULL` | 공매도 잔고금액 |
+| `source` | `VARCHAR(50)` | `DEFAULT 'pykrx'` | 데이터 소스 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
+
+인덱스:
+- `idx_short_date_stock` ON `(date, stock_code)`
+
+### 2-5. `ShortSellingBackfillCoverage`
+공매도 백필 구간 커버리지/체크포인트 테이블(재실행 중복 호출 방지).
+
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `window_start` | `DATE` | `PRIMARY KEY` | 검증한 구간 시작일 |
+| `window_end` | `DATE` | `PRIMARY KEY` | 검증한 구간 종료일 |
+| `status` | `VARCHAR(20)` | `NOT NULL` | 커버리지 상태 (`DONE_EMPTY` 등) |
+| `rows_saved` | `INT` | `DEFAULT 0` | 해당 구간 저장 행 수 |
+| `created_at` | `DATETIME` | `DEFAULT CURRENT_TIMESTAMP` | 최초 기록 시각 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
+
+인덱스:
+- `idx_short_cov_status_updated` ON `(status, updated_at)`
+- `idx_short_cov_stock_status` ON `(stock_code, status)`
+
+### 2-6. `DailyStockTier`
 사전 계산된 일별 종목 등급 저장 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |
@@ -107,7 +156,7 @@
 - `idx_tier_stock_date` ON `(stock_code, date)`
 - `idx_tier_date_tier_stock` ON `(date, tier, stock_code)`
 
-### 2-4. `TickerUniverseSnapshot`
+### 2-7. `TickerUniverseSnapshot`
 시점(PIT) 기준 종목 유니버스 스냅샷 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |
@@ -123,7 +172,7 @@
 - `idx_tus_stock_date` ON `(stock_code, snapshot_date)`
 - `idx_tus_date_market_stock` ON `(snapshot_date, market_type, stock_code)`
 
-### 2-5. `TickerUniverseHistory`
+### 2-8. `TickerUniverseHistory`
 상장/상폐를 포함한 종목 이력 집계 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |

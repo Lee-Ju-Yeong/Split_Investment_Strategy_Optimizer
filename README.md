@@ -137,5 +137,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 ## 문서 맵
 - 전략 원칙: `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`
 - DB 스키마: `docs/database/schema.md`
+- 운영 문서 정책: `docs/operations/README.md`
+- KRX 핫스팟/DB 터널 Runbook(공개판): `docs/operations/krx_hotspot_db_tunnel_runbook.md`
 - 작업 백로그: `TODO.md`
 - 이슈 작업 문서: `todos/`

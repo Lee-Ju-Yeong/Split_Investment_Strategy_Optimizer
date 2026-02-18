@@ -1,6 +1,8 @@
 import pandas as pd
 import warnings
+from mysql.connector import pooling
 from functools import lru_cache
+from datetime import timedelta
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
@@ -11,48 +13,14 @@ class PointInTimeViolation(ValueError):
 
 
 class DataHandler:
-    def __init__(self, db_config, *, load_company_cache=True):
+    def __init__(self, db_config):
         self.db_config = db_config
         try:
-            try:
-                from mysql.connector import pooling as mysql_pooling
-            except ModuleNotFoundError as err:
-                raise ModuleNotFoundError(
-                    "mysql-connector-python is required for DataHandler DB access. "
-                    "Install it (e.g. `pip install mysql-connector-python`) in your active environment."
-                ) from err
-
-            base_pool_kwargs = dict(self.db_config)
-            try:
-                self.connection_pool = mysql_pooling.MySQLConnectionPool(
-                    pool_name="data_pool",
-                    pool_size=10,
-                    **base_pool_kwargs,
-                )
-            except Exception as pool_err:
-                error_msg = str(pool_err).lower()
-                need_pure_fallback = (
-                    "mysql_native_password" in error_msg
-                    and "cannot be loaded" in error_msg
-                    and not bool(base_pool_kwargs.get("use_pure", False))
-                )
-                if not need_pure_fallback:
-                    raise
-
-                pure_pool_kwargs = dict(base_pool_kwargs)
-                pure_pool_kwargs["use_pure"] = True
-                self.connection_pool = mysql_pooling.MySQLConnectionPool(
-                    pool_name="data_pool_pure",
-                    pool_size=10,
-                    **pure_pool_kwargs,
-                )
-                self.db_config = pure_pool_kwargs
-                print(
-                    "[DataHandler] mysql_native_password C-extension load failed. "
-                    "Retrying with use_pure=True."
-                )
-            if load_company_cache:
-                self._load_company_info_cache()
+            self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
+                                                               pool_size=10,
+                                                               use_pure=True,
+                                                               **self.db_config)
+            self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
             raise
@@ -103,10 +71,10 @@ class DataHandler:
 
     def get_trading_dates(self, start_date, end_date):
         conn = self.get_connection()
-        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         try:
             query = "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date"
+            start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+            end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 # pd.read_sql 사용 시 날짜 파싱이 더 안정적
@@ -118,7 +86,9 @@ class DataHandler:
     @lru_cache(maxsize=200)
     def load_stock_data(self, ticker, start_date, end_date):
         conn = self.get_connection()
-        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+        # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
+        extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
+        extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
         end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
@@ -133,7 +103,7 @@ class DataHandler:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=(ticker, start_date_str, end_date_str))
+                df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
             if df.empty:
                 return df
 
@@ -172,20 +142,7 @@ class DataHandler:
         return data_row
 
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
-        stock_data = self.load_stock_data(ticker, start_date, end_date)
-        if stock_data is None or stock_data.empty:
-            return None
-
-        target_date = pd.to_datetime(date)
-        if target_date not in stock_data.index:
-            return None
-
-        row = stock_data.loc[target_date]
-        if isinstance(row, pd.DataFrame):
-            row = row.iloc[-1]
-        row = row.copy()
-        row.name = target_date
-        return row
+        return self.get_stock_row_as_of(ticker, date, start_date, end_date)
 
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()
@@ -301,41 +258,47 @@ class DataHandler:
             return []
         return [code for code in candidate_codes if code in tier_map]
 
-    def get_market_caps_as_of(self, as_of_date, tickers):
-        tickers = list(tickers) if tickers else []
-        if not tickers:
-            return {}
-
-        conn = self.get_connection()
-        as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
-        ticker_placeholders = ", ".join(["%s"] * len(tickers))
-        query = f"""
-            SELECT m.stock_code, m.date, m.market_cap
-            FROM MarketCapDaily m
-            JOIN (
-                SELECT stock_code, MAX(date) AS max_date
-                FROM MarketCapDaily
-                WHERE date <= %s AND stock_code IN ({ticker_placeholders})
-                GROUP BY stock_code
-            ) latest ON m.stock_code = latest.stock_code AND m.date = latest.max_date
-            ORDER BY m.stock_code
+    def get_pit_universe_codes_as_of(self, as_of_date):
         """
-        params = [as_of_date_str, *tickers]
+        Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
+        1) TickerUniverseSnapshot latest(as_of)
+        2) empty면 TickerUniverseHistory active(as_of) fallback
+        Returns:
+            (codes, source)
+        """
+        as_of_ts = pd.to_datetime(as_of_date)
+        as_of_date_str = as_of_ts.strftime("%Y-%m-%d")
+        conn = self.get_connection()
         try:
+            snapshot_query = """
+                SELECT stock_code
+                FROM TickerUniverseSnapshot
+                WHERE snapshot_date = (
+                    SELECT MAX(snapshot_date)
+                    FROM TickerUniverseSnapshot
+                    WHERE snapshot_date <= %s
+                )
+                ORDER BY stock_code
+            """
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                df = pd.read_sql(query, conn, params=params)
-            if df.empty:
-                return {}
+                snapshot_df = pd.read_sql(snapshot_query, conn, params=[as_of_date_str])
+            if not snapshot_df.empty:
+                return snapshot_df["stock_code"].tolist(), "SNAPSHOT_ASOF"
 
-            result = {}
-            for _, row in df.iterrows():
-                self.assert_point_in_time(row["date"], as_of_date)
-                mcap_val = row.get("market_cap")
-                result[row["stock_code"]] = None if pd.isna(mcap_val) else float(mcap_val)
-            return result
-        except Exception:
-            return {}
+            history_query = """
+                SELECT stock_code
+                FROM TickerUniverseHistory
+                WHERE listed_date <= %s
+                  AND (delisted_date IS NULL OR delisted_date > %s)
+                ORDER BY stock_code
+            """
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                history_df = pd.read_sql(history_query, conn, params=[as_of_date_str, as_of_date_str])
+            if not history_df.empty:
+                return history_df["stock_code"].tolist(), "HISTORY_ACTIVE_ASOF"
+            return [], "NO_UNIVERSE"
         finally:
             conn.close()
 
@@ -359,24 +322,18 @@ class DataHandler:
             return []
         return df["stock_code"].tolist()
 
-    def get_candidates_with_tier_fallback(self, date, allow_tier2_fallback=True):
+    def get_candidates_with_tier_fallback(self, date):
         """
-        Issue #67: Tier 1 우선, 필요 시 Tier <= 2 fallback.
-        Args:
-            allow_tier2_fallback: False면 Tier 1 only 정책으로 동작.
+        Issue #67: Tier 1 우선, 없으면 Tier <= 2로 fallback.
         Returns:
             (candidates_list, tier_used_str)
         """
         conn = self.get_connection()
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
-        allow_tier2_fallback = bool(allow_tier2_fallback)
         try:
             tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
             if tier1_codes:
                 return tier1_codes, "TIER_1"
-
-            if not allow_tier2_fallback:
-                return [], "NO_TIER1_CANDIDATES"
 
             tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
             if tier12_codes:
@@ -385,3 +342,96 @@ class DataHandler:
             return [], "NO_CANDIDATES"
         finally:
             conn.close()
+
+    def get_candidates_with_tier_fallback_pit(self, date):
+        """
+        Issue #67 Phase2:
+        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
+        Returns:
+            (candidates_list, source)
+        """
+        return self.get_candidates_with_tier_fallback_pit_gated(
+            date=date,
+            min_liquidity_20d_avg_value=None,
+            min_tier12_coverage_ratio=None,
+        )
+
+    def _filter_by_min_liquidity(self, tier_map, min_liquidity_20d_avg_value):
+        if min_liquidity_20d_avg_value is None:
+            return tier_map
+
+        min_liq = int(min_liquidity_20d_avg_value)
+        filtered = {}
+        for code, info in tier_map.items():
+            liq_val = info.get("liquidity_20d_avg_value")
+            if pd.isna(liq_val):
+                continue
+            if int(liq_val) >= min_liq:
+                filtered[code] = info
+        return filtered
+
+    def _enforce_tier12_coverage_gate(self, date, pit_size, tier1_count, tier12_count, min_tier12_coverage_ratio):
+        print(
+            f"[TierCoverage] date={pd.to_datetime(date).date()} "
+            f"tier1_count={tier1_count} tier12_count={tier12_count} universe_count={pit_size}"
+        )
+
+        if min_tier12_coverage_ratio is None or pit_size <= 0:
+            return
+
+        ratio = float(tier12_count) / float(pit_size)
+        threshold = float(min_tier12_coverage_ratio)
+        if ratio < threshold:
+            raise ValueError(
+                f"Tier coverage gate failed on {pd.to_datetime(date).date()}: "
+                f"tier12_ratio={ratio:.4f} < threshold={threshold:.4f} "
+                f"(tier12_count={tier12_count}, universe_count={pit_size})"
+            )
+
+    def get_candidates_with_tier_fallback_pit_gated(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        """
+        Issue #67 Phase2:
+        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
+        Optional gates:
+            - min_liquidity_20d_avg_value
+            - min_tier12_coverage_ratio
+        Returns:
+            (candidates_list, source)
+        """
+        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
+        if not pit_codes:
+            return [], f"NO_CANDIDATES_{pit_source}"
+
+        tier1_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=pit_codes,
+            allowed_tiers=[1],
+        )
+        tier1_map = self._filter_by_min_liquidity(tier1_map, min_liquidity_20d_avg_value)
+
+        tier12_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=pit_codes,
+            allowed_tiers=[1, 2],
+        )
+        tier12_map = self._filter_by_min_liquidity(tier12_map, min_liquidity_20d_avg_value)
+
+        self._enforce_tier12_coverage_gate(
+            date=date,
+            pit_size=len(pit_codes),
+            tier1_count=len(tier1_map),
+            tier12_count=len(tier12_map),
+            min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+        )
+
+        if tier1_map:
+            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
+
+        if tier12_map:
+            return [code for code in pit_codes if code in tier12_map], f"TIER_2_FALLBACK_{pit_source}"
+        return [], f"NO_CANDIDATES_{pit_source}"
