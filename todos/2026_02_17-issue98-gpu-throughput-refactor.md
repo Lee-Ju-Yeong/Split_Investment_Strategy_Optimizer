@@ -303,6 +303,7 @@
   - `src/backtest/gpu/data.py`
     - `build_ranked_candidate_payload` 추가
     - candidate metrics를 row/column 단위 `loc` 반복 조회하지 않고 한 번에 추출 후 필터/정렬 처리
+    - `_collect_candidate_rank_metrics_asof`를 `date<=signal_date` + `ticker별 latest 1건` 형태로 단순화
   - `src/backtest/gpu/engine.py`
     - 기존 per-ticker `loc` 루프를 helper 호출로 치환
 - 의도:
@@ -311,3 +312,5 @@
 - 테스트:
   - 신규: `tests/test_gpu_candidate_payload_builder.py`
     - 필터링/정렬/동률 ticker tie-break 동작 검증
+  - 신규: `tests/test_gpu_candidate_metrics_asof.py`
+    - `latest <= signal_date` 선택, 미래 행 배제, empty 입력 동작 검증
