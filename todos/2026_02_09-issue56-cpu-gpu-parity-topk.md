@@ -266,6 +266,8 @@ python -m src.cpu_gpu_parity_topk \
 - #98 항목별 gate 매핑:
   - `P-005/P-006/P-008/P-009` -> Release Gate(결정 레벨) 필수
   - `P-001/P-002/P-003/P-004/P-007/P-010/P-011/P-012/P-013/P-014` -> Smoke + strict 재검증
+- 성능 리팩토링 상세 의사결정:
+  - parity 비포기 원칙, risk-based 적용 순서(low/medium/high), 금지 패턴은 `todos/2026_02_17-issue98-gpu-throughput-refactor.md`의 `11-5`를 참조한다.
 - 표준 검증 순서:
   - 1) GPU snapshot 생성(`--pipeline-stage gpu`, `--parity-mode strict`)
   - 2) CPU replay(`--pipeline-stage cpu`, 동일 snapshot)
@@ -273,3 +275,52 @@ python -m src.cpu_gpu_parity_topk \
 - 병합 차단 규칙:
   - decision-level mismatch 1건 이상 발생 시 즉시 병합 중지
   - 원인 태깅(후보선정 drift/체결 drift/수치 오차) 완료 전 재시도 금지
+
+## 11. Parity Gate 운영 정책 (2026-02-18)
+- 본 문서(`#56`)를 parity gate 운영 정책의 단일 소스로 사용한다.
+- 운영 결론:
+  - PR마다 항상 full 13 시나리오를 강제하지 않는다.
+  - 대신 `Two-tier`로 운영한다.
+    - PR: 빠른 strict gate (시나리오 축 일부 + 최근 기간)
+    - Nightly: full 13 strict gate (시나리오 축 전체 + 장기 기간)
+- 근거:
+  - 시나리오 축(`baseline/seeded/jackknife`)은 순열/경계 drift 탐지에 강함
+  - 기간 축(긴 date window)은 PIT/시간축 drift 탐지에 강함
+  - 두 축은 대체 관계가 아니라 보완 관계이므로 분리 운영이 합리적
+
+### 11-1. PR 빠른 게이트 (필수)
+```bash
+python -m src.cpu_gpu_parity_topk \
+  --pipeline-stage all \
+  --start-date 2026-01-19 \
+  --end-date 2026-02-18 \
+  --top-k 3 \
+  --scenario all \
+  --seeded-stress-count 2 \
+  --jackknife-max-drop 1 \
+  --parity-mode strict \
+  --candidate-source-mode tier \
+  --fail-on-mismatch
+```
+
+### 11-2. Nightly full 게이트 (필수)
+```bash
+python -m src.cpu_gpu_parity_topk \
+  --pipeline-stage all \
+  --start-date 2025-01-01 \
+  --end-date 2026-02-18 \
+  --top-k 3 \
+  --scenario all \
+  --seeded-stress-count 10 \
+  --jackknife-max-drop 2 \
+  --parity-mode strict \
+  --candidate-source-mode tier \
+  --fail-on-mismatch
+```
+
+### 11-3. PR에서도 full 13을 즉시 강제하는 조건
+- `src/backtest/gpu/engine.py`, `src/backtest/gpu/logic.py`, `src/backtest/gpu/data.py`, `src/backtest/gpu/utils.py` 변경
+- `src/backtest/cpu/strategy.py`, `src/backtest/cpu/execution.py` 변경
+- PIT/as-of/tier/data loading 경로(`src/optimization/gpu/data_loading.py`, `src/data_handler.py`) 변경
+- 후보군/정렬/top-k/candidate source 모드 규칙 변경
+- PR 빠른 게이트에서 mismatch 1건 이상 발생

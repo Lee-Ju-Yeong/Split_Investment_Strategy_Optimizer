@@ -51,6 +51,8 @@
   - `#56` strict parity(`decision-level`) `0 mismatch` 통과
 - Gate C (반영):
   - 운영 배포 전 승인 + 롤백 절차 검증 완료
+- 게이트 운영 정책 소스:
+  - PR/Nightly two-tier 및 full-13 강제 조건은 `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`의 `11`장을 단일 소스로 따른다.
 
 ## 5. 측정/검증 기준 (반드시 Before/After)
 - 동일 기간/모드/파라미터 고정
@@ -66,7 +68,7 @@
 
 ## 6. 실행 체크리스트
 - [ ] Gate A: `P-001~P-014`의 `PC/PO` 분류와 PR 매핑 확정
-- [ ] PR-98A: `P-001~P-004` fallback 축소/정리
+- [x] PR-98A: `P-001~P-004` fallback 축소/정리
 - [ ] PR-98B(PC): `P-005/P-006/P-008/P-009` CPU/GPU 동시 수정 + parity 통과
 - [ ] PR-98C(PO): `P-007/P-010/P-011/P-012/P-013` 캐시/동기화/I/O 최적화
 - [ ] PR-98D: `P-014` 성능 회귀 가드/벤치마크 테스트 반영
@@ -108,14 +110,14 @@
   - 결과: decision-level `mismatch=0` 확인
 
 ### 8-2. PR-98A (PO) fallback 정리
-- [ ] `src/optimization/gpu/kernel.py`
+- [x] `src/optimization/gpu/kernel.py`
   - `get_optimal_batch_size` 실패 시 fallback 경계/최소치 명시
   - 불능 상태는 로그 + fail-fast 기준 추가
-- [ ] `src/optimization/gpu/parameter_simulation.py`
+- [x] `src/optimization/gpu/parameter_simulation.py`
   - batch-size fallback 축소 및 안전 기본치 적용
-- [ ] `src/pipeline/ohlcv_batch.py`
+- [x] `src/pipeline/ohlcv_batch.py`
   - `--allow-legacy-fallback` 운영 경로 분리/제한
-- [ ] `src/data/collectors/financial_collector.py`
+- [x] `src/data/collectors/financial_collector.py`
   - snapshot 미존재 fallback 축소
 - [ ] 검증:
   - strict parity 재실행(`mismatch=0`)
@@ -168,3 +170,113 @@
 - PC 변경에서 strict parity `mismatch>0`이면 병합 금지
 - PO 변경에서 throughput 개선이 없고 리스크만 증가하면 병합 보류
 - 측정 결과 누락 시 Gate B 미통과 처리
+
+## 10. PR-98A 반영 내역 (2026-02-18)
+- `src/optimization/gpu/kernel.py`
+  - 가용 GPU 메모리 조회 경로를 `nvidia-smi` -> `cupy.runtime.memGetInfo` 순서로 확장
+  - 메모리 조회 불가/부족 원인을 배치 크기 계산 로그에 명확히 출력
+- `src/optimization/gpu/parameter_simulation.py`
+  - batch-size 자동 계산 실패 시 `ctx.num_combinations` all-in fallback 제거
+  - fallback 우선순위: `simulation_batch_size` -> adaptive safe default(목표 batch 수 기반, 상한/하한 적용)
+- `src/data/collectors/financial_collector.py`
+  - ticker universe 조회에 `allow_legacy_fallback`(default false) 도입
+  - snapshot/history 비어 있을 때 기본 fail-fast, opt-in 시에만 legacy fallback 허용 + deprecated 경고
+  - 실행 summary에 `universe_source`, `legacy_fallback_*` 지표 추가
+- `src/pipeline/batch.py`
+  - `--allow-financial-legacy-fallback` CLI 추가(기본 off, deprecated)
+  - financial collector 호출에 legacy fallback 플래그 전달
+- 테스트
+  - `tests/test_pipeline_batch.py` (새 플래그 전달/파서 검증)
+  - `tests/test_financial_collector_universe.py` (fail-fast/opt-in legacy/summary 검증)
+  - `tests/test_gpu_parameter_batch_fallback.py` (배치 fallback 정책 검증)
+  - `tests/test_gpu_kernel_batch_size.py` (`nvidia-smi`/runtime fallback 순서 검증)
+  - 실행: `conda run -n rapids-env python -m unittest tests.test_pipeline_batch tests.test_ohlcv_batch tests.test_financial_collector_universe tests.test_gpu_parameter_batch_fallback tests.test_gpu_kernel_batch_size`
+
+## 11. Tier-only 병목 검토 메모 (멀티에이전트, 2026-02-18)
+- 검토 범위: `candidate_source_mode=tier` 경로
+- 제약: CPU=SSOT, strict parity `mismatch=0`, 전략/체결 규칙 불변
+- 관찰 요약:
+  - 최근 실행에서 로딩 단계가 `12~20s`, 단일 배치 kernel은 `~0.61s`
+  - Tier1 스캔 자체(`cp.where(signal_tiers == 1)`)는 상대적으로 경량
+  - 병목은 후보 후처리의 host-device 왕복/정렬/순차 루프에 집중
+
+### 11-1. 합의된 병목/리스크 항목
+| id | class | location | issue | note |
+| --- | --- | --- | --- | --- |
+| T-001 | PO | `src/backtest/gpu/engine.py` | `all_data_gpu.reset_index()` 중복 materialize | 로딩 비용 증가, 의미 변화 없음 |
+| T-002 | PO | `src/backtest/gpu/engine.py` | tier 모드에서도 `weekly_filtered_reset_idx` 선계산 | 미사용 연산 비용 |
+| T-003 | PO | `src/backtest/gpu/data.py` | 텐서 생성 시 동일 인덱스 변환 반복 | D2D 준비 단계 오버헤드 |
+| T-004 | PC | `src/backtest/gpu/engine.py`, `src/backtest/gpu/data.py` | `tolist()/to_pylist()/loc` 중심 후보 메트릭 처리 | host sync + parity 민감 구간 |
+| T-005 | PC | `src/backtest/gpu/utils.py` | Python `sorted` 기반 랭킹 | tie-break drift 시 parity 위험 |
+| T-006 | PC | `src/backtest/gpu/logic.py` | `_process_new_entry_signals_gpu`의 후보 순차 루프 | 후보 수 증가 시 throughput 급락 |
+
+### 11-2. PR-98B 세분화 제안 (tier-only 우선)
+- `PR-98B-1 (PO, 저위험)`:
+  - `T-001`, `T-002`, `T-003` 우선 반영
+  - 목표: 의미 불변 상태에서 로딩/준비 단계 비용 절감
+- `PR-98B-2 (PC, 정렬/메트릭)`:
+  - `T-004`, `T-005` 반영
+  - 목표: 후보 메트릭/정렬 경로 GPU 중심 재구성 + 결정론 계약 고정
+- `PR-98B-3 (PC, 신규진입 hot path)`:
+  - `T-006` 반영
+  - 목표: 순차 루프 축소하되 CPU와 동일한 슬롯/자본차감 semantics 유지
+
+### 11-3. 각 단계 공통 게이트
+- 성능:
+  - 동일 기간/파라미터로 wall-time, kernel 시간, 준비 단계 시간 비교
+- 정합:
+  - `python -m src.cpu_gpu_parity_topk --pipeline-stage all --parity-mode strict --candidate-source-mode tier`
+  - 합격 기준: decision-level `mismatch=0`
+- 롤백:
+  - 단계별 PR 분리 유지, parity 실패 시 해당 단계만 즉시 revert
+
+### 11-4. GPU Tier Tensor PIT 정합성 버그 (2026-02-18)
+- class: `PC` (Parity-Coupled)
+- 위치: `src/optimization/gpu/data_loading.py` (`preload_tier_data_to_tensor`)
+- 원인:
+  - 기존 구현이 `reindex(trading_dates)` 후 `ffill`을 수행해 `start_date` 이전 tier 이력이 먼저 소실됨
+  - 결과적으로 `latest tier <= signal_date` PIT 규칙이 깨져 일부 종목이 GPU에서 tier=0 처리됨
+- 영향:
+  - 재현 케이스(2026-01-08, strict parity, tier 모드)에서 `196170`이 GPU 후보군에서 탈락
+  - `005490`가 top-k 슬롯으로 밀려 조기 신규진입되고 buy mismatch 연쇄 발생
+- 수정:
+  - `union_index = df_wide.index.union(trading_dates_pd)` 기준으로 먼저 reindex+ffill
+  - 그 다음 `trading_dates_pd`로 slice하여 as-of tier를 보존
+  - ticker 컬럼/축을 문자열로 정규화해 매핑 drift 방지
+- 검증:
+  - `python -m src.parity_sell_event_dump --start-date 2026-01-05 --end-date 2026-01-09 --params-csv results/parity_debug_param0.csv --param-id 0 --candidate-source-mode tier --parity-mode strict --out results/parity_sell_debug_after_tierfix_20260218_125948.json --gpu-log-out results/parity_sell_debug_after_tierfix_20260218_125948.gpu.log`
+  - 결과: `sell_mismatched_pairs=0`, `buy_mismatched_pairs=0`
+  - 회귀 테스트 추가: `tests/test_gpu_tier_tensor_pit.py`
+
+### 11-5. 정합성 비포기 결정 및 단계형 최적화 원칙 (2026-02-18)
+- 결론:
+  - throughput 개선을 위해 parity 정합성을 완화하지 않는다.
+  - CPU=SSOT 원칙과 strict parity `mismatch=0`는 유지한다.
+- 판단 근거:
+  - 현재 지연의 주 병목은 GPU 커널 자체보다 후보군 준비/정렬/신규진입의 host-device 왕복 및 Python 루프 구간에 집중됨
+  - 즉, 정합성 규칙을 깨지 않고도 구현 경로 최적화로 개선 여지가 충분함
+
+#### 11-5-1. Non-Negotiable Invariants
+- `signal_date`/PIT(`as-of <= date`) 일치
+- 정렬 키 일치(`tier -> market_cap -> atr -> ticker`)
+- 신규진입 슬롯 배정/자본 차감 순서 일치
+- 체결가/호가/수수료 floor 규칙 일치
+- float32 연산 규약 일치
+- 매도 -> 신규진입 -> 추가매수 처리 순서 일치
+
+#### 11-5-2. 적용 순서 (Risk-Based)
+- 1단계 (Low Risk, 우선):
+  - `src/backtest/gpu/engine.py`의 `tolist()/to_pylist()/Python loc loop` 축소
+  - 목표: host 왕복 비용 감소, 의미 불변
+- 2단계 (Medium Risk):
+  - `src/backtest/gpu/data.py`의 `_collect_candidate_rank_metrics_asof` 반복 필터/concat 배치화
+  - 목표: 일별 as-of 조회 비용 절감, PIT 계약 유지
+- 3단계 (High Risk, 마지막):
+  - `src/backtest/gpu/logic.py` 신규진입 순차 루프 최적화
+  - 목표: 후보 수 증가 구간 성능 개선, 슬롯/자본 semantics 보존
+
+#### 11-5-3. 금지/주의 패턴
+- parity 검증 없이 정렬/슬롯/체결 규칙 변경
+- `float64` 혼용 또는 CPU와 다른 rounding 경로 도입
+- GPU 후보 결과를 Python 리스트로 반복 왕복하며 임의 재정렬
+- PIT 조회 기준(`as-of`) 변경 후 strict gate 미실행
