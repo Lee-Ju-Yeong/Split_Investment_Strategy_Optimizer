@@ -104,8 +104,9 @@ def _build_history_unavailable_message(start_date, end_date):
     return (
         "TickerUniverseHistory returned no rows "
         f"for requested range [{start_date}, {end_date}]. "
-        "Run `python -m src.ticker_universe_batch --mode backfill` first "
-        "or pass `--allow-legacy-fallback` explicitly."
+        "Run `python -m src.ticker_universe_batch --mode backfill` first. "
+        "Legacy fallback is deprecated and should be used only for emergency recovery "
+        "via `--allow-legacy-fallback`."
     )
 
 
@@ -132,7 +133,7 @@ def get_ohlcv_ticker_universe(
         )
 
     print(
-        "[ohlcv_batch] warning using legacy fallback "
+        "[ohlcv_batch] warning using legacy fallback (DEPRECATED) "
         f"requested_range=[{requested_start_date}, {requested_end_date}]"
     )
     legacy_ranges = _fetch_legacy_universe_ranges(
@@ -446,7 +447,7 @@ def _build_arg_parser():
     parser.add_argument(
         "--allow-legacy-fallback",
         action="store_true",
-        help="Use legacy universe sources when TickerUniverseHistory has no rows.",
+        help="DEPRECATED: use legacy universe sources when TickerUniverseHistory has no rows.",
     )
     return parser
 

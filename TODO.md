@@ -19,6 +19,7 @@
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k, 부분 충족/재오픈): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
 - [ ] 이슈 #97 레거시 코드 전수조사 + 단계적 제거 거버넌스: `todos/2026_02_17-issue97-legacy-code-audit-governance.md`
+- [ ] 이슈 #98 GPU Throughput 리팩토링 + 성능 저하 fallback 제거: `todos/2026_02_17-issue98-gpu-throughput-refactor.md`
 
 ## 전체 우선순위 (Global Backlog)
 
@@ -125,11 +126,23 @@
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
 - [ ] 레거시 코드 전수조사 및 단계적 제거 거버넌스 수립 (이슈 #97): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/97
-  - [ ] 전수조사 인벤토리(코드/설정/실행경로) 작성
+  - [x] 전수조사 인벤토리 1차 작성(핵심 실행경로/호환 wrapper/fallback/유휴 스크립트)
+    - 근거 문서: `todos/2026_02_17-issue97-legacy-code-audit-governance.md` (2026-02-17 갱신)
+  - [x] 저위험 archive 이동(3건): `reproduce_issue*.py`, `src/tier_parity_monitor.py`
+  - [x] fallback 축소 1차: `L-003(strict Tier1-only query)`, `L-005(legacy fallback deprecated 명시)`
+  - [ ] strict-only 1단계: `strict_hysteresis_v1`만 허용(legacy 입력 fail-fast)
+  - [ ] strict-only 2단계: 운영 지표 관찰(최소 2주, `empty_entry_day_rate` 포함)
+  - [ ] strict-only 3단계: non-strict 코드/테스트/문서 완전 삭제
   - [ ] 사용자 확인 게이트 A: 인벤토리 확정
   - [ ] 사용자 확인 게이트 B: 제거 대상 확정(항목별 승인)
   - [ ] 승인된 항목만 단계적 제거 PR 진행
   - [ ] 사용자 확인 게이트 C: 배포 전 최종 승인
+- [ ] GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (이슈 #98): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98
+  - [ ] Scope 고정: #97(거버넌스)와 분리 운영
+  - [ ] 병목 1차: batch-size fallback 정리(`src/optimization/gpu/kernel.py`, `src/optimization/gpu/parameter_simulation.py`)
+  - [ ] 병목 2차: 과대 universe fallback 정리(`src/pipeline/ohlcv_batch.py`, `src/data/collectors/financial_collector.py`)
+  - [ ] 성능 증적: 동일 조건 wall-time / kernel launch / GPU util 비교
+  - [ ] 안정성 게이트: strict parity mismatch `0` 유지
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
 - [x] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
   - [x] Deprecation 정책/일정 문서화
