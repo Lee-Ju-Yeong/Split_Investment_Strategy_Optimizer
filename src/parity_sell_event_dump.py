@@ -356,6 +356,22 @@ def _parse_gpu_sell_events(log_text: str, sell_commission_rate: float, sell_tax_
     return events
 
 
+def _floor_fee_from_gross_cost(gross_cost: float, rate: float) -> float:
+    rate_text = f"{float(rate):.12f}".rstrip("0").rstrip(".")
+    if not rate_text or rate_text == "0":
+        return 0.0
+    if "." in rate_text:
+        decimals = len(rate_text.split(".", 1)[1])
+        scale = 10 ** decimals
+        numerator = int(round(float(rate_text) * scale))
+    else:
+        scale = 1
+        numerator = int(rate_text)
+
+    gross_int = int(round(gross_cost))
+    return float((gross_int * numerator) // scale)
+
+
 def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commission_rate: float) -> List[BuyEvent]:
     new_buy_re = re.compile(
         r"^\[GPU_NEW_BUY_CALC\]\s+"
@@ -386,7 +402,7 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
             qty = int(m_new.group("qty").replace(",", ""))
             exec_price = float(m_new.group("price").replace(",", ""))
             gross_cost = float(qty * exec_price)
-            commission = float(math.floor(gross_cost * float(buy_commission_rate)))
+            commission = _floor_fee_from_gross_cost(gross_cost, float(buy_commission_rate))
             total_cost = gross_cost + commission
             events.append(
                 BuyEvent(
@@ -413,7 +429,7 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
             qty = int(m_detail.group("qty").replace(",", ""))
             exec_price = float(m_detail.group("price").replace(",", ""))
             gross_cost = float(qty * exec_price)
-            commission = float(math.floor(gross_cost * float(buy_commission_rate)))
+            commission = _floor_fee_from_gross_cost(gross_cost, float(buy_commission_rate))
             total_cost = gross_cost + commission
             events.append(
                 BuyEvent(
