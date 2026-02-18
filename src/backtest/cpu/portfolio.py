@@ -9,7 +9,7 @@ import uuid # 고유 ID 생성을 위해 추가
 # DataHandler 타입 힌트를 위해 추가 (실제 임포트는 아님)
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from .data_handler import DataHandler
+    from ...data_handler import DataHandler
 
 class Position:
     # --- [수정] entry_date 제거 ---

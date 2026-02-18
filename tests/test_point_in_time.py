@@ -7,9 +7,9 @@ import sys
 import os
 
 # src 폴더를 sys.path에 추가하여 모듈 임포트
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from data_handler import DataHandler, PointInTimeViolation
-from strategy import MagicSplitStrategy
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.data_handler import DataHandler, PointInTimeViolation
+from src.backtest.cpu.strategy import MagicSplitStrategy
 
 
 class DummyPortfolio:

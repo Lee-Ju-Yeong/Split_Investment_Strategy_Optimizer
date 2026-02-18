@@ -20,6 +20,10 @@
   - universe mode 메타데이터(`weekly|hybrid_transition|tier`) 포함
 
 ## 3. 체크리스트
+- [x] 노트북 개발 지원: `src/walk_forward_analyzer.py`가 GPU deps(`cupy`, `cudf`) 없이도 import 가능하도록 lazy import 적용
+  - 브랜치: `feature/issue68-wfo-import-safe-no-gpu`
+  - 커밋: `890aa30d5fe65ce8fb352b96106933898ab3ad65`
+  - 테스트: `python -m unittest tests.test_issue68_wfo_import_side_effects`
 - [ ] robust score 실험식 고정: `(mean - k*std) * log1p(cluster_size)`
 - [ ] gate 고정: `median(OOS/IS) >= 0.60`, `fold_pass_rate >= 70%`, `OOS_MDD_p95 <= 25%`
 - [ ] 행동지표 feature 실험: `trade_count`, `avg_hold_days`

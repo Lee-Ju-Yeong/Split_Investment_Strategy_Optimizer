@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.ticker_universe_batch import (
+from src.pipeline.ticker_universe_batch import (
     build_snapshot_dates,
     rebuild_ticker_universe_history,
     run_snapshot_batch,
@@ -35,13 +35,13 @@ class TestTickerUniverseBatch(unittest.TestCase):
         )
         self.assertEqual(dates, [date(2026, 2, 7)])
 
-    @patch("src.ticker_universe_batch.upsert_snapshot_rows", return_value=1)
+    @patch("src.pipeline.ticker_universe_batch.upsert_snapshot_rows", return_value=1)
     @patch(
-        "src.ticker_universe_batch.collect_snapshot_rows",
+        "src.pipeline.ticker_universe_batch.collect_snapshot_rows",
         return_value=[("2024-01-08", "005930", "KOSPI", None, "pykrx")],
     )
     @patch(
-        "src.ticker_universe_batch.get_existing_snapshot_dates",
+        "src.pipeline.ticker_universe_batch.get_existing_snapshot_dates",
         return_value={date(2024, 1, 1)},
     )
     def test_run_snapshot_batch_resume_skips_existing_dates(

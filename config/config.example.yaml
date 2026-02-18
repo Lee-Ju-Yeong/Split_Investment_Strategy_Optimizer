@@ -30,6 +30,11 @@ strategy_params:
   min_liquidity_20d_avg_value: 0
   min_tier12_coverage_ratio: 0.0
 
+  # [Issue #67] Entry/Hold Hysteresis Policy
+  # legacy: Entry(Tier1 -> fallback Tier2), Hold/Add path ignores Tier recheck
+  # strict_hysteresis_v1: Entry(Tier1 only, empty=>skip), Hold/Add(Tier<=2), Tier3 forced liquidation
+  tier_hysteresis_mode: "legacy"
+
 execution_params:
   buy_commission_rate: 0.00015
   sell_commission_rate: 0.00015
@@ -37,6 +42,22 @@ execution_params:
 
 paths:
   results_dir: "results"
+
+# Data pipeline (src/main_script.py)
+# - relative paths are resolved from project root
+data_pipeline:
+  paths:
+    condition_search_files_folder: "data/raw_data"
+    processed_data_folder: "data/processed_data"
+    filtered_stocks_csv_path: "data/processed_data/mapped_weekly_filtered_stocks_FINAL.csv"
+  flags:
+    use_gpu: false
+    update_company_info_db: false
+    process_hts_csv_files: false
+    load_filtered_stocks_csv: true
+    collect_ohlcv_data: true
+    force_recollect_ohlcv: false
+    calculate_indicators: true
 
 parameter_space:
   max_stocks:

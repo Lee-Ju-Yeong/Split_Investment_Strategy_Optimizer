@@ -38,6 +38,15 @@
 > -   **GPU:** `_process_new_entry_signals_gpu` 함수에서 후보군 전체의 ATR 값을 벡터로 가져온 뒤, `cp.argsort`를 사용하여 모든 시뮬레이션에 대해 동시에 정렬을 수행합니다.
 > -   **결과는 동일:** 두 방식 모두 동일한 정렬 기준을 따릅니다.
 
+### 3. Entry/Hold 히스테리시스
+
+-   **정책 모드:** `strategy_params.tier_hysteresis_mode`로 제어합니다.
+    - `legacy`(기본): Entry는 `tier=1 -> empty면 tier<=2 fallback`, Hold/Add는 별도 Tier 재평가 없이 동작
+    - `strict_hysteresis_v1`: Entry는 Tier1 only(비면 skip), Hold/Add는 Tier<=2만 허용, Tier3는 강제 청산
+-   **Entry 경로:** `candidate_source_mode`가 `tier`/`hybrid_transition`일 때 Tier 후보군을 사용합니다. strict 모드에서는 `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
+-   **Hold/Add 경로:** `generate_additional_buy_signals`는 T+0 진입 제외(T+1부터 허용), `cooldown_tracker`, `max_splits_limit`, `additional_buy_drop_rate`를 적용합니다. strict 모드에서는 T-1 Tier 조회에서 `tier<=2`인 보유 종목에만 추가 매수를 허용합니다.
+-   **Tier3 리스크 경로:** strict 모드에서는 `generate_sell_signals`/GPU sell 커널에서 T-1 Tier가 `3`인 보유 종목을 강제 청산합니다.
+
 ## III. 매수 원칙 (Buy Principles)
 
 ### 1. 공통 규칙

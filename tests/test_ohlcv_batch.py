@@ -8,7 +8,7 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.ohlcv_batch import (
+from src.pipeline.ohlcv_batch import (
     _build_universe_ranges_from_history_rows,
     _resolve_effective_collection_window,
     get_ohlcv_ticker_universe,
@@ -44,7 +44,7 @@ class TestOhlcvBatch(unittest.TestCase):
         universe_end = date(2026, 2, 7)
 
         with patch(
-            "src.ohlcv_batch.ohlcv_collector.get_latest_ohlcv_date_for_ticker",
+            "src.pipeline.ohlcv_batch.ohlcv_collector.get_latest_ohlcv_date_for_ticker",
             return_value=date(2024, 1, 31),
         ):
             effective_start, effective_end = _resolve_effective_collection_window(
@@ -63,7 +63,7 @@ class TestOhlcvBatch(unittest.TestCase):
         universe_end = date(2026, 2, 7)
 
         with patch(
-            "src.ohlcv_batch.ohlcv_collector.get_latest_ohlcv_date_for_ticker",
+            "src.pipeline.ohlcv_batch.ohlcv_collector.get_latest_ohlcv_date_for_ticker",
             return_value=universe_end,
         ):
             effective_start, effective_end = _resolve_effective_collection_window(
@@ -76,8 +76,8 @@ class TestOhlcvBatch(unittest.TestCase):
         self.assertIsNone(effective_start)
         self.assertIsNone(effective_end)
 
-    @patch("src.ohlcv_batch._fetch_legacy_universe_ranges")
-    @patch("src.ohlcv_batch._fetch_history_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
     def test_get_ohlcv_ticker_universe_prefers_history(
         self,
         mock_fetch_history,
@@ -100,8 +100,8 @@ class TestOhlcvBatch(unittest.TestCase):
         self.assertEqual(ranges, [("005930", date(2010, 1, 1), date(2026, 2, 7))])
         mock_fetch_legacy.assert_not_called()
 
-    @patch("src.ohlcv_batch._fetch_legacy_universe_ranges")
-    @patch("src.ohlcv_batch._fetch_history_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
     def test_get_ohlcv_ticker_universe_falls_back_to_legacy(
         self,
         mock_fetch_history,
@@ -123,8 +123,8 @@ class TestOhlcvBatch(unittest.TestCase):
         self.assertEqual(ranges, [("005930", date(2010, 1, 1), date(2026, 2, 7))])
         mock_fetch_legacy.assert_called_once()
 
-    @patch("src.ohlcv_batch._fetch_legacy_universe_ranges")
-    @patch("src.ohlcv_batch._fetch_history_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
+    @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
     def test_get_ohlcv_ticker_universe_raises_when_history_empty_without_fallback(
         self,
         mock_fetch_history,
@@ -144,10 +144,10 @@ class TestOhlcvBatch(unittest.TestCase):
             )
         mock_fetch_legacy.assert_not_called()
 
-    @patch("src.ohlcv_batch.upsert_ohlcv_rows", return_value=2)
-    @patch("src.ohlcv_batch._resolve_effective_collection_window")
-    @patch("src.ohlcv_batch.get_ohlcv_ticker_universe")
-    @patch("src.ohlcv_batch.ohlcv_collector.get_market_ohlcv_with_fallback")
+    @patch("src.pipeline.ohlcv_batch.upsert_ohlcv_rows", return_value=2)
+    @patch("src.pipeline.ohlcv_batch._resolve_effective_collection_window")
+    @patch("src.pipeline.ohlcv_batch.get_ohlcv_ticker_universe")
+    @patch("src.pipeline.ohlcv_batch.ohlcv_collector.get_market_ohlcv_with_fallback")
     def test_run_ohlcv_batch_tracks_legacy_fallback_counter(
         self,
         mock_get_ohlcv,
