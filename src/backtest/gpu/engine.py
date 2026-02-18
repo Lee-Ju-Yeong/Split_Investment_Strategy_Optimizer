@@ -9,14 +9,18 @@ import cudf
 import cupy as cp
 import pandas as pd
 
-from .data import _collect_candidate_rank_metrics_asof, create_gpu_data_tensors
+from .data import (
+    _collect_candidate_rank_metrics_asof,
+    build_ranked_candidate_payload,
+    create_gpu_data_tensors,
+)
 from .logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
 )
-from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_market_cap_then_atr_then_ticker
+from .utils import _resolve_signal_date_for_gpu
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -192,35 +196,12 @@ def run_magic_split_strategy_on_gpu(
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    valid_tickers = valid_candidate_metrics_df.index.to_arrow().to_pylist()
-                    candidate_records = []
-                    for ticker in valid_tickers:
-                        if ticker not in ticker_to_idx:
-                            continue
-
-                        atr_value = valid_candidate_metrics_df.loc[ticker, "atr_14_ratio"]
-                        if pd.isna(atr_value):
-                            continue
-
-                        atr_float = float(atr_value)
-                        if atr_float <= 0.0:
-                            continue
-
-                        market_cap_value = valid_candidate_metrics_df.loc[ticker, "market_cap"]
-                        if pd.isna(market_cap_value):
-                            market_cap_q = 0
-                        else:
-                            market_cap_float = float(market_cap_value)
-                            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
-
-                        atr_q = int(round(atr_float * 10000))
-                        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
-
-                    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
+                    candidate_indices_final, valid_atrs_final, ranked_records = build_ranked_candidate_payload(
+                        valid_candidate_metrics_df=valid_candidate_metrics_df,
+                        ticker_to_idx=ticker_to_idx,
+                    )
 
                     if ranked_records:
-                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
-                        valid_atrs_final = [atr for _, _, _, atr in ranked_records]
                         candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
                         candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
                         if debug_mode:
