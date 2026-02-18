@@ -172,7 +172,15 @@ class MagicSplitStrategy(Strategy):
                 get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
                 if callable(get_tier_candidates):
                     try:
-                        tier_codes, used_tier = get_tier_candidates(signal_date)
+                        strict_hysteresis = self._use_strict_hysteresis()
+                        try:
+                            tier_codes, used_tier = get_tier_candidates(
+                                signal_date,
+                                allow_tier2_fallback=not strict_hysteresis,
+                            )
+                        except TypeError:
+                            # Backward-compat: legacy signature(date)만 가진 구현체 지원
+                            tier_codes, used_tier = get_tier_candidates(signal_date)
                         candidate_codes = tier_codes
 
                         if used_tier == 'TIER_2_FALLBACK':
@@ -182,13 +190,19 @@ class MagicSplitStrategy(Strategy):
                                  len(candidate_codes),
                              )
 
-                        if self._use_strict_hysteresis() and used_tier == "TIER_2_FALLBACK":
+                        if strict_hysteresis and used_tier == "TIER_2_FALLBACK":
                             logger.debug(
                                 "[Strategy] %s | Strict hysteresis: Tier1 empty -> skip new entry",
                                 current_date.date(),
                             )
                             candidate_codes = []
                             used_tier = "NO_TIER1_CANDIDATES"
+
+                        if strict_hysteresis and used_tier == "NO_TIER1_CANDIDATES":
+                            logger.debug(
+                                "[Strategy] %s | Strict hysteresis: no Tier1 candidates (fail-close)",
+                                current_date.date(),
+                            )
 
                         if mode == "hybrid_transition" and self.use_weekly_alpha_gate:
                             weekly_codes = data_handler.get_filtered_stock_codes(current_date)
