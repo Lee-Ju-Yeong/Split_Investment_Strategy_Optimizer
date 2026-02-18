@@ -8,6 +8,8 @@ import cudf
 import cupy as cp
 import pandas as pd
 
+from .utils import _sort_candidates_by_market_cap_then_atr_then_ticker
+
 
 def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.ndarray]:
     day_indices = cp.asarray(data_valid["day_idx"].astype(cp.int32))
@@ -93,3 +95,36 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_tic
         return None
     dedup_rows = same_day_rows.drop_duplicates(subset=['ticker'], keep='first')
     return dedup_rows.set_index('ticker')[['atr_14_ratio', 'market_cap']]
+
+
+def build_ranked_candidate_payload(valid_candidate_metrics_df, ticker_to_idx):
+    if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
+        return [], [], []
+
+    metrics_rows = valid_candidate_metrics_df.reset_index()[["ticker", "atr_14_ratio", "market_cap"]]
+    tickers = metrics_rows["ticker"].to_arrow().to_pylist()
+    atr_values = metrics_rows["atr_14_ratio"].to_arrow().to_pylist()
+    market_caps = metrics_rows["market_cap"].to_arrow().to_pylist()
+
+    candidate_records = []
+    for ticker, atr_value, market_cap_value in zip(tickers, atr_values, market_caps):
+        if ticker not in ticker_to_idx or pd.isna(atr_value):
+            continue
+
+        atr_float = float(atr_value)
+        if atr_float <= 0.0:
+            continue
+
+        if pd.isna(market_cap_value):
+            market_cap_q = 0
+        else:
+            market_cap_float = float(market_cap_value)
+            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
+
+        atr_q = int(round(atr_float * 10000))
+        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
+
+    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
+    candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
+    valid_atrs_final = [atr for _, _, _, atr in ranked_records]
+    return candidate_indices_final, valid_atrs_final, ranked_records

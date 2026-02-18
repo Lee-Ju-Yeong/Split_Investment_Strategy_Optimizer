@@ -297,3 +297,17 @@
     - weekly 모드에서 weekly reset 유지 확인
     - all_data reset 결과 재사용 확인
   - 기존 회귀: `tests/test_gpu_tier_tensor_pit.py`
+
+### 11-7. PR-98B-2 준비 리팩토링: T-004 일부 (2026-02-18)
+- 반영 범위:
+  - `src/backtest/gpu/data.py`
+    - `build_ranked_candidate_payload` 추가
+    - candidate metrics를 row/column 단위 `loc` 반복 조회하지 않고 한 번에 추출 후 필터/정렬 처리
+  - `src/backtest/gpu/engine.py`
+    - 기존 per-ticker `loc` 루프를 helper 호출로 치환
+- 의도:
+  - host-device 왕복을 유발하는 반복 접근을 축소
+  - 정렬 규칙(`market_cap_q desc -> atr_q desc -> ticker asc`)과 필터 규칙은 유지
+- 테스트:
+  - 신규: `tests/test_gpu_candidate_payload_builder.py`
+    - 필터링/정렬/동률 ticker tie-break 동작 검증
