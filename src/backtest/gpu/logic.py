@@ -9,6 +9,8 @@ import cupy as cp
 import cudf
 import pandas as pd
 import time 
+from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
+from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
 
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
@@ -58,31 +60,10 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 
 def get_tick_size_gpu(price_array):
-    """ Vectorized tick size calculation on GPU. """
-    # cp.select는 내부적으로 큰 임시 배열들을 생성하여 메모리 사용량이 많습니다.
-    # cp.where를 연쇄적으로 사용하여 단일 결과 배열을 점진적으로 채워나가 메모리 사용량을 최소화합니다.
-    # 기본값(1000원)으로 결과 배열을 초기화합니다.
-    result = cp.full_like(price_array, 1000, dtype=cp.int32)
-    
-    # 가격이 낮은 조건부터 순서대로 값을 덮어씁니다.
-    result = cp.where(price_array < 500000, 500, result)
-    result = cp.where(price_array < 200000, 100, result)
-    result = cp.where(price_array < 50000, 50, result)
-    result = cp.where(price_array < 20000, 10, result)
-    result = cp.where(price_array < 5000, 5, result)
-    result = cp.where(price_array < 2000, 1, result)
-    
-    return result
+    return _get_tick_size_gpu_shared(price_array)
 
 def adjust_price_up_gpu(price_array):
-    """ Vectorized price adjustment on GPU. """
-    tick_size = get_tick_size_gpu(price_array)
-    # [수정] float32 나눗셈에서 발생할 수 있는 미세한 오차를 보정하기 위해
-    # 소수점 5자리에서 반올림(round)한 후 올림(ceil)을 적용합니다.
-    # 예: 18430 / 10 = 1843.0000001 -> round -> 1843.0 -> ceil -> 1843.0
-    divided = price_array / tick_size
-    rounded = cp.round(divided, 5) 
-    return cp.ceil(rounded) * tick_size
+    return _adjust_price_up_gpu_shared(price_array)
 
 def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, evaluation_prices,current_date,debug_mode):
     """ Vectorized calculation of monthly investment amounts based on current market value. """
