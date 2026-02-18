@@ -73,7 +73,11 @@ def run_magic_split_strategy_on_gpu(
     
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
-    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
+    needs_weekly_candidates = (
+        candidate_source_mode == "weekly"
+        or (candidate_source_mode == "hybrid_transition" and use_weekly_alpha_gate)
+    )
+    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index() if needs_weekly_candidates else None
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
     progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
@@ -87,7 +91,7 @@ def run_magic_split_strategy_on_gpu(
     monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq='MS'))
     month_first_dates = monthly_grouper.first().dropna()
     month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
-    data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
+    data_tensors = create_gpu_data_tensors(all_data_reset_idx, all_tickers, trading_dates_pd_cpu)
     open_prices_tensor = data_tensors["open"]
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
@@ -151,7 +155,7 @@ def run_magic_split_strategy_on_gpu(
             
             # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
             weekly_indices_list = []
-            if candidate_source_mode == 'weekly' or (candidate_source_mode == 'hybrid_transition' and use_weekly_alpha_gate):
+            if needs_weekly_candidates:
                 past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
                 if not past_or_equal_data.empty:
                     latest_filter_date = past_or_equal_data['date'].max()

@@ -8,6 +8,13 @@ import cudf
 import cupy as cp
 import pandas as pd
 
+
+def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.ndarray]:
+    day_indices = cp.asarray(data_valid["day_idx"].astype(cp.int32))
+    ticker_indices = cp.asarray(data_valid["ticker_idx"].astype(cp.int32))
+    return day_indices, ticker_indices
+
+
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
     [수정] 인덱스 매핑을 사용하여 Long-format cuDF를 Wide-format CuPy 텐서로 직접 변환합니다.
@@ -35,6 +42,7 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
     
     # 유효한 인덱스만 필터링
     data_valid = all_data_gpu.dropna(subset=['day_idx', 'ticker_idx'])
+    day_indices, ticker_indices = _build_tensor_indices(data_valid)
     
     # 3. 필요한 각 컬럼에 대해 (num_days, num_tickers) 텐서 생성하고 값 채우기
     tensors = {}
@@ -43,8 +51,6 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
         tensor = cp.zeros((num_days, num_tickers), dtype=cp.float32)
         
         # 값을 채워넣을 위치(row, col)와 값(value)을 CuPy 배열로 추출
-        day_indices = cp.asarray(data_valid['day_idx'].astype(cp.int32))
-        ticker_indices = cp.asarray(data_valid['ticker_idx'].astype(cp.int32))
         values = cp.asarray(data_valid[col_name].astype(cp.float32))
         
         # CuPy의 고급 인덱싱(fancy indexing)을 사용하여 값을 한 번에 할당
