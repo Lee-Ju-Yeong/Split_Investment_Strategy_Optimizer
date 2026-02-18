@@ -323,7 +323,14 @@
     - `fe66cd2` `refactor(issue98): collapse candidate metric loc loops`
     - `f7beee8` `refactor(issue98): simplify as-of candidate metrics lookup`
 - 진행 중 작업:
-  - full perf baseline 실행 완료 대기 (`python -m src.parameter_simulation_gpu` + `/usr/bin/time -v` 로그 수집)
+  - full perf baseline 재실행 대기 (`python -m src.parameter_simulation_gpu` + `/usr/bin/time -v` 로그 수집)
+- baseline 실행 이슈:
+  - 기존 baseline 실행(2015-01-01~2020-12-31)에서 `adjust_price_up_gpu` float64 중간배열로 CUDA OOM 발생(`std::bad_alloc`, 169,128,000B 할당 실패)
+  - 대응: `src/backtest/gpu/utils.py`의 가격 올림 연산을 in-place float64로 전환해 피크 메모리 축소, OOM 시 chunked fallback 경로 추가
+  - 일관성: `src/backtest/gpu/logic.py`의 동일 함수도 공용 `utils` 구현을 사용하도록 정렬
+- 검증:
+  - `tests/test_gpu_price_adjustment.py` 추가
+  - 실행: `conda run -n rapids-env python -m unittest tests.test_gpu_price_adjustment`
 - baseline 대기 중 선반영 완료 항목:
   - PR-98B-1(T-001/T-002/T-003) 저위험 최적화 반영/테스트 완료
   - PR-98B-2(T-004) 준비 리팩토링 일부 반영/테스트 완료

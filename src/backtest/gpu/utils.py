@@ -5,6 +5,10 @@ GPU pricing and small helper utilities.
 import cupy as cp
 import pandas as pd
 
+_ADJUST_PRICE_FORCE_CHUNKED = False
+_ADJUST_PRICE_CHUNK_SIZE = 1_000_000
+
+
 def get_tick_size_gpu(price_array):
     """ Vectorized tick size calculation on GPU. """
     # cp.select는 내부적으로 큰 임시 배열들을 생성하여 메모리 사용량이 많습니다.
@@ -22,15 +26,42 @@ def get_tick_size_gpu(price_array):
     
     return result
 
+
+def _adjust_price_up_gpu_float64_inplace(price_array):
+    tick_size = get_tick_size_gpu(price_array)
+    adjusted = price_array.astype(cp.float64, copy=True)
+    cp.divide(adjusted, tick_size, out=adjusted)
+    cp.round(adjusted, 5, out=adjusted)
+    cp.ceil(adjusted, out=adjusted)
+    cp.multiply(adjusted, tick_size, out=adjusted)
+    return adjusted.astype(cp.float32)
+
+
+def _adjust_price_up_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
+    flat_prices = price_array.reshape(-1)
+    output = cp.empty(flat_prices.shape[0], dtype=cp.float32)
+    safe_chunk_size = max(int(chunk_size), 1)
+    for start in range(0, flat_prices.shape[0], safe_chunk_size):
+        end = min(start + safe_chunk_size, flat_prices.shape[0])
+        output[start:end] = _adjust_price_up_gpu_float64_inplace(flat_prices[start:end])
+    return output.reshape(price_array.shape)
+
+
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
-    # CPU 경로(_adjust_price_up)의 python float round/ceil 동작과 정합을 맞추기 위해
-    # 연산 구간을 float64로 승격 후 반올림/올림을 수행합니다.
-    tick_size = get_tick_size_gpu(price_array).astype(cp.float64)
-    divided = price_array.astype(cp.float64) / tick_size
-    rounded = cp.round(divided, 5) 
-    adjusted = cp.ceil(rounded) * tick_size
-    return adjusted.astype(cp.float32)
+    global _ADJUST_PRICE_FORCE_CHUNKED
+    if _ADJUST_PRICE_FORCE_CHUNKED:
+        return _adjust_price_up_gpu_chunked(price_array)
+
+    try:
+        return _adjust_price_up_gpu_float64_inplace(price_array)
+    except MemoryError:
+        _ADJUST_PRICE_FORCE_CHUNKED = True
+        print(
+            "[GPU_WARNING] adjust_price_up_gpu OOM on full vector path; "
+            "switching to chunked fallback."
+        )
+        return _adjust_price_up_gpu_chunked(price_array)
 
 
 def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.DatetimeIndex):
