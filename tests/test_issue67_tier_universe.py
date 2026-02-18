@@ -95,65 +95,9 @@ class TestIssue67StrategyModes(unittest.TestCase):
             "backtest_end_date": "2024-01-31",
         }
 
-    def test_strategy_mode_weekly(self):
+    def test_strategy_mode_weekly_is_forced_to_tier_path(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="weekly")
-        self.data_handler.get_filtered_stock_codes.return_value = ["A", "B"]
-        
-        strategy.generate_new_entry_signals(pd.Timestamp("2024-01-02"), self.portfolio, self.data_handler, self.trading_dates, 1)
-        
-        self.data_handler.get_filtered_stock_codes.assert_called_once()
-        self.data_handler.get_candidates_with_tier_fallback.assert_not_called()
-
-    def test_strategy_mode_tier(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["C", "D"], "TIER_1")
-        
-        # Mock get_stock_row_as_of to return None so we don't need to mock signal creation details
-        self.data_handler.get_stock_row_as_of.return_value = None
-        
-        strategy.generate_new_entry_signals(pd.Timestamp("2024-01-02"), self.portfolio, self.data_handler, self.trading_dates, 1)
-        
-        self.data_handler.get_candidates_with_tier_fallback.assert_called_once_with(pd.Timestamp("2024-01-01"))
-        self.data_handler.get_filtered_stock_codes.assert_not_called()
-
-    def test_strategy_mode_hybrid_with_gate(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="hybrid_transition", use_weekly_alpha_gate=True)
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "B", "C"], "TIER_1")
-        self.data_handler.get_filtered_stock_codes.return_value = ["B", "C", "D"]
-        
-        # Mock get_stock_row_as_of to verify candidates (B, C should remain)
-        # Only B and C are in intersection.
-        # We need to return valid data for B and C to check if they are processed.
-        def get_row_side_effect(ticker, *args):
-            if ticker in ["B", "C"]:
-                return pd.Series({"atr_14_ratio": 0.05, "close_price": 1000})
-            return None
-        self.data_handler.get_stock_row_as_of.side_effect = get_row_side_effect
-        
-        signals = strategy.generate_new_entry_signals(pd.Timestamp("2024-01-02"), self.portfolio, self.data_handler, self.trading_dates, 1)
-        
-        self.data_handler.get_candidates_with_tier_fallback.assert_called_once_with(pd.Timestamp("2024-01-01"))
-        self.data_handler.get_filtered_stock_codes.assert_called_once()
-        
-        tickers = sorted([s['ticker'] for s in signals])
-        self.assertEqual(tickers, ["B", "C"])
-
-    def test_strategy_mode_hybrid_without_gate(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="hybrid_transition", use_weekly_alpha_gate=False)
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "B", "C"], "TIER_1")
-        
-        # Mock get_stock_row_as_of
-        self.data_handler.get_stock_row_as_of.return_value = pd.Series({"atr_14_ratio": 0.05, "close_price": 1000})
-        
-        strategy.generate_new_entry_signals(pd.Timestamp("2024-01-02"), self.portfolio, self.data_handler, self.trading_dates, 1)
-        
-        self.data_handler.get_candidates_with_tier_fallback.assert_called_once_with(pd.Timestamp("2024-01-01"))
-        self.data_handler.get_filtered_stock_codes.assert_not_called()
-
-    def test_strategy_mode_tier_fallback_to_weekly_on_tier_exception(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
-        self.data_handler.get_candidates_with_tier_fallback.side_effect = RuntimeError("tier query error")
-        self.data_handler.get_filtered_stock_codes.return_value = ["A", "B"]
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["A", "B"], "TIER_1")
         self.data_handler.get_stock_row_as_of.return_value = None
 
         strategy.generate_new_entry_signals(
@@ -164,8 +108,96 @@ class TestIssue67StrategyModes(unittest.TestCase):
             1,
         )
 
-        self.data_handler.get_candidates_with_tier_fallback.assert_called_once_with(pd.Timestamp("2024-01-01"))
-        self.data_handler.get_filtered_stock_codes.assert_called_once()
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+        self.data_handler.get_filtered_stock_codes.assert_not_called()
+
+    def test_strategy_mode_tier(self):
+        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["C", "D"], "TIER_1")
+        
+        # Mock get_stock_row_as_of to return None so we don't need to mock signal creation details
+        self.data_handler.get_stock_row_as_of.return_value = None
+        
+        strategy.generate_new_entry_signals(pd.Timestamp("2024-01-02"), self.portfolio, self.data_handler, self.trading_dates, 1)
+        
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+        self.data_handler.get_filtered_stock_codes.assert_not_called()
+
+    def test_strategy_mode_tier_prefers_pit_candidate_api(self):
+        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
+            ["P1", "P2"],
+            "TIER_1_SNAPSHOT_ASOF",
+        )
+        self.data_handler.get_stock_row_as_of.return_value = None
+
+        strategy.generate_new_entry_signals(
+            pd.Timestamp("2024-01-02"),
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+
+    def test_strategy_passes_liquidity_and_coverage_gate_params(self):
+        strategy = MagicSplitStrategy(
+            **self.base_config,
+            candidate_source_mode="tier",
+            min_liquidity_20d_avg_value=123,
+            min_tier12_coverage_ratio=0.45,
+        )
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["P1"], "TIER_1")
+        self.data_handler.get_stock_row_as_of.return_value = None
+
+        strategy.generate_new_entry_signals(
+            pd.Timestamp("2024-01-02"),
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        _, kwargs = self.data_handler.get_candidates_with_tier_fallback_pit_gated.call_args
+        self.assertEqual(kwargs["min_liquidity_20d_avg_value"], 123)
+        self.assertAlmostEqual(kwargs["min_tier12_coverage_ratio"], 0.45, places=6)
+
+    def test_strategy_mode_hybrid_is_forced_to_tier_path(self):
+        strategy = MagicSplitStrategy(
+            **self.base_config,
+            candidate_source_mode="hybrid_transition",
+            use_weekly_alpha_gate=True,
+        )
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["A", "B"], "TIER_1")
+        self.data_handler.get_stock_row_as_of.return_value = None
+
+        strategy.generate_new_entry_signals(
+            pd.Timestamp("2024-01-02"),
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+        self.data_handler.get_filtered_stock_codes.assert_not_called()
+
+    def test_strategy_mode_tier_returns_empty_on_tier_exception(self):
+        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.side_effect = RuntimeError("tier query error")
+        self.data_handler.get_stock_row_as_of.return_value = None
+
+        signals = strategy.generate_new_entry_signals(
+            pd.Timestamp("2024-01-02"),
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+        self.assertEqual(signals, [])
 
     def test_strategy_mode_invalid_falls_back_to_weekly(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="invalid_mode")

@@ -1,48 +1,26 @@
-from __future__ import annotations
+# db_setup.py
+import configparser
+import pymysql
 
+def get_db_connection():
+    config = configparser.ConfigParser()
+    config.read('config.ini')
 
-def get_db_connection(db_config: dict | None = None):
-    """
-    Create a DB connection.
+    user= config['mysql']['user']
+    password = config['mysql']['password']
+    host = config['mysql']['host']
+    port = config.getint('mysql', 'port', fallback=3306)
+    database = config['mysql']['database']
 
-    Default config source:
-    - `config/config.yaml` -> `database` section (via `src.config_loader.load_config`)
-
-    Args:
-        db_config: Optional DB config dict. If provided, it takes precedence.
-                  Expected keys: host, user, password, database (optionally port).
-    """
-    if db_config is None:
-        # Lazy import to keep module import safe in no-DB environments.
-        from .config_loader import load_config
-
-        config = load_config()
-        db_config = dict(config.get("database") or {})
-
-    required = ["host", "user", "password", "database"]
-    missing = [k for k in required if not db_config.get(k)]
-    if missing:
-        raise KeyError(f"DB 설정 누락: {missing}. config.yaml의 `database` 섹션을 확인하세요.")
-
-    try:
-        import pymysql  # type: ignore
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            "pymysql is required for DB operations. Install it (e.g., `pip install pymysql`) "
-            "or run in a DB-enabled environment."
-        ) from e
-
-    conn_kwargs = {
-        "host": db_config["host"],
-        "user": db_config["user"],
-        "password": db_config["password"],
-        "db": db_config["database"],
-        "charset": "utf8",
-    }
-    if db_config.get("port") is not None:
-        conn_kwargs["port"] = int(db_config["port"])
-
-    return pymysql.connect(**conn_kwargs)
+    conn = pymysql.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        db=database,
+        charset='utf8',
+    )
+    return conn
 
 def create_tables(conn):
     cur = conn.cursor()
@@ -187,6 +165,42 @@ def create_tables(conn):
     )
     ''')
     cur.execute('''
+    CREATE TABLE IF NOT EXISTS MarketCapDaily (
+        stock_code VARCHAR(20),
+        date DATE,
+        market_cap BIGINT NULL,
+        shares_outstanding BIGINT NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS ShortSellingDaily (
+        stock_code VARCHAR(20),
+        date DATE,
+        short_volume BIGINT NULL,
+        short_value BIGINT NULL,
+        short_balance BIGINT NULL,
+        short_balance_value BIGINT NULL,
+        source VARCHAR(50) DEFAULT 'pykrx',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, date)
+    )
+    ''')
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS ShortSellingBackfillCoverage (
+        stock_code VARCHAR(20),
+        window_start DATE,
+        window_end DATE,
+        status VARCHAR(20) NOT NULL,
+        rows_saved INT DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, window_start, window_end)
+    )
+    ''')
+    cur.execute('''
     CREATE TABLE IF NOT EXISTS DailyStockTier (
         date DATE,
         stock_code VARCHAR(20),
@@ -239,6 +253,10 @@ def create_tables(conn):
     ensure_index('FinancialData', 'idx_financial_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_stock', 'date, stock_code')
     ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')
+    ensure_index('MarketCapDaily', 'idx_mcap_date_stock', 'date, stock_code')
+    ensure_index('ShortSellingDaily', 'idx_short_date_stock', 'date, stock_code')
+    ensure_index('ShortSellingBackfillCoverage', 'idx_short_cov_status_updated', 'status, updated_at')
+    ensure_index('ShortSellingBackfillCoverage', 'idx_short_cov_stock_status', 'stock_code, status')
     ensure_index('DailyStockTier', 'idx_tier_stock_date', 'stock_code, date')
     ensure_index('DailyStockTier', 'idx_tier_date_tier_stock', 'date, tier, stock_code')
     ensure_index('TickerUniverseSnapshot', 'idx_tus_stock_date', 'stock_code, snapshot_date')

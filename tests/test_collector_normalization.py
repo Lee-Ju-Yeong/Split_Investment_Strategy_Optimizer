@@ -6,8 +6,10 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.data.collectors.financial_collector import normalize_fundamental_df
-from src.data.collectors.investor_trading_collector import normalize_investor_df
+from src.financial_collector import normalize_fundamental_df
+from src.investor_trading_collector import normalize_investor_df
+from src.market_cap_collector import normalize_market_cap_df
+from src.short_selling_collector import normalize_short_selling_df
 
 
 class TestCollectorNormalization(unittest.TestCase):
@@ -113,6 +115,49 @@ class TestCollectorNormalization(unittest.TestCase):
 
         normalized = normalize_investor_df(raw, "005930")
         self.assertTrue(normalized.empty)
+
+    def test_normalize_market_cap_df_keeps_stock_code(self):
+        raw = pd.DataFrame(
+            {
+                "날짜": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+                "시가총액": [100_000_000_000, 110_000_000_000],
+                "상장주식수": [5_000_000_000, 5_000_000_000],
+            }
+        ).set_index("날짜")
+
+        normalized = normalize_market_cap_df(raw, "005930")
+        self.assertEqual(len(normalized), 2)
+        self.assertTrue((normalized["stock_code"] == "005930").all())
+        self.assertFalse(normalized["stock_code"].isna().any())
+
+    def test_normalize_market_cap_df_drops_all_zero_rows(self):
+        raw = pd.DataFrame(
+            {
+                "날짜": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+                "시가총액": [0, 110_000_000_000],
+                "상장주식수": [0, 5_000_000_000],
+            }
+        ).set_index("날짜")
+
+        normalized = normalize_market_cap_df(raw, "005930")
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(normalized.iloc[0]["date"], "2024-01-03")
+
+    def test_normalize_short_selling_df_keeps_stock_code(self):
+        raw = pd.DataFrame(
+            {
+                "날짜": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+                "공매도": [1000, 0],
+                "잔고": [2000, 2100],
+                "공매도금액": [10_000_000, 0],
+                "잔고금액": [20_000_000, 21_000_000],
+            }
+        ).set_index("날짜")
+
+        normalized = normalize_short_selling_df(raw, "005930")
+        self.assertEqual(len(normalized), 2)
+        self.assertTrue((normalized["stock_code"] == "005930").all())
+        self.assertFalse(normalized["stock_code"].isna().any())
 
 
 if __name__ == "__main__":

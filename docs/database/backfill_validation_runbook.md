@@ -261,7 +261,7 @@ SCENARIOS = {
 conn = get_db_connection()
 try:
     price = fetch_price_history(conn, START, END)
-    fin = fetch_financial_history(conn, END)
+    fin = fetch_financial_history(conn, end_date=END, start_date=START)
     for name, cfg in SCENARIOS.items():
         df = build_daily_stock_tier_frame(price_df=price, financial_df=fin, **cfg)
         dist = (df["tier"].value_counts(normalize=True).sort_index() * 100).round(2).to_dict()
@@ -383,7 +383,7 @@ FLOW5_THRESHOLD = -500_000_000
 conn = get_db_connection()
 try:
     price = fetch_price_history(conn, START, END)
-    fin = fetch_financial_history(conn, END)
+    fin = fetch_financial_history(conn, end_date=END, start_date=START)
     inv = fetch_investor_history(conn, START, END)
 
     baseline = build_daily_stock_tier_frame(
