@@ -359,18 +359,24 @@ class DataHandler:
             return []
         return df["stock_code"].tolist()
 
-    def get_candidates_with_tier_fallback(self, date):
+    def get_candidates_with_tier_fallback(self, date, allow_tier2_fallback=True):
         """
-        Issue #67: Tier 1 우선, 없으면 Tier <= 2로 fallback.
+        Issue #67: Tier 1 우선, 필요 시 Tier <= 2 fallback.
+        Args:
+            allow_tier2_fallback: False면 Tier 1 only 정책으로 동작.
         Returns:
             (candidates_list, tier_used_str)
         """
         conn = self.get_connection()
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
+        allow_tier2_fallback = bool(allow_tier2_fallback)
         try:
             tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
             if tier1_codes:
                 return tier1_codes, "TIER_1"
+
+            if not allow_tier2_fallback:
+                return [], "NO_TIER1_CANDIDATES"
 
             tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
             if tier12_codes:
