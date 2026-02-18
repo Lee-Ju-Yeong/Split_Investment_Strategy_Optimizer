@@ -99,12 +99,28 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
         print("⚠️ No Tier data found. Returning empty tensor.")
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
-    df_wide = df_pd.pivot_table(index="date", columns="ticker", values="tier")
-    df_reindexed = df_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
+    df_reindexed = _build_tier_frame(df_pd, trading_dates_pd, all_tickers)
     tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
 
     print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
     return tier_tensor
+
+
+def _build_tier_frame(df_pd, trading_dates_pd, all_tickers):
+    df_wide = (
+        df_pd.assign(ticker=df_pd["ticker"].astype(str))
+        .pivot_table(index="date", columns="ticker", values="tier")
+        .sort_index()
+    )
+    # Reindexing directly to trading_dates drops all pre-start history rows.
+    # Build a union index first, then forward-fill, so latest tier <= date is kept.
+    union_index = df_wide.index.union(trading_dates_pd).sort_values()
+    df_ffilled = df_wide.reindex(index=union_index).ffill()
+    return (
+        df_ffilled.reindex(index=trading_dates_pd, columns=[str(t) for t in all_tickers])
+        .fillna(0)
+        .astype(int)
+    )
 
 
 __all__ = [
