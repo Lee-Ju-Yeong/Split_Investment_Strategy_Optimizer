@@ -181,14 +181,18 @@ python -m src.cpu_gpu_parity_topk \
   --parity-mode fast \
   --no-fail-on-mismatch
 
-# 4) tier 전용 회귀 모니터(운영 전 체크, PASS/FAIL 한 줄 출력)
-python -m src.tier_parity_monitor \
+# 4) tier 전용 회귀 모니터(대체: parity_topk 직접 실행)
+python -m src.cpu_gpu_parity_topk \
   --start-date 2021-01-04 \
   --end-date 2021-01-08 \
   --top-k 1 \
   --params-csv /tmp/parity_params_smoke.csv \
   --scenario baseline_deterministic \
-  --config-path /tmp/config_parity_use_pure.yaml
+  --candidate-source-mode tier \
+  --parity-mode strict \
+  --cpu-workers 1 \
+  --no-fail-on-mismatch \
+  --out results/tier_parity_monitor_replacement_5d.json
 
 # 5) 승격/배포 전 strict 검증(정산 정합 우선)
 python -m src.cpu_gpu_parity_topk \
@@ -236,3 +240,21 @@ python -m src.cpu_gpu_parity_topk \
 - 최소 재검증 세트:
   - 단기 스모크: 5거래일 `param0`, `top-k=5`, `parity-mode strict`
   - 장기 게이트: 6개월 이상 `top-k=1/5`, `parity-mode strict`
+
+## 10. #98 Throughput 연계 규칙 (2026-02-18)
+- #98 문서의 변경 분류를 그대로 적용:
+  - `PC(Parity-Coupled)`: 결과 의사결정 영향 가능 변경
+  - `PO(Perf-Only)`: 결과 불변 성능 최적화
+- 실행 원칙:
+  - PC는 CPU/GPU 동시 수정이 기본이며, 본 이슈의 strict gate를 통과해야만 병합 가능
+  - PO는 단독 수정 가능하되, 병합 전 strict parity 최소 세트를 반드시 재실행
+- #98 항목별 gate 매핑:
+  - `P-005/P-006/P-008/P-009` -> Release Gate(결정 레벨) 필수
+  - `P-001/P-002/P-003/P-004/P-007/P-010/P-011/P-012/P-013/P-014` -> Smoke + strict 재검증
+- 표준 검증 순서:
+  - 1) GPU snapshot 생성(`--pipeline-stage gpu`, `--parity-mode strict`)
+  - 2) CPU replay(`--pipeline-stage cpu`, 동일 snapshot)
+  - 3) `mismatch=0` 확인 후 성능 지표 비교
+- 병합 차단 규칙:
+  - decision-level mismatch 1건 이상 발생 시 즉시 병합 중지
+  - 원인 태깅(후보선정 drift/체결 drift/수치 오차) 완료 전 재시도 금지
