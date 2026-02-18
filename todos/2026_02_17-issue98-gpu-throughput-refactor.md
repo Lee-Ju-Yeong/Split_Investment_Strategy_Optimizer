@@ -314,3 +314,23 @@
     - 필터링/정렬/동률 ticker tie-break 동작 검증
   - 신규: `tests/test_gpu_candidate_metrics_asof.py`
     - `latest <= signal_date` 선택, 미래 행 배제, empty 입력 동작 검증
+
+## 12. 현재 상태 업데이트 (2026-02-18, Baseline 대기 중)
+- 브랜치 상태:
+  - `feature/issue98-pr98a` 최신 푸시 완료
+  - 최근 반영 커밋:
+    - `a56654f` `perf(issue98): trim gpu prep overhead in tier path`
+    - `fe66cd2` `refactor(issue98): collapse candidate metric loc loops`
+    - `f7beee8` `refactor(issue98): simplify as-of candidate metrics lookup`
+- 진행 중 작업:
+  - full perf baseline 실행 완료 대기 (`python -m src.parameter_simulation_gpu` + `/usr/bin/time -v` 로그 수집)
+- baseline 대기 중 선반영 완료 항목:
+  - PR-98B-1(T-001/T-002/T-003) 저위험 최적화 반영/테스트 완료
+  - PR-98B-2(T-004) 준비 리팩토링 일부 반영/테스트 완료
+- 아직 미완료:
+  - baseline `before` 최종 수치 확정
+  - 동일 조건 `after` 1회 재실행 및 before/after 비교표 작성
+  - strict parity gate 재실행 및 `mismatch=0` 증적 첨부
+- 운영 원칙:
+  - baseline 완료 전에도 PO/저위험 리팩토링은 진행 가능
+  - merge 판단은 baseline + parity 증적 확보 후 수행
