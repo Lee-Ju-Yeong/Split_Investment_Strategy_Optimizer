@@ -7,6 +7,29 @@ import pandas as pd
 
 from .utils import adjust_price_up_gpu
 
+def _floor_fee_from_costs(costs: cp.ndarray, rate: float, strict_cash_rounding: bool) -> cp.ndarray:
+    """
+    Strict 모드에서는 float 오차(예: 100000 * 0.00015 -> 14.9999...)로 인한
+    1원 드리프트를 막기 위해 정수 비율 기반 floor를 사용한다.
+    """
+    if not strict_cash_rounding:
+        return cp.floor(costs * cp.float32(rate))
+
+    rate_text = f"{float(rate):.12f}".rstrip("0").rstrip(".")
+    if not rate_text or rate_text == "0":
+        return cp.zeros_like(costs, dtype=cp.float32)
+    if "." in rate_text:
+        decimals = len(rate_text.split(".", 1)[1])
+        scale = 10 ** decimals
+        numerator = int(round(float(rate_text) * scale))
+    else:
+        scale = 1
+        numerator = int(rate_text)
+
+    costs_int = cp.rint(costs).astype(cp.int64)
+    fees_int = (costs_int * numerator) // scale
+    return fees_int.astype(cp.float32)
+
 def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, evaluation_prices,current_date,debug_mode):
     """ Vectorized calculation of monthly investment amounts based on current market value. """
     if debug_mode:
@@ -307,6 +330,7 @@ def _process_additional_buy_signals_gpu(
     all_tickers: list = None,
     signal_tiers: cp.ndarray = None,
     hold_max_tier: int = 0,
+    strict_cash_rounding: bool = False,
 ):
     """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
@@ -340,8 +364,6 @@ def _process_additional_buy_signals_gpu(
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
-    buy_commission_rate_f32 = cp.float32(buy_commission_rate)
-
     # 2. 모든 후보에 대한 비용 및 우선순위 계산 (벡터화)
     sim_indices, stock_indices = cp.where(initial_buy_mask)
     
@@ -356,7 +378,7 @@ def _process_additional_buy_signals_gpu(
     quantities[valid_price_mask] = cp.floor(candidate_investments[valid_price_mask] / exec_prices[valid_price_mask])
 
     costs = exec_prices * quantities
-    commissions = cp.floor(costs * buy_commission_rate_f32)
+    commissions = _floor_fee_from_costs(costs, buy_commission_rate, strict_cash_rounding)
     total_costs = costs + commissions
 
     # 우선순위 점수 계산
@@ -477,7 +499,8 @@ def _process_new_entry_signals_gpu(
     log_buffer: cp.ndarray,
     log_counter: cp.ndarray,
     debug_mode: bool = False,
-    all_tickers: list = None
+    all_tickers: list = None,
+    strict_cash_rounding: bool = False,
     # [삭제] trading_dates_pd_cpu
 ):
     # --- [유지] 0. 진입 조건 확인 ---
@@ -500,8 +523,6 @@ def _process_new_entry_signals_gpu(
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     if not cp.any(available_slots > 0) or candidate_tickers_for_day.size == 0:
         return portfolio_state, positions_state, last_trade_day_idx_state
-
-    buy_commission_rate_f32 = cp.float32(buy_commission_rate)
 
     # --- [유지] 1. 모든 (시뮬레이션, 후보) 쌍에 대한 기본 정보 계산 ---
     num_simulations = param_combinations.shape[0]
@@ -526,7 +547,7 @@ def _process_new_entry_signals_gpu(
     quantities = cp.floor(investment_per_order / buy_prices)
     quantities[buy_prices <= 0] = 0
     costs = buy_prices * quantities
-    commissions = cp.floor(costs * buy_commission_rate_f32)
+    commissions = _floor_fee_from_costs(costs, buy_commission_rate, strict_cash_rounding)
     total_costs = costs + commissions
 
     # --- [정렬 규칙] ---

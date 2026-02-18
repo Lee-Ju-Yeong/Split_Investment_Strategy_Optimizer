@@ -254,7 +254,9 @@ def run_magic_split_strategy_on_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
                 cooldown_period_days, param_combinations, current_opens_gpu,
                 candidate_tickers_for_day, candidate_atrs_for_day,
-                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode, all_tickers=all_tickers
+                execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
+                all_tickers=all_tickers,
+                strict_cash_rounding=strict_cash_rounding,
             )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
                 portfolio_state, positions_state, last_trade_day_idx_state, sell_occurred_today_mask, day_idx,
@@ -264,6 +266,7 @@ def run_magic_split_strategy_on_gpu(
                 all_tickers=all_tickers,
                 signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
                 hold_max_tier=hold_max_tier,
+                strict_cash_rounding=strict_cash_rounding,
             )
         
             # --- 일일 포트폴리오 가치 업데이트 (기존과 동일) ---
