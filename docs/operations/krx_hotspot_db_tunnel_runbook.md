@@ -119,10 +119,24 @@ FLUSH PRIVILEGES;
 python -m src.pipeline_batch \
   --mode backfill --start-date 20131120 --end-date 20260206 \
   --run-marketcap --run-shortsell \
-  --skip-financial --skip-investor --skip-tier
+  --skip-financial --skip-investor --skip-tier \
+  --collector-workers 1 \
+  --collector-write-batch-size 500 \
+  --collector-delay 4.0 \
+  --collector-jitter-max-seconds 2.0 \
+  --collector-macro-pause-every 40 \
+  --collector-macro-pause-min-seconds 45 \
+  --collector-macro-pause-max-seconds 70 \
+  --shortsell-prefilter-enabled \
+  --shortsell-prefilter-markets KOSPI,KOSDAQ \
+  --shortsell-prefilter-min-hits 1
 ```
 
 참고: `src/db_setup.py`는 `config.ini`의 `[mysql] port` 값을 읽으며, 미설정 시 기본 3306을 사용합니다.
+참고: `--shortsell-prefilter-enabled`는 `start_date~end_date` 구간에서 연도별 마지막 거래일 앵커를 사용합니다.
+참고: `ShortSellingDaily` 수집은 티커별 조회 구간을 내부적으로 2년 미만(최대 729일) 청크로 분할 호출합니다.
+참고: `ShortSellingDaily` 청크는 최신→과거 순으로 호출되며, 데이터가 한 번 나온 뒤 `empty`가 연속 2회 발생하면 해당 티커를 종료합니다.
+참고: 재실행 시 티커별 최소 적재일 + `ShortSellingBackfillCoverage(DONE_EMPTY)` 체크포인트를 함께 사용해 미수집 과거 구간만 이어서 백필합니다(resume).
 
 ## 4) 결과 검증
 

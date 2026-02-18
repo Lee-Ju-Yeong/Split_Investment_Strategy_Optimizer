@@ -189,6 +189,18 @@ def create_tables(conn):
     )
     ''')
     cur.execute('''
+    CREATE TABLE IF NOT EXISTS ShortSellingBackfillCoverage (
+        stock_code VARCHAR(20),
+        window_start DATE,
+        window_end DATE,
+        status VARCHAR(20) NOT NULL,
+        rows_saved INT DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (stock_code, window_start, window_end)
+    )
+    ''')
+    cur.execute('''
     CREATE TABLE IF NOT EXISTS DailyStockTier (
         date DATE,
         stock_code VARCHAR(20),
@@ -243,6 +255,8 @@ def create_tables(conn):
     ensure_index('InvestorTradingTrend', 'idx_investor_date_flow', 'date, foreigner_net_buy, institution_net_buy')
     ensure_index('MarketCapDaily', 'idx_mcap_date_stock', 'date, stock_code')
     ensure_index('ShortSellingDaily', 'idx_short_date_stock', 'date, stock_code')
+    ensure_index('ShortSellingBackfillCoverage', 'idx_short_cov_status_updated', 'status, updated_at')
+    ensure_index('ShortSellingBackfillCoverage', 'idx_short_cov_stock_status', 'stock_code, status')
     ensure_index('DailyStockTier', 'idx_tier_stock_date', 'stock_code, date')
     ensure_index('DailyStockTier', 'idx_tier_date_tier_stock', 'date, tier, stock_code')
     ensure_index('TickerUniverseSnapshot', 'idx_tus_stock_date', 'stock_code, snapshot_date')

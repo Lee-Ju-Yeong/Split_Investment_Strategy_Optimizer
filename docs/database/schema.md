@@ -123,7 +123,24 @@
 인덱스:
 - `idx_short_date_stock` ON `(date, stock_code)`
 
-### 2-5. `DailyStockTier`
+### 2-5. `ShortSellingBackfillCoverage`
+공매도 백필 구간 커버리지/체크포인트 테이블(재실행 중복 호출 방지).
+
+| 컬럼명 | 타입 | 제약 | 설명 |
+| :-- | :-- | :-- | :-- |
+| `stock_code` | `VARCHAR(20)` | `PRIMARY KEY` | 종목 코드 |
+| `window_start` | `DATE` | `PRIMARY KEY` | 검증한 구간 시작일 |
+| `window_end` | `DATE` | `PRIMARY KEY` | 검증한 구간 종료일 |
+| `status` | `VARCHAR(20)` | `NOT NULL` | 커버리지 상태 (`DONE_EMPTY` 등) |
+| `rows_saved` | `INT` | `DEFAULT 0` | 해당 구간 저장 행 수 |
+| `created_at` | `DATETIME` | `DEFAULT CURRENT_TIMESTAMP` | 최초 기록 시각 |
+| `updated_at` | `DATETIME` | `ON UPDATE CURRENT_TIMESTAMP` | 갱신 시각 |
+
+인덱스:
+- `idx_short_cov_status_updated` ON `(status, updated_at)`
+- `idx_short_cov_stock_status` ON `(stock_code, status)`
+
+### 2-6. `DailyStockTier`
 사전 계산된 일별 종목 등급 저장 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |
@@ -139,7 +156,7 @@
 - `idx_tier_stock_date` ON `(stock_code, date)`
 - `idx_tier_date_tier_stock` ON `(date, tier, stock_code)`
 
-### 2-6. `TickerUniverseSnapshot`
+### 2-7. `TickerUniverseSnapshot`
 시점(PIT) 기준 종목 유니버스 스냅샷 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |
@@ -155,7 +172,7 @@
 - `idx_tus_stock_date` ON `(stock_code, snapshot_date)`
 - `idx_tus_date_market_stock` ON `(snapshot_date, market_type, stock_code)`
 
-### 2-7. `TickerUniverseHistory`
+### 2-8. `TickerUniverseHistory`
 상장/상폐를 포함한 종목 이력 집계 테이블.
 
 | 컬럼명 | 타입 | 제약 | 설명 |

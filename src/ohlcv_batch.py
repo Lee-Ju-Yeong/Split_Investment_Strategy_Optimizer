@@ -438,6 +438,12 @@ def _build_arg_parser():
         help="Sleep seconds between API calls.",
     )
     parser.add_argument(
+        "--collector-delay",
+        type=float,
+        default=None,
+        help="Alias of --api-call-delay for cross-collector consistency.",
+    )
+    parser.add_argument(
         "--ticker-limit",
         type=int,
         default=None,
@@ -453,6 +459,11 @@ def _build_arg_parser():
 
 def main():
     args = _build_arg_parser().parse_args()
+    effective_delay = (
+        args.collector_delay
+        if args.collector_delay is not None
+        else args.api_call_delay
+    )
     conn = None
     try:
         conn = get_db_connection()
@@ -463,7 +474,7 @@ def main():
             end_date_str=args.end_date,
             allow_legacy_fallback=args.allow_legacy_fallback,
             resume=args.resume,
-            api_call_delay=args.api_call_delay,
+            api_call_delay=effective_delay,
             log_interval=args.log_interval,
             ticker_limit=args.ticker_limit,
         )
