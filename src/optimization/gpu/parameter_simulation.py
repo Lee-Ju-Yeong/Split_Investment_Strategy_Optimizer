@@ -22,6 +22,46 @@ from .data_loading import (
 from .kernel import get_optimal_batch_size, run_gpu_optimization
 
 
+DEFAULT_FALLBACK_TARGET_BATCHES = 8
+DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
+DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+
+
+def _to_positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_adaptive_fallback_batch_size(num_combinations):
+    if num_combinations <= 0:
+        return 1
+
+    target_batches = DEFAULT_FALLBACK_TARGET_BATCHES
+    adaptive = (num_combinations + target_batches - 1) // target_batches
+    adaptive = max(adaptive, DEFAULT_FALLBACK_MIN_BATCH_SIZE)
+    adaptive = min(adaptive, DEFAULT_FALLBACK_MAX_BATCH_SIZE)
+    return min(adaptive, num_combinations)
+
+
+def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations):
+    if optimal_batch_size:
+        batch_size = min(int(optimal_batch_size), num_combinations)
+        return batch_size, "auto"
+
+    configured_batch_size = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+    if configured_batch_size:
+        batch_size = min(configured_batch_size, num_combinations)
+        return batch_size, "config.simulation_batch_size"
+
+    batch_size = _resolve_adaptive_fallback_batch_size(num_combinations)
+    return batch_size, "adaptive-safe-default"
+
+
 # -----------------------------------------------------------------------------
 # Worker: find_optimal_parameters
 # -----------------------------------------------------------------------------
@@ -78,15 +118,21 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     fixed_mem += int(tier_tensor.nbytes)
 
     optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    batch_size, batch_size_source = _resolve_batch_size(
+        optimal_batch_size=optimal_batch_size,
+        backtest_settings=backtest_settings,
+        num_combinations=ctx.num_combinations,
+    )
+    if batch_size <= 0:
+        raise ValueError(f"Invalid batch size resolved: {batch_size}")
 
-    if optimal_batch_size:
-        batch_size = min(optimal_batch_size, ctx.num_combinations)
+    if batch_size_source == "auto":
         print(f"✅ Using automatically calculated optimal batch size: {batch_size}")
     else:
-        batch_size = backtest_settings.get("simulation_batch_size")
-        if batch_size is None or batch_size <= 0:
-            batch_size = ctx.num_combinations
-        print(f"⚠️ Using fallback batch size from config: {batch_size}")
+        print(
+            "⚠️ Using fallback batch size "
+            f"({batch_size_source}): {batch_size}"
+        )
 
     num_batches = (ctx.num_combinations + batch_size - 1) // batch_size
     print(f"  - Total Simulations: {ctx.num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")
