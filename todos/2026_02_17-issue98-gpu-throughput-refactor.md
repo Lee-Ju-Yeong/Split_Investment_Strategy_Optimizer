@@ -122,15 +122,15 @@
   - `--allow-legacy-fallback` 운영 경로 분리/제한
 - [x] `src/data/collectors/financial_collector.py`
   - snapshot 미존재 fallback 축소
-- [ ] 검증:
+- [x] 검증:
   - strict parity 재실행(`mismatch=0`)
   - throughput 지표 비교
 
 ### 8-3. PR-98B (PC) GPU 후보군 hot path
-- [ ] `src/backtest/gpu/engine.py`
+- [x] `src/backtest/gpu/engine.py`
   - `tolist()/to_pylist()` 제거
   - 일별 weekly 스캔 경로 사전 인덱스화
-- [ ] `src/backtest/gpu/data.py`
+- [x] `src/backtest/gpu/data.py`
   - `_collect_candidate_rank_metrics_asof`의 일별 filter/concat 축소
   - tensor gather 중심으로 재구성
 - [ ] `src/backtest/gpu/logic.py`
@@ -381,3 +381,25 @@
 - 해석 규칙:
   - 이후 PR-98B/98C의 throughput 비교는 B0 대비(`before=B0`)로 수행
   - parity gate는 B0와 동일한 strict 조건으로 유지
+
+## 14. PR-98B-2 진행 현황 (2026-02-20)
+- 반영 범위(이번 커밋 묶음):
+  - `src/backtest/gpu/engine.py`
+    - tier/hybrid 후보군 결합 경로를 CuPy 배열 중심으로 유지(`candidate_indices_gpu`, `weekly_indices_gpu`)
+    - hybrid alpha-gate 교집합을 `cp.isin`으로 처리하고, 최종 후보 인덱스는 `cp.unique`로 정규화
+    - candidate metrics 수집 호출을 ticker string 목록 대신 `ticker_idx` 기반으로 전환
+  - `src/backtest/gpu/data.py`
+    - `_collect_candidate_rank_metrics_asof`를 `ticker_idx` as-of latest 조회로 단순화
+    - 후보 인덱스를 `cudf.Series(int32)`로 명시 변환 후 `isin` 적용
+    - `build_ranked_candidate_payload`를 cuDF 필터/정렬 기반으로 재구성하고, host `for` 루프 제거
+    - debug가 아닐 때 `ranked_records` materialize 생략
+- 테스트:
+  - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path`
+  - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_cpu_gpu_parity_topk`
+  - 결과: 모두 통과
+- 남은 범위(PR-98B 미완료 항목):
+  - `src/backtest/gpu/logic.py` 신규진입 hot loop 축소(P-008)
+  - `src/backtest/gpu/utils.py` 정렬 hot path `cp.lexsort` 전환(P-009)
+- strict parity 실행 메모:
+  - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
+  - strict parity 게이트는 운영 GPU 호스트에서 `cpu_gpu_parity_topk`로 재실행 후 증적 첨부 필요
