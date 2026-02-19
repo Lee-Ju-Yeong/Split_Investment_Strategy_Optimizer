@@ -70,6 +70,15 @@ def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.Datetime
     signal_day_idx = day_idx - 1
     return trading_dates_pd_cpu[signal_day_idx], signal_day_idx
 
+
+def _build_ticker_rank_codes(tickers: list[str]) -> cp.ndarray:
+    if not tickers:
+        return cp.array([], dtype=cp.int32)
+    unique_sorted_tickers = sorted(set(tickers))
+    ticker_rank_map = {ticker: idx for idx, ticker in enumerate(unique_sorted_tickers)}
+    return cp.asarray([ticker_rank_map[ticker] for ticker in tickers], dtype=cp.int32)
+
+
 def _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records):
     """
     Deterministic candidate ranking for parity:
@@ -79,4 +88,28 @@ def _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records):
     candidate_records item format:
       (ticker, market_cap_q, atr_q, ...)
     """
-    return sorted(candidate_records, key=lambda item: (-item[1], -item[2], item[0]))
+    if not candidate_records:
+        return []
+
+    tickers = [item[0] for item in candidate_records]
+    market_caps = cp.asarray([int(item[1]) for item in candidate_records], dtype=cp.int64)
+    atr_scores = cp.asarray([int(item[2]) for item in candidate_records], dtype=cp.int64)
+    ticker_ranks = _build_ticker_rank_codes(tickers)
+
+    # cp.lexsort는 마지막 키가 1순위다.
+    sort_keys = cp.stack([ticker_ranks, -atr_scores, -market_caps], axis=0)
+    sort_indices = cp.lexsort(sort_keys)
+    return [candidate_records[idx] for idx in sort_indices.get().tolist()]
+
+
+def _sort_candidates_by_atr_then_ticker(candidate_pairs):
+    if not candidate_pairs:
+        return []
+
+    tickers = [item[0] for item in candidate_pairs]
+    atr_values = cp.asarray([float(item[1]) for item in candidate_pairs], dtype=cp.float64)
+    ticker_ranks = _build_ticker_rank_codes(tickers)
+
+    sort_keys = cp.stack([ticker_ranks, -atr_values], axis=0)
+    sort_indices = cp.lexsort(sort_keys)
+    return [candidate_pairs[idx] for idx in sort_indices.get().tolist()]
