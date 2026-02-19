@@ -80,21 +80,57 @@ def _normalize_priority_for_cpu(value: Any) -> str:
     return "highest_drop" if iv == 1 else "lowest_order"
 
 
+def _normalize_priority_for_gpu(value: Any) -> int:
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key == "highest_drop":
+            return 1
+        if key == "lowest_order":
+            return 0
+    try:
+        iv = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return 1 if iv == 1 else 0
+
+
 def _normalize_param_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw_param_id = row.get("param_id", 0)
+    try:
+        param_id = int(raw_param_id)
+    except (TypeError, ValueError):
+        param_id = 0
     return {
-        "param_id": int(row["param_id"]),
+        "param_id": param_id,
         "max_stocks": int(row["max_stocks"]),
         "order_investment_ratio": float(row["order_investment_ratio"]),
         "additional_buy_drop_rate": float(row["additional_buy_drop_rate"]),
         "sell_profit_rate": float(row["sell_profit_rate"]),
-        "additional_buy_priority": int(row["additional_buy_priority"]),
+        "additional_buy_priority": _normalize_priority_for_gpu(row["additional_buy_priority"]),
         "stop_loss_rate": float(row["stop_loss_rate"]),
         "max_splits_limit": int(row["max_splits_limit"]),
         "max_inactivity_period": int(row["max_inactivity_period"]),
     }
 
 
-def _load_param_row(params_csv: str, param_id: Optional[int]) -> Dict[str, Any]:
+def _load_param_row_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    strategy_params = dict(config.get("strategy_params", {}))
+    return _normalize_param_row(
+        {
+            "param_id": 0,
+            "max_stocks": strategy_params.get("max_stocks", 20),
+            "order_investment_ratio": strategy_params.get("order_investment_ratio", 0.02),
+            "additional_buy_drop_rate": strategy_params.get("additional_buy_drop_rate", 0.04),
+            "sell_profit_rate": strategy_params.get("sell_profit_rate", 0.04),
+            "additional_buy_priority": strategy_params.get("additional_buy_priority", "lowest_order"),
+            "stop_loss_rate": strategy_params.get("stop_loss_rate", -0.15),
+            "max_splits_limit": strategy_params.get("max_splits_limit", 10),
+            "max_inactivity_period": strategy_params.get("max_inactivity_period", 90),
+        }
+    )
+
+
+def _load_param_row_from_csv(params_csv: str, param_id: Optional[int]) -> Dict[str, Any]:
     _, pd = _ensure_core_deps()
     df = pd.read_csv(params_csv)
     if df.empty:
@@ -158,7 +194,7 @@ def _run_cpu_and_collect_trade_events(
     )
 
     execution_params = dict(config["execution_params"])
-    data_handler = DataHandler(db_config=config["database"], load_company_cache=False)
+    data_handler = DataHandler(db_config=config["database"])
     strategy = MagicSplitStrategy(**strategy_params)
     portfolio = Portfolio(initial_cash=float(initial_cash), start_date=start_date, end_date=end_date)
     execution_handler = BasicExecutionHandler(
@@ -522,7 +558,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CPU/GPU sell-event 1:1 dump comparator")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
-    parser.add_argument("--params-csv", required=True)
+    parser.add_argument("--params-csv", default=None)
     parser.add_argument("--param-id", type=int, default=None, help="Optional param_id filter in CSV")
     parser.add_argument("--candidate-source-mode", choices=["weekly", "hybrid_transition", "tier"], default="tier")
     parser.add_argument("--parity-mode", choices=["fast", "strict"], default="strict")
@@ -543,8 +579,10 @@ def main() -> None:
     args = _build_parser().parse_args()
     config = load_config()
     initial_cash = float(config["backtest_settings"]["initial_cash"])
-
-    params = _load_param_row(args.params_csv, args.param_id)
+    if args.params_csv:
+        params = _load_param_row_from_csv(args.params_csv, args.param_id)
+    else:
+        params = _load_param_row_from_config(config)
     cpu_sell_events, cpu_buy_events = _run_cpu_and_collect_trade_events(
         config=config,
         start_date=args.start_date,

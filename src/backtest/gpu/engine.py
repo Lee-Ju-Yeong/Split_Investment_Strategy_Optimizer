@@ -22,6 +22,31 @@ from .logic import (
 )
 from .utils import _resolve_signal_date_for_gpu
 
+
+def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
+    """
+    Forward-fill along day axis for as-of semantics.
+    Missing values are represented by 0.0 and remain 0.0 until first valid price.
+    """
+    if price_tensor.size == 0:
+        return price_tensor
+
+    valid_mask = price_tensor > 0
+    day_indices = cp.arange(price_tensor.shape[0], dtype=cp.int32).reshape(-1, 1)
+    last_valid_day_idx = cp.where(valid_mask, day_indices, 0)
+    ticker_indices = cp.arange(price_tensor.shape[1], dtype=cp.int32).reshape(1, -1)
+
+    try:
+        last_valid_day_idx = cp.maximum.accumulate(last_valid_day_idx, axis=0)
+        return price_tensor[last_valid_day_idx, ticker_indices]
+    except NotImplementedError:
+        # 일부 CuPy 버전에서 ufunc.accumulate가 미지원이므로 호환 경로를 사용한다.
+        filled = price_tensor.copy()
+        for day_idx in range(1, filled.shape[0]):
+            filled[day_idx] = cp.where(filled[day_idx] > 0, filled[day_idx], filled[day_idx - 1])
+        return filled
+
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -100,6 +125,10 @@ def run_magic_split_strategy_on_gpu(
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
     low_prices_tensor = data_tensors["low"]
+    if parity_mode == "strict":
+        close_prices_tensor = _forward_fill_asof_tensor(close_prices_tensor)
+        high_prices_tensor = _forward_fill_asof_tensor(high_prices_tensor)
+        low_prices_tensor = _forward_fill_asof_tensor(low_prices_tensor)
     # 월 블록 루프 시작
     for i in range(len(month_start_indices)):
         start_idx = month_start_indices[i]
