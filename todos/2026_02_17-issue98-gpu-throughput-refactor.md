@@ -1,7 +1,7 @@
 # perf(gpu): GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (Issue #98)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98`
 - 작성일: 2026-02-17
-- 최종 갱신: 2026-02-18
+- 최종 갱신: 2026-02-20
 - 목적: GPU 처리량 병목과 fallback 유발 성능 저하를 제거하되, CPU=SSOT 원칙과 decision-level parity(`#56`)를 유지
 
 ## 0. 분리 원칙 (Issue #97/#56/#67 관계)
@@ -101,14 +101,16 @@
   - parity/perf 실행 문서 및 리포트 템플릿
 
 ## 8. 실행 순서 (파일 단위 상세)
-### 8-1. Baseline 고정 (코드 변경 전)
-- [ ] 성능 baseline 수집:
-  - `python -m src.parameter_simulation_gpu` (동일 config/기간)
-  - wall-time, kernel launch, peak memory, GPU util 기록
-- [ ] parity baseline 수집:
-  - `python -m src.cpu_gpu_parity_topk --pipeline-stage gpu ... --parity-mode strict`
-  - `python -m src.cpu_gpu_parity_topk --pipeline-stage cpu --snapshot-in ... --parity-mode strict`
-  - 결과: decision-level `mismatch=0` 확인
+### 8-1. Baseline 고정 (코드 변경 전 미수집 -> PR-98A 기준선 채택)
+- [x] 성능 baseline 수집(B0):
+  - 명령: `python -m src.parameter_simulation_gpu` + `/usr/bin/time -v`
+  - 로그: `results/perf_baseline_strict_hyst_20260220_024023.log`
+  - 결과 CSV: `results/standalone_simulation_results_20260220_024023.csv`
+- [x] parity baseline 수집(B0):
+  - `python -m src.cpu_gpu_parity_topk ... --parity-mode strict --params-csv <topk csv> --topk 3`
+  - 결과: `summary.failed=0`, `summary.passed=3`
+- [x] 기준선 정책:
+  - 코드 변경 전 baseline이 없으므로, `PR-98A (P0) fallback 정리 완료 상태`를 공식 baseline(B0)으로 사용
 
 ### 8-2. PR-98A (PO) fallback 정리
 - [x] `src/optimization/gpu/kernel.py`
@@ -337,7 +339,7 @@
     후보군 자체가 달라져 parity drift가 발생한다.
   - 즉, `mask -> rank -> slot` 순서는 고정해야 한다.
 
-## 12. 현재 상태 업데이트 (2026-02-18, Baseline 대기 중)
+## 12. 현재 상태 업데이트 (2026-02-20, Baseline 고정 완료)
 - 브랜치 상태:
   - `feature/issue98-pr98a` 최신 푸시 완료
   - 최근 반영 커밋:
@@ -345,7 +347,7 @@
     - `fe66cd2` `refactor(issue98): collapse candidate metric loc loops`
     - `f7beee8` `refactor(issue98): simplify as-of candidate metrics lookup`
 - 진행 중 작업:
-  - full perf baseline 재실행 대기 (`python -m src.parameter_simulation_gpu` + `/usr/bin/time -v` 로그 수집)
+  - PR-98B/98C throughput 개선 항목 진행
 - baseline 실행 이슈:
   - 기존 baseline 실행(2015-01-01~2020-12-31)에서 `adjust_price_up_gpu` float64 중간배열로 CUDA OOM 발생(`std::bad_alloc`, 169,128,000B 할당 실패)
   - 대응: `src/backtest/gpu/utils.py`의 가격 올림 연산을 in-place float64로 전환해 피크 메모리 축소, OOM 시 chunked fallback 경로 추가
@@ -357,9 +359,25 @@
   - PR-98B-1(T-001/T-002/T-003) 저위험 최적화 반영/테스트 완료
   - PR-98B-2(T-004) 준비 리팩토링 일부 반영/테스트 완료
 - 아직 미완료:
-  - baseline `before` 최종 수치 확정
   - 동일 조건 `after` 1회 재실행 및 before/after 비교표 작성
-  - strict parity gate 재실행 및 `mismatch=0` 증적 첨부
+  - 개선 이후 strict parity gate 재실행 및 `mismatch=0` 증적 첨부
 - 운영 원칙:
   - baseline 완료 전에도 PO/저위험 리팩토링은 진행 가능
   - merge 판단은 baseline + parity 증적 확보 후 수행
+
+## 13. Baseline(B0) 공식 기록 (PR-98A / P0 fallback 정리 기준)
+- 기준 선언:
+  - 코드 변경 전 baseline 미수집 상태이므로, `PR-98A (P0) fallback 정리 완료` 시점을 baseline(B0)로 확정
+- 성능(B0):
+  - 측정 로그: `results/perf_baseline_strict_hyst_20260220_024023.log`
+  - 결과 CSV: `results/standalone_simulation_results_20260220_024023.csv`
+  - wall-clock: `5:11:28`
+  - user/system CPU time: `16524.25s / 2119.53s`
+  - max RSS: `1207796 KB`
+  - exit status: `0`
+- 정합(B0):
+  - strict parity(top-k=3): `summary.failed=0`, `summary.passed=3`
+  - strict 이벤트 덤프: `buy_mismatched_pairs=0`, `sell_mismatched_pairs=0`
+- 해석 규칙:
+  - 이후 PR-98B/98C의 throughput 비교는 B0 대비(`before=B0`)로 수행
+  - parity gate는 B0와 동일한 strict 조건으로 유지
