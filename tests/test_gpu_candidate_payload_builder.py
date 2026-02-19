@@ -13,38 +13,38 @@ class TestGpuCandidatePayloadBuilder(unittest.TestCase):
     def test_build_ranked_candidate_payload_filters_and_ranks(self):
         metrics_df = cudf.DataFrame(
             {
+                "ticker_idx": [1, 0, 2, 3, 9],
                 "ticker": ["B", "A", "C", "D", "X"],
                 "atr_14_ratio": [0.30, 0.30, 0.10, None, 0.50],
                 "market_cap": [10_000_000, 20_000_000, -1, 5_000_000, 1_000_000],
             }
-        ).set_index("ticker")
-        ticker_to_idx = {"A": 0, "B": 1, "C": 2, "D": 3}
+        )
 
         candidate_indices, atrs, ranked_records = build_ranked_candidate_payload(
             valid_candidate_metrics_df=metrics_df,
-            ticker_to_idx=ticker_to_idx,
+            return_ranked_records=True,
         )
 
-        self.assertEqual(candidate_indices, [0, 1, 2])
-        self.assertEqual([round(v, 4) for v in atrs], [0.3, 0.3, 0.1])
-        self.assertEqual([row[0] for row in ranked_records], ["A", "B", "C"])
+        self.assertEqual(candidate_indices.get().tolist(), [0, 1, 9, 2])
+        self.assertEqual([round(v, 4) for v in atrs.get().tolist()], [0.3, 0.3, 0.5, 0.1])
+        self.assertEqual([row[0] for row in ranked_records], ["A", "B", "X", "C"])
 
     def test_build_ranked_candidate_payload_uses_ticker_as_last_tiebreaker(self):
         metrics_df = cudf.DataFrame(
             {
+                "ticker_idx": [1, 0],
                 "ticker": ["B", "A"],
                 "atr_14_ratio": [0.20, 0.20],
                 "market_cap": [7_000_000, 7_000_000],
             }
-        ).set_index("ticker")
-        ticker_to_idx = {"A": 0, "B": 1}
+        )
 
         candidate_indices, _, ranked_records = build_ranked_candidate_payload(
             valid_candidate_metrics_df=metrics_df,
-            ticker_to_idx=ticker_to_idx,
+            return_ranked_records=True,
         )
 
-        self.assertEqual(candidate_indices, [0, 1])
+        self.assertEqual(candidate_indices.get().tolist(), [0, 1])
         self.assertEqual([row[0] for row in ranked_records], ["A", "B"])
 
 

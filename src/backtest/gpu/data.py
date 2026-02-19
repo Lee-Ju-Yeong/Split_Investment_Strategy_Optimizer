@@ -8,8 +8,6 @@ import cudf
 import cupy as cp
 import pandas as pd
 
-from .utils import _sort_candidates_by_market_cap_then_atr_then_ticker
-
 
 def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.ndarray]:
     day_indices = cp.asarray(data_valid["day_idx"].astype(cp.int32))
@@ -64,50 +62,63 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 
 
-def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
-    if signal_date is None or not final_candidate_tickers:
+def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_indices, signal_date):
+    if signal_date is None:
+        return None
+    if final_candidate_indices is None:
+        return None
+    if int(final_candidate_indices.size) == 0:
+        return None
+    candidate_index_series = cudf.Series(final_candidate_indices.astype(cp.int32, copy=False))
+    if candidate_index_series.empty:
         return None
 
     # PIT(as-of <= date) 규칙에 맞춰 signal_date 이전/당일 전체에서 ticker별 최신 1건을 선택한다.
     candidate_rows = all_data_reset_idx[
         (all_data_reset_idx["date"] <= signal_date)
-        & (all_data_reset_idx["ticker"].isin(final_candidate_tickers))
-    ][["ticker", "date", "atr_14_ratio", "market_cap"]]
+        & (all_data_reset_idx["ticker_idx"].isin(candidate_index_series))
+    ][["ticker_idx", "ticker", "date", "atr_14_ratio", "market_cap"]]
     if candidate_rows.empty:
         return None
 
-    latest_rows = candidate_rows.sort_values("date").drop_duplicates(subset=["ticker"], keep="last")
-    return latest_rows.set_index("ticker")[["atr_14_ratio", "market_cap"]]
+    latest_rows = candidate_rows.sort_values("date").drop_duplicates(subset=["ticker_idx"], keep="last")
+    return latest_rows[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
 
 
-def build_ranked_candidate_payload(valid_candidate_metrics_df, ticker_to_idx):
+def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_records=False):
     if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
-        return [], [], []
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-    metrics_rows = valid_candidate_metrics_df.reset_index()[["ticker", "atr_14_ratio", "market_cap"]]
-    tickers = metrics_rows["ticker"].to_arrow().to_pylist()
-    atr_values = metrics_rows["atr_14_ratio"].to_arrow().to_pylist()
-    market_caps = metrics_rows["market_cap"].to_arrow().to_pylist()
+    metrics_rows = valid_candidate_metrics_df[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
+    metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
+    if metrics_rows.empty:
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-    candidate_records = []
-    for ticker, atr_value, market_cap_value in zip(tickers, atr_values, market_caps):
-        if ticker not in ticker_to_idx or pd.isna(atr_value):
-            continue
+    metrics_rows = metrics_rows[metrics_rows["atr_14_ratio"] > 0]
+    if metrics_rows.empty:
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-        atr_float = float(atr_value)
-        if atr_float <= 0.0:
-            continue
+    metrics_rows = metrics_rows.copy(deep=True)
+    metrics_rows["ticker_idx"] = metrics_rows["ticker_idx"].astype("int32")
+    market_cap_series = metrics_rows["market_cap"].fillna(0).astype("float64")
+    metrics_rows["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
+    metrics_rows["atr_q"] = (metrics_rows["atr_14_ratio"].astype("float64") * 10000.0).round().astype("int64")
 
-        if pd.isna(market_cap_value):
-            market_cap_q = 0
-        else:
-            market_cap_float = float(market_cap_value)
-            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
+    ranked_rows = metrics_rows.sort_values(
+        by=["market_cap_q", "atr_q", "ticker"],
+        ascending=[False, False, True],
+    )
+    candidate_indices_final = cp.asarray(ranked_rows["ticker_idx"].astype("int32"))
+    valid_atrs_final = cp.asarray(ranked_rows["atr_14_ratio"].astype("float32"))
 
-        atr_q = int(round(atr_float * 10000))
-        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
-
-    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
-    candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
-    valid_atrs_final = [atr for _, _, _, atr in ranked_records]
+    ranked_records = []
+    if return_ranked_records:
+        ranked_records = list(
+            zip(
+                ranked_rows["ticker"].to_arrow().to_pylist(),
+                ranked_rows["market_cap_q"].to_arrow().to_pylist(),
+                ranked_rows["atr_q"].to_arrow().to_pylist(),
+                ranked_rows["atr_14_ratio"].astype("float32").to_arrow().to_pylist(),
+            )
+        )
     return candidate_indices_final, valid_atrs_final, ranked_records

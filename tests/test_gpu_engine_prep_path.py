@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import cupy as cp
+import cudf
 import pandas as pd
 
 
@@ -33,6 +34,21 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         }
 
     @staticmethod
+    def _mock_all_data_reset_view():
+        return cudf.DataFrame(
+            {
+                "ticker": ["005930"],
+                "date": pd.to_datetime(["2026-01-05"]),
+                "open_price": [100000.0],
+                "close_price": [100000.0],
+                "high_price": [100000.0],
+                "low_price": [100000.0],
+                "atr_14_ratio": [0.1],
+                "market_cap": [1_000_000_000.0],
+            }
+        )
+
+    @staticmethod
     def _param_combinations():
         return cp.asarray(
             [[20.0, 0.02, 0.04, 0.04, 0.0, -0.15, 10.0, 90.0]],
@@ -58,7 +74,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
     @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
     def test_reuses_single_all_data_reset_index_for_tensor_build(self, mock_create_tensors):
         all_data_gpu = MagicMock()
-        reset_view = MagicMock()
+        reset_view = self._mock_all_data_reset_view()
         all_data_gpu.reset_index.return_value = reset_view
         weekly_filtered_gpu = MagicMock()
 
@@ -68,12 +84,14 @@ class TestGpuEnginePrepPath(unittest.TestCase):
 
         self.assertEqual(result.shape, (1, 0))
         all_data_gpu.reset_index.assert_called_once_with()
-        self.assertIs(mock_create_tensors.call_args.args[0], reset_view)
+        prepared_view = mock_create_tensors.call_args.args[0]
+        self.assertIn("ticker_idx", prepared_view.columns)
+        self.assertEqual(int(len(prepared_view)), int(len(reset_view)))
 
     @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
     def test_skips_weekly_reset_in_tier_mode(self, mock_create_tensors):
         all_data_gpu = MagicMock()
-        all_data_gpu.reset_index.return_value = MagicMock()
+        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
         weekly_filtered_gpu = MagicMock()
 
         mock_create_tensors.return_value = self._empty_tensors()
@@ -85,7 +103,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
     @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
     def test_keeps_weekly_reset_for_weekly_mode(self, mock_create_tensors):
         all_data_gpu = MagicMock()
-        all_data_gpu.reset_index.return_value = MagicMock()
+        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
         weekly_filtered_gpu = MagicMock()
         weekly_filtered_gpu.reset_index.return_value = MagicMock()
 
