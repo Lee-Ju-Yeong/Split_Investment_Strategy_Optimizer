@@ -94,9 +94,11 @@ class DataHandler:
         query = """
             SELECT
                 dsp.date, dsp.open_price, dsp.high_price, dsp.low_price, dsp.close_price, dsp.volume,
-                ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value
+                ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value,
+                mcd.market_cap
             FROM DailyStockPrice dsp
             LEFT JOIN CalculatedIndicators ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
+            LEFT JOIN MarketCapDaily mcd ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
             WHERE dsp.stock_code = %s AND dsp.date BETWEEN %s AND %s
             ORDER BY dsp.date ASC
         """
@@ -142,7 +144,20 @@ class DataHandler:
         return data_row
 
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
-        return self.get_stock_row_as_of(ticker, date, start_date, end_date)
+        stock_data = self.load_stock_data(ticker, start_date, end_date)
+        if stock_data is None or stock_data.empty:
+            return None
+
+        target_date = pd.to_datetime(date)
+        if target_date not in stock_data.index:
+            return None
+
+        data_row = stock_data.loc[target_date]
+        if isinstance(data_row, pd.DataFrame):
+            data_row = data_row.iloc[-1]
+        data_row = data_row.copy()
+        data_row.name = target_date
+        return data_row
 
     def get_filtered_stock_codes(self, date):
         conn = self.get_connection()

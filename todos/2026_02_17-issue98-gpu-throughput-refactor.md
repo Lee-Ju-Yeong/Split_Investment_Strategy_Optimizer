@@ -36,6 +36,7 @@
 | P-012 | PO | `src/data_handler.py` | `@lru_cache(maxsize=200)` + row copy/asof 반복 | universe 확장 시 캐시 미스 증가, DB thrashing | 캐시 정책 재설계(구간/배치 중심) | #98/#57/#58 |
 | P-013 | PO | `src/optimization/gpu/data_loading.py` | 매 호출 `create_engine` + pandas round-trip | fold/재실행 시 로딩 지연 누적 | engine 재사용 + GPU 친화 로딩 경로 | #98/#58 |
 | P-014 | PO | `tests/test_backtest_strategy_gpu.py` | 성능 회귀 가드 부재(`pass` placeholder) | 회귀 조기 탐지 불가 | 고정 데이터 benchmark/smoke budget 테스트 추가 | #98/#56 |
+| P-015 | PO | `src/backtest/gpu/engine.py` | `signal_day_idx < 0` 분기에서 `cp.zeros` 4개를 일별 재할당 | 장기 구간에서 allocator churn/단편화 누적 | fallback zero tensor를 루프 밖에서 1회 생성 후 재사용 | #98 |
 
 ## 3. 비목표 (Out of Scope)
 - 전략 규칙 변경(수익률 개선 목적 알고리즘 변경)
@@ -67,10 +68,10 @@
   - parity failure 발생 시 즉시 rollback 가능
 
 ## 6. 실행 체크리스트
-- [ ] Gate A: `P-001~P-014`의 `PC/PO` 분류와 PR 매핑 확정
+- [ ] Gate A: `P-001~P-015`의 `PC/PO` 분류와 PR 매핑 확정
 - [x] PR-98A: `P-001~P-004` fallback 축소/정리
 - [ ] PR-98B(PC): `P-005/P-006/P-008/P-009` CPU/GPU 동시 수정 + parity 통과
-- [ ] PR-98C(PO): `P-007/P-010/P-011/P-012/P-013` 캐시/동기화/I/O 최적화
+- [ ] PR-98C(PO): `P-007/P-010/P-011/P-012/P-013/P-015` 캐시/동기화/I/O 최적화
 - [ ] PR-98D: `P-014` 성능 회귀 가드/벤치마크 테스트 반영
 - [ ] 성능 측정 결과 문서화(before/after)
 - [ ] `#56` strict parity 재검증(`0 mismatch`)
@@ -314,6 +315,27 @@
     - 필터링/정렬/동률 ticker tie-break 동작 검증
   - 신규: `tests/test_gpu_candidate_metrics_asof.py`
     - `latest <= signal_date` 선택, 미래 행 배제, empty 입력 동작 검증
+
+### 11-8. 스크래치 재검토 델타 (코드 재점검, 2026-02-18)
+- 실행 증상(실측 로그):
+  - `python -m src.parameter_simulation_gpu` 장기 구간 실행에서
+  - `[GPU_PROGRESS] 25/244 (10.2%) elapsed=1:35:20 eta=13:55:09`
+  - 해석: GPU 커널 연산보다 일별 후보군 준비/정렬 오버헤드가 wall-time을 지배
+- 코드 확인(현 상태):
+  - `src/backtest/gpu/engine.py`
+    - tier 후보 인덱스를 `candidate_indices.tolist()`로 Python 변환
+    - weekly 경로에서 `to_arrow().to_pylist()` + Python list/set 교집합
+  - `src/backtest/gpu/data.py`
+    - `_collect_candidate_rank_metrics_asof`: `date<=signal_date` 조건의 일별 필터/정렬/중복제거 반복
+    - `build_ranked_candidate_payload`: `to_pylist()` + Python `for` 루프 기반 payload 구성
+  - `src/backtest/gpu/logic.py`
+    - `run_lengths.tolist()`를 통한 device->host sync 잔존
+  - `src/backtest/gpu/engine.py`
+    - `signal_day_idx < 0`일 때 `cp.zeros` 4개 재할당(신규 식별, P-015)
+- strict_hysteresis_v1 최적화 주의점(숨은 리스크):
+  - tier 마스크(`Tier1 only`, fallback 규칙)를 랭킹 이전에 적용하지 않으면
+    후보군 자체가 달라져 parity drift가 발생한다.
+  - 즉, `mask -> rank -> slot` 순서는 고정해야 한다.
 
 ## 12. 현재 상태 업데이트 (2026-02-18, Baseline 대기 중)
 - 브랜치 상태:
