@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 
+import cupy as cp
 import cudf
 import pandas as pd
 
@@ -23,6 +24,7 @@ class TestGpuCandidateMetricsAsOf(unittest.TestCase):
                     ]
                 ),
                 "ticker": ["A", "A", "B", "B"],
+                "ticker_idx": [0, 0, 1, 1],
                 "atr_14_ratio": [0.10, 0.20, 0.30, 0.40],
                 "market_cap": [10_000_000, 11_000_000, 20_000_000, 21_000_000],
             }
@@ -30,20 +32,22 @@ class TestGpuCandidateMetricsAsOf(unittest.TestCase):
 
         metrics_df = _collect_candidate_rank_metrics_asof(
             all_data_reset_idx=all_data,
-            final_candidate_tickers=["A", "B", "C"],
+            final_candidate_indices=cp.asarray([0, 1, 2], dtype=cp.int32),
             signal_date=pd.Timestamp("2026-01-08"),
         )
 
         self.assertIsNotNone(metrics_df)
-        self.assertEqual(set(metrics_df.index.to_arrow().to_pylist()), {"A", "B"})
-        self.assertAlmostEqual(float(metrics_df.loc["A", "atr_14_ratio"]), 0.20, places=6)
-        self.assertAlmostEqual(float(metrics_df.loc["B", "atr_14_ratio"]), 0.30, places=6)
+        self.assertEqual(set(metrics_df["ticker"].to_arrow().to_pylist()), {"A", "B"})
+        metrics_by_ticker = metrics_df.set_index("ticker")
+        self.assertAlmostEqual(float(metrics_by_ticker.loc["A", "atr_14_ratio"]), 0.20, places=6)
+        self.assertAlmostEqual(float(metrics_by_ticker.loc["B", "atr_14_ratio"]), 0.30, places=6)
 
     def test_collect_candidate_rank_metrics_asof_returns_none_when_no_rows(self):
         all_data = cudf.DataFrame(
             {
                 "date": pd.to_datetime(["2026-01-10"]),
                 "ticker": ["A"],
+                "ticker_idx": [0],
                 "atr_14_ratio": [0.5],
                 "market_cap": [10_000_000],
             }
@@ -51,8 +55,27 @@ class TestGpuCandidateMetricsAsOf(unittest.TestCase):
 
         metrics_df = _collect_candidate_rank_metrics_asof(
             all_data_reset_idx=all_data,
-            final_candidate_tickers=["A"],
+            final_candidate_indices=cp.asarray([0], dtype=cp.int32),
             signal_date=pd.Timestamp("2026-01-08"),
+        )
+
+        self.assertIsNone(metrics_df)
+
+    def test_collect_candidate_rank_metrics_asof_returns_none_when_indices_do_not_match(self):
+        all_data = cudf.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+                "ticker": ["A", "A"],
+                "ticker_idx": [0, 0],
+                "atr_14_ratio": [0.1, 0.2],
+                "market_cap": [10_000_000, 10_000_000],
+            }
+        )
+
+        metrics_df = _collect_candidate_rank_metrics_asof(
+            all_data_reset_idx=all_data,
+            final_candidate_indices=cp.asarray([99], dtype=cp.int32),
+            signal_date=pd.Timestamp("2026-01-06"),
         )
 
         self.assertIsNone(metrics_df)

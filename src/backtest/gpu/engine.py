@@ -102,6 +102,11 @@ def run_magic_split_strategy_on_gpu(
     
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
+    ticker_to_idx_gdf = cudf.Series(ticker_to_idx)
+    all_data_reset_idx["ticker_idx"] = (
+        all_data_reset_idx["ticker"].map(ticker_to_idx_gdf).fillna(-1).astype("int32")
+    )
+    all_data_reset_idx = all_data_reset_idx[all_data_reset_idx["ticker_idx"] >= 0]
     needs_weekly_candidates = (
         candidate_source_mode == "weekly"
         or (candidate_source_mode == "hybrid_transition" and use_weekly_alpha_gate)
@@ -166,7 +171,7 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
 
             # --- [Issue #67] Candidate Selection Logic ---
-            candidate_indices_list = []
+            candidate_indices_gpu = cp.array([], dtype=cp.int32)
             
             # (A) Tier Selection (Primary for Tier/Hybrid)
             if candidate_source_mode in ['tier', 'hybrid_transition'] and tier_tensor is not None:
@@ -183,8 +188,7 @@ def run_magic_split_strategy_on_gpu(
                         # Fallback to Tier 2 (<= 2)
                         tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
                         candidate_indices = cp.where(tier2_mask)[0]
-
-                    candidate_indices_list = candidate_indices.tolist() # Convert to list for intersection
+                    candidate_indices_gpu = candidate_indices.astype(cp.int32, copy=False)
             
             # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
             weekly_indices_list = []
@@ -195,29 +199,35 @@ def run_magic_split_strategy_on_gpu(
                     candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
                     candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
                     weekly_indices_list = [ticker_to_idx.get(t) for t in candidate_tickers_list if t in ticker_to_idx]
+            weekly_indices_gpu = (
+                cp.asarray(weekly_indices_list, dtype=cp.int32)
+                if weekly_indices_list
+                else cp.array([], dtype=cp.int32)
+            )
             
             # (C) Combine
-            final_candidate_indices = []
+            final_candidate_indices = cp.array([], dtype=cp.int32)
             
             if candidate_source_mode == 'weekly':
-                final_candidate_indices = weekly_indices_list
+                final_candidate_indices = weekly_indices_gpu
             elif candidate_source_mode == 'tier':
-                final_candidate_indices = candidate_indices_list
+                final_candidate_indices = candidate_indices_gpu
             elif candidate_source_mode == 'hybrid_transition':
                 if use_weekly_alpha_gate:
-                    weekly_index_set = set(weekly_indices_list)
-                    final_candidate_indices = [
-                        idx for idx in candidate_indices_list if idx in weekly_index_set
-                    ]
+                    if candidate_indices_gpu.size > 0 and weekly_indices_gpu.size > 0:
+                        final_candidate_indices = candidate_indices_gpu[
+                            cp.isin(candidate_indices_gpu, weekly_indices_gpu)
+                        ]
                 else:
-                    final_candidate_indices = candidate_indices_list
+                    final_candidate_indices = candidate_indices_gpu
+            if final_candidate_indices.size > 1:
+                final_candidate_indices = cp.unique(final_candidate_indices)
 
             # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
-            if final_candidate_indices and signal_date is not None:
-                final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
+            if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
-                    final_candidate_tickers=final_candidate_tickers,
+                    final_candidate_indices=final_candidate_indices,
                     signal_date=signal_date,
                 )
 
@@ -225,14 +235,12 @@ def run_magic_split_strategy_on_gpu(
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    candidate_indices_final, valid_atrs_final, ranked_records = build_ranked_candidate_payload(
+                    candidate_tickers_for_day, candidate_atrs_for_day, ranked_records = build_ranked_candidate_payload(
                         valid_candidate_metrics_df=valid_candidate_metrics_df,
-                        ticker_to_idx=ticker_to_idx,
+                        return_ranked_records=debug_mode,
                     )
 
-                    if ranked_records:
-                        candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
-                        candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
+                    if candidate_tickers_for_day.size > 0:
                         if debug_mode:
                             preview = ", ".join([f"{ticker}" for ticker, _, _, _ in ranked_records[:10]])
                             print(
