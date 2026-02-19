@@ -134,9 +134,10 @@
   - `_collect_candidate_rank_metrics_asof`의 일별 filter/concat 축소
   - tensor gather 중심으로 재구성
 - [ ] `src/backtest/gpu/logic.py`
+- [x] `src/backtest/gpu/logic.py`
   - 신규진입 후보 처리에서 launch 과다 루프 축소
   - 결정론 순서/자본차감 semantics 보존
-- [ ] `src/backtest/gpu/utils.py`
+- [x] `src/backtest/gpu/utils.py`
   - Python `sorted` -> `cp.lexsort` 전환
 - [ ] 필요 시 동반 CPU 수정:
   - `src/backtest/cpu/strategy.py`
@@ -397,9 +398,22 @@
   - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path`
   - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_cpu_gpu_parity_topk`
   - 결과: 모두 통과
+- 추가 반영(PR-98B-3, 2026-02-20):
+  - `src/backtest/gpu/logic.py`
+    - `_process_new_entry_signals_gpu`에서 `(sim x candidate)` 대형 확장/`argsort` 경로 제거
+    - 후보 우선순위 입력 순서를 유지한 채, 후보 축 순차 + 시뮬레이션 축 벡터화로 자본/슬롯 즉시 차감 semantics 보존
+  - `src/backtest/gpu/utils.py`
+    - 후보 정렬 helper를 `cp.lexsort` 기반으로 전환(`market_cap->atr->ticker`, `atr->ticker`)
+  - 추가 테스트:
+    - `tests/test_gpu_new_entry_signals.py`
+    - `tests/test_gpu_candidate_sorting_utils.py`
+  - 실행:
+    - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_new_entry_signals tests.test_gpu_candidate_sorting_utils`
+    - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_backtest_strategy_gpu`
+    - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path tests.test_cpu_gpu_parity_topk`
+  - 결과: 모두 통과
 - 남은 범위(PR-98B 미완료 항목):
-  - `src/backtest/gpu/logic.py` 신규진입 hot loop 축소(P-008)
-  - `src/backtest/gpu/utils.py` 정렬 hot path `cp.lexsort` 전환(P-009)
+  - strict parity(실환경 GPU) 재실행 및 증적 첨부
 - strict parity 실행 메모:
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
   - strict parity 게이트는 운영 GPU 호스트에서 `cpu_gpu_parity_topk`로 재실행 후 증적 첨부 필요
