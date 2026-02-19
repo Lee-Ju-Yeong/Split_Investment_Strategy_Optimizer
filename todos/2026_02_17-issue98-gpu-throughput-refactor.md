@@ -133,7 +133,6 @@
 - [x] `src/backtest/gpu/data.py`
   - `_collect_candidate_rank_metrics_asof`의 일별 filter/concat 축소
   - tensor gather 중심으로 재구성
-- [ ] `src/backtest/gpu/logic.py`
 - [x] `src/backtest/gpu/logic.py`
   - 신규진입 후보 처리에서 launch 과다 루프 축소
   - 결정론 순서/자본차감 semantics 보존
