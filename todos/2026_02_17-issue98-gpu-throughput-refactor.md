@@ -449,3 +449,24 @@
 - strict parity 실행 메모:
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
   - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료
+
+## 15. PR-98C-1 진행 현황 (2026-02-21)
+- 반영 범위(저위험 캐시/로딩 개선):
+  - `src/optimization/gpu/data_loading.py`
+    - DB 엔진 생성을 `_get_sql_engine`(LRU 캐시)로 통합해 동일 connection string에서 `create_engine` 재사용
+    - `preload_all_data_to_gpu`, `preload_weekly_filtered_stocks_to_gpu`, `preload_tier_data_to_tensor` 모두 공용 엔진 경로 사용
+  - `src/data_handler.py`
+    - `load_stock_data`의 캐시 키를 날짜 정규화(`YYYY-MM-DD`) 후 private cached helper로 위임
+    - 동일 범위를 문자열/`Timestamp` 등 서로 다른 타입으로 호출해도 cache hit 되도록 정규화
+    - 캐시 초기화용 `clear_load_stock_data_cache` 추가
+- 테스트:
+  - 신규: `tests/test_gpu_data_loading_engine_cache.py`
+  - 보강: `tests/test_data_handler.py` (`test_load_stock_data_cache_key_is_normalized`)
+  - 실행:
+    - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_data_loading_engine_cache tests.test_data_handler.TestDataHandler.test_load_stock_data tests.test_data_handler.TestDataHandler.test_load_stock_data_empty tests.test_data_handler.TestDataHandler.test_load_stock_data_cache_key_is_normalized tests.test_gpu_new_entry_signals tests.test_gpu_candidate_sorting_utils tests.test_backtest_strategy_gpu tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path tests.test_cpu_gpu_parity_topk`
+  - 결과: 통과(28 tests)
+- 남은 PR-98C 범위:
+  - `src/backtest/cpu/strategy.py` 일자/신호 row 캐시 도입
+  - `src/backtest/cpu/portfolio.py`, `src/backtest/cpu/execution.py` lookup cache 주입
+  - `src/data_handler.py` 캐시 정책(구간 단위/size) 후속 조정
+  - `src/optimization/gpu/data_loading.py` pandas round-trip 최소화 검토
