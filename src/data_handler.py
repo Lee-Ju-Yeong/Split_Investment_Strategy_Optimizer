@@ -69,6 +69,13 @@ class DataHandler:
             return None
         return pd.to_datetime(trading_dates[current_day_idx - 1])
 
+    @staticmethod
+    def _normalize_date_key(value):
+        return pd.to_datetime(value).strftime('%Y-%m-%d')
+
+    def clear_load_stock_data_cache(self):
+        self._load_stock_data_cached.cache_clear()
+
     def get_trading_dates(self, start_date, end_date):
         conn = self.get_connection()
         try:
@@ -83,13 +90,18 @@ class DataHandler:
         finally:
             conn.close()
 
-    @lru_cache(maxsize=200)
     def load_stock_data(self, ticker, start_date, end_date):
+        ticker_key = str(ticker)
+        start_date_str = self._normalize_date_key(start_date)
+        end_date_str = self._normalize_date_key(end_date)
+        return self._load_stock_data_cached(ticker_key, start_date_str, end_date_str)
+
+    @lru_cache(maxsize=200)
+    def _load_stock_data_cached(self, ticker, start_date_str, end_date_str):
         conn = self.get_connection()
         # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
-        extended_start_date = pd.to_datetime(start_date) - timedelta(days=252*10 + 50)
+        extended_start_date = pd.to_datetime(start_date_str) - timedelta(days=252*10 + 50)
         extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
-        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
         
         query = """
             SELECT
@@ -113,7 +125,7 @@ class DataHandler:
             df.set_index('date', inplace=True)
             
             # 실제 백테스팅 기간 데이터만 필터링하여 반환
-            df_filtered = df.loc[start_date:end_date].copy()
+            df_filtered = df.loc[start_date_str:end_date_str].copy()
             return df_filtered
         finally:
             conn.close()

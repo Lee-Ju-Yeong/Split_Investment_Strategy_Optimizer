@@ -29,7 +29,7 @@ class TestIssue67TierUniverse(unittest.TestCase):
         self.mock_conn = MagicMock()
         self.mock_pool.return_value.get_connection.return_value = self.mock_conn
         self.data_handler = DataHandler(self.db_config)
-        self.data_handler.load_stock_data.cache_clear()
+        self.data_handler.clear_load_stock_data_cache()
 
     def tearDown(self):
         self.pool_patcher.stop()
