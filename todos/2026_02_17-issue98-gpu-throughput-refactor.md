@@ -141,7 +141,7 @@
 - [ ] 필요 시 동반 CPU 수정:
   - `src/backtest/cpu/strategy.py`
   - `src/backtest/cpu/execution.py`
-- [ ] 검증:
+- [x] 검증:
   - `#56` strict parity(5거래일 + top-k gate) 필수 통과
   - mismatch 발생 시 즉시 롤백, 원인 태깅 후 재시도
 
@@ -436,8 +436,16 @@
     - `tests.test_gpu_engine_prep_path`
     - `tests.test_cpu_gpu_parity_topk`
     - 결과: 모두 통과
+- throughput 재측정(PR-98B-4 적용 후):
+  - after(PR-98B-4): `results/perf_after_pr98b4_20260221_095532.log`
+  - wall-clock(B0 대비): `18688s -> 18393s` (`-295s`, `-1.58%`)
+  - kernel time(B0 대비): `18633.54s -> 18333.14s` (`-300.40s`, `-1.61%`)
+  - sims/sec(B0 대비): `0.01926 -> 0.01957`
+- strict parity 재검증(PR-98B-4):
+  - 증적: `results/parity_topk_strict_pr98b4_20260221_150205.json`
+  - 결과: `passed rows=1`, `failed=0`
 - 남은 범위(PR-98B 미완료 항목):
-  - PR-98B-4 적용 후 throughput 재측정 및 B0 비교
+  - 없음 (PR-98B 범위 완료)
 - strict parity 실행 메모:
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
-  - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료(`results/parity_topk_strict_pr98b_20260221_082146.json`)
+  - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료
