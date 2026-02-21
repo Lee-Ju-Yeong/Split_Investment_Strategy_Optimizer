@@ -543,8 +543,22 @@ def _process_new_entry_signals_gpu(
     # market_cap_q desc -> atr_q desc -> ticker asc 순으로 정렬되어 전달된다.
     # 신규 진입에서는 이 입력 순서를 그대로 사용해야 CPU/GPU parity가 유지된다.
     num_simulations = param_combinations.shape[0]
+    num_candidates = int(candidate_tickers_for_day.size)
     investment_per_order = portfolio_state[:, 1]
     commission_rate = cp.float32(buy_commission_rate)
+
+    candidate_prices = current_prices[candidate_tickers_for_day]
+    buy_prices_for_day = adjust_price_up_gpu(candidate_prices)
+    valid_buy_price_mask = buy_prices_for_day > 0
+    safe_buy_prices_for_day = cp.where(valid_buy_price_mask, buy_prices_for_day, cp.float32(1.0))
+
+    quantities_matrix = cp.floor(
+        investment_per_order[:, cp.newaxis] / safe_buy_prices_for_day[cp.newaxis, :]
+    )
+    quantities_matrix[:, ~valid_buy_price_mask] = 0
+    costs_matrix = quantities_matrix * buy_prices_for_day[cp.newaxis, :]
+    commissions_matrix = cp.floor(costs_matrix * commission_rate)
+    total_costs_matrix = costs_matrix + commissions_matrix
 
     temp_capital = portfolio_state[:, 0].copy()
     temp_available_slots = available_slots.copy()
@@ -553,11 +567,17 @@ def _process_new_entry_signals_gpu(
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
 
-    for k in range(int(candidate_tickers_for_day.size)):
+    for k in range(num_candidates):
         if not cp.any(temp_available_slots > 0):
             break
 
         stock_idx = int(candidate_tickers_for_day[k].item())
+        buy_price = buy_prices_for_day[k]
+        if float(buy_price.item()) <= 0:
+            continue
+
+        quantities = quantities_matrix[:, k]
+        total_costs = total_costs_matrix[:, k]
         has_slot = temp_available_slots > 0
 
         cooldown_ref = cooldown_state[:, stock_idx]
@@ -566,15 +586,6 @@ def _process_new_entry_signals_gpu(
         initial_buy_mask = has_slot & (~is_holding) & (~is_in_cooldown)
         if not cp.any(initial_buy_mask):
             continue
-
-        buy_price = adjust_price_up_gpu(current_prices[stock_idx])
-        if float(buy_price.item()) <= 0:
-            continue
-
-        quantities = cp.floor(investment_per_order / buy_price)
-        costs = buy_price * quantities
-        commissions = cp.floor(costs * commission_rate)
-        total_costs = costs + commissions
 
         # CPU execution parity:
         # 투자금(investment_per_order) 자체와 비교하지 않고, 실제 체결 총비용을 감당 가능한지만 본다.
