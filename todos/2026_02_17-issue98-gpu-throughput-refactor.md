@@ -411,8 +411,18 @@
     - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_backtest_strategy_gpu`
     - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path tests.test_cpu_gpu_parity_topk`
   - 결과: 모두 통과
+- strict parity 재실행(실환경 GPU):
+  - 명령: `python -m src.cpu_gpu_parity_topk --start-date 2026-01-05 --end-date 2026-01-09 --params-csv results/parity_single_param_issue56.csv --topk 3 --tolerance 1e-3 --parity-mode strict`
+  - 증적: `results/parity_topk_strict_pr98b_20260221_082146.json`
+  - 결과: `passed rows=1`, `failed=0`
+- throughput(B0 대비) 측정:
+  - baseline: `results/perf_baseline_strict_hyst_20260219_212900.log`
+  - after(PR-98B): `results/perf_after_pr98b_20260220_063502.log`
+  - wall-clock: `18688s -> 19350s` (`+662s`, `+3.54%`)
+  - kernel time: `18633.54s -> 19296.47s` (`+662.93s`, `+3.56%`)
+  - sims/sec: `0.01926 -> 0.01860`
 - 남은 범위(PR-98B 미완료 항목):
-  - strict parity(실환경 GPU) 재실행 및 증적 첨부
+  - PR-98B 성능 회귀(+3.5%) 원인 분석 및 보정안 적용(PR-98C/후속 PR)
 - strict parity 실행 메모:
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
-  - strict parity 게이트는 운영 GPU 호스트에서 `cpu_gpu_parity_topk`로 재실행 후 증적 첨부 필요
+  - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료(`results/parity_topk_strict_pr98b_20260221_082146.json`)
