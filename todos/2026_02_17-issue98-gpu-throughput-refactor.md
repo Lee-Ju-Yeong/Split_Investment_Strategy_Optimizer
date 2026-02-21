@@ -421,8 +421,23 @@
   - wall-clock: `18688s -> 19350s` (`+662s`, `+3.54%`)
   - kernel time: `18633.54s -> 19296.47s` (`+662.93s`, `+3.56%`)
   - sims/sec: `0.01926 -> 0.01860`
+- 후속 보정(PR-98B-4, 2026-02-21):
+  - `src/backtest/gpu/logic.py`
+    - `_process_new_entry_signals_gpu`에서 후보 루프 내부의 반복 비용 계산(`adjust_price_up`, `quantities`, `commissions`) 제거
+    - 후보별 체결가/수량/총비용을 루프 외부에서 1회 벡터화 계산 후, 루프에서는 affordability/slot/cooldown 판정만 수행
+  - 목적:
+    - PR-98B 이후 관측된 kernel +3.56% 회귀 보정
+    - 의사결정 순서/자본차감 semantics는 유지
+  - 검증(로컬 단위):
+    - `tests.test_gpu_new_entry_signals`
+    - `tests.test_backtest_strategy_gpu`
+    - `tests.test_gpu_candidate_metrics_asof`
+    - `tests.test_gpu_candidate_payload_builder`
+    - `tests.test_gpu_engine_prep_path`
+    - `tests.test_cpu_gpu_parity_topk`
+    - 결과: 모두 통과
 - 남은 범위(PR-98B 미완료 항목):
-  - PR-98B 성능 회귀(+3.5%) 원인 분석 및 보정안 적용(PR-98C/후속 PR)
+  - PR-98B-4 적용 후 throughput 재측정 및 B0 비교
 - strict parity 실행 메모:
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
   - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료(`results/parity_topk_strict_pr98b_20260221_082146.json`)
