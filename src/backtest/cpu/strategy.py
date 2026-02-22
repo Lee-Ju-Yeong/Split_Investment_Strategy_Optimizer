@@ -79,6 +79,7 @@ class MagicSplitStrategy(Strategy):
         self.investment_per_order = 0
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
+        self.last_entry_context = {}
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -92,6 +93,15 @@ class MagicSplitStrategy(Strategy):
                 "Forcing 'tier' (A-path)."
             )
         return "tier"
+
+    @staticmethod
+    def _to_market_cap_rank_value(market_cap):
+        if pd.isna(market_cap):
+            return 0
+        market_cap_float = float(market_cap)
+        if market_cap_float <= 0.0:
+            return 0
+        return int(market_cap_float // 1_000_000)
 
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
@@ -113,11 +123,23 @@ class MagicSplitStrategy(Strategy):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
+        self.last_entry_context = {
+            "date": pd.to_datetime(current_date),
+            "signal_date": signal_date,
+            "available_slots": 0,
+            "tier_source": "NO_SIGNAL_DATE",
+            "candidate_count_raw": 0,
+            "candidate_count_active": 0,
+            "candidate_count_ranked": 0,
+            "new_entry_count": 0,
+        }
         if signal_date is None:
             return buy_signals
 
         # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
+        self.last_entry_context["available_slots"] = int(max(0, available_slots))
+        self.last_entry_context["tier_source"] = "NO_CANDIDATES"
         if (current_date - self.backtest_start_date).days < 15:
             from tqdm import tqdm
             log_msg = (
@@ -156,6 +178,8 @@ class MagicSplitStrategy(Strategy):
                         tier_result = get_tier_candidates(signal_date)
                     tier_codes, used_tier = tier_result
                     candidate_codes = tier_codes
+                    self.last_entry_context["tier_source"] = str(used_tier)
+                    self.last_entry_context["candidate_count_raw"] = int(len(candidate_codes))
 
                     from tqdm import tqdm
                     if used_tier.startswith("TIER_2_FALLBACK"):
@@ -165,9 +189,11 @@ class MagicSplitStrategy(Strategy):
                 except Exception as exc:
                     print(f"[Warning] Tier candidate lookup failed ({exc}). Returning empty candidate set.")
                     candidate_codes = []
+                    self.last_entry_context["tier_source"] = "LOOKUP_ERROR"
             else:
                 print("[Warning] get_candidates_with_tier_fallback missing. Returning empty candidate set.")
                 candidate_codes = []
+                self.last_entry_context["tier_source"] = "LOOKUP_MISSING"
             # --- [Issue #67] Logic End ---
             
             active_candidates = []
@@ -181,8 +207,9 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
+            self.last_entry_context["candidate_count_active"] = int(len(active_candidates))
             
-            candidate_atrs = []
+            candidate_rank_metrics = []
             for ticker in active_candidates:
                 signal_row = data_handler.get_stock_row_as_of(
                     ticker, signal_date, self.backtest_start_date, self.backtest_end_date
@@ -191,19 +218,30 @@ class MagicSplitStrategy(Strategy):
                     continue
                 latest_atr = signal_row["atr_14_ratio"]
                 signal_close = signal_row.get("close_price")
-                if pd.notna(latest_atr) and pd.notna(signal_close):
-                    candidate_atrs.append(
-                        {
-                            "ticker": ticker,
-                            "atr_14_ratio": latest_atr,
-                            "signal_close_price": signal_close,
-                        }
-                    )
+                if pd.isna(latest_atr) or pd.isna(signal_close):
+                    continue
+
+                atr_float = float(latest_atr)
+                if atr_float <= 0.0:
+                    continue
+
+                market_cap_rank = self._to_market_cap_rank_value(signal_row.get("market_cap"))
+                candidate_rank_metrics.append(
+                    {
+                        "ticker": ticker,
+                        "atr_14_ratio": atr_float,
+                        "atr_q": int(round(atr_float * 10000)),
+                        "market_cap_rank": market_cap_rank,
+                        "signal_close_price": signal_close,
+                    }
+                )
                         
-            # GPU와 동일한 정렬 기준 적용 (1. ATR 내림차순, 2. Ticker 오름차순)
-            # Python의 stable sort 특성을 활용: 먼저 2차 기준으로 정렬 후, 1차 기준으로 정렬
-            candidates_sorted_by_ticker = sorted(candidate_atrs, key=lambda x: x["ticker"])
-            sorted_candidates = sorted(candidates_sorted_by_ticker, key=lambda x: x["atr_14_ratio"], reverse=True)
+            # ATR -> 시총 -> 티커 순으로 결정론적 정렬
+            sorted_candidates = sorted(
+                candidate_rank_metrics,
+                key=lambda x: (-x["atr_q"], -x["market_cap_rank"], x["ticker"]),
+            )
+            self.last_entry_context["candidate_count_ranked"] = int(len(sorted_candidates))
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
             for candidate in sorted_candidates:
@@ -219,12 +257,13 @@ class MagicSplitStrategy(Strategy):
                             self.investment_per_order,
                             new_pos,
                             1,
-                            -candidate["atr_14_ratio"],
+                            (-candidate["atr_q"], -candidate["market_cap_rank"]),
                             "신규 진입",
                             signal_close_price,
                         )
                     )
                     num_new_entries += 1
+            self.last_entry_context["new_entry_count"] = int(num_new_entries)
 
         # 신규 매수 신호 내에서의 정렬
         buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))

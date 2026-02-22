@@ -87,3 +87,19 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_tic
         return None
     dedup_rows = same_day_rows.drop_duplicates(subset=['ticker'], keep='first')
     return dedup_rows.set_index('ticker')[['atr_14_ratio', 'market_cap']]
+
+
+def _collect_candidate_atr_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
+    """
+    Backward-compatible helper for legacy tests/callers.
+    Returns:
+      cudf.Series(index=ticker, values=atr_14_ratio) or None
+    """
+    metrics_df = _collect_candidate_rank_metrics_asof(
+        all_data_reset_idx=all_data_reset_idx,
+        final_candidate_tickers=final_candidate_tickers,
+        signal_date=signal_date,
+    )
+    if metrics_df is None or metrics_df.empty:
+        return None
+    return metrics_df["atr_14_ratio"].dropna()

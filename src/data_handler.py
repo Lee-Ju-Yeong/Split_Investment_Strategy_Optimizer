@@ -94,9 +94,11 @@ class DataHandler:
         query = """
             SELECT
                 dsp.date, dsp.open_price, dsp.high_price, dsp.low_price, dsp.close_price, dsp.volume,
-                ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value
+                ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value,
+                mcap.market_cap
             FROM DailyStockPrice dsp
             LEFT JOIN CalculatedIndicators ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
+            LEFT JOIN MarketCapDaily mcap ON dsp.stock_code = mcap.stock_code AND dsp.date = mcap.date
             WHERE dsp.stock_code = %s AND dsp.date BETWEEN %s AND %s
             ORDER BY dsp.date ASC
         """

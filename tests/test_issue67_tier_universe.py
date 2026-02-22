@@ -13,7 +13,7 @@ from src.backtest.gpu.data import (
 )
 from src.backtest.gpu.utils import (
     _resolve_signal_date_for_gpu,
-    _sort_candidates_by_atr_then_ticker,
+    _sort_candidates_by_atr_then_market_cap_then_ticker,
 )
 
 class TestIssue67TierUniverse(unittest.TestCase):
@@ -215,12 +215,17 @@ class TestIssue67StrategyModes(unittest.TestCase):
         self.data_handler.get_filtered_stock_codes.assert_called_once()
         self.data_handler.get_candidates_with_tier_fallback.assert_not_called()
 
-    def test_strategy_mode_tier_same_atr_uses_ticker_tiebreak(self):
+    def test_strategy_mode_tier_same_atr_uses_market_cap_then_ticker_tiebreak(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["C", "A", "B"], "TIER_1")
+        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "C", "B"], "TIER_1")
 
-        self.data_handler.get_stock_row_as_of.return_value = pd.Series(
-            {"atr_14_ratio": 0.10, "close_price": 1000.0}
+        candidate_rows = {
+            "A": pd.Series({"atr_14_ratio": 0.10, "close_price": 1000.0, "market_cap": 100_000_000}),
+            "B": pd.Series({"atr_14_ratio": 0.10, "close_price": 1000.0, "market_cap": 300_000_000}),
+            "C": pd.Series({"atr_14_ratio": 0.10, "close_price": 1000.0, "market_cap": 300_000_000}),
+        }
+        self.data_handler.get_stock_row_as_of.side_effect = (
+            lambda ticker, *_args, **_kwargs: candidate_rows[ticker]
         )
 
         signals = strategy.generate_new_entry_signals(
@@ -232,7 +237,37 @@ class TestIssue67StrategyModes(unittest.TestCase):
         )
 
         tickers = [signal["ticker"] for signal in signals]
-        self.assertEqual(tickers, ["A", "B", "C"])
+        self.assertEqual(tickers, ["B", "C", "A"])
+
+    def test_strategy_mode_tier_excludes_holding_and_cooldown_before_ranking(self):
+        strategy = MagicSplitStrategy(
+            **self.base_config,
+            candidate_source_mode="tier",
+            cooldown_period_days=5,
+        )
+        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "B", "C"], "TIER_1")
+
+        self.portfolio.positions = {"A": [MagicMock()]}
+        strategy.cooldown_tracker["B"] = 0  # current_day_idx=1 이므로 아직 쿨다운
+
+        call_trace = []
+
+        def _row_side_effect(ticker, *_args, **_kwargs):
+            call_trace.append(ticker)
+            return pd.Series({"atr_14_ratio": 0.10, "close_price": 1000.0, "market_cap": 200_000_000})
+
+        self.data_handler.get_stock_row_as_of.side_effect = _row_side_effect
+
+        signals = strategy.generate_new_entry_signals(
+            pd.Timestamp("2024-01-02"),
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        self.assertEqual(call_trace, ["C"])
+        self.assertEqual([signal["ticker"] for signal in signals], ["C"])
 
     def test_strategy_mode_tier_strict_skips_when_only_tier2_fallback(self):
         strategy = MagicSplitStrategy(
@@ -273,21 +308,21 @@ class TestIssue67GpuParityHelpers(unittest.TestCase):
         self.assertIsNone(signal_date)
         self.assertEqual(signal_day_idx, -1)
 
-    def test_sort_candidates_by_atr_then_ticker_is_deterministic(self):
+    def test_sort_candidates_by_atr_then_market_cap_then_ticker_is_deterministic(self):
         candidates = [
-            ("005930", 0.10),
-            ("000660", 0.20),
-            ("373220", 0.20),
-            ("035420", 0.05),
+            ("005930", 1000, 100, 0.10),
+            ("000660", 2000, 200, 0.20),
+            ("373220", 2000, 300, 0.20),
+            ("035420", 500, 900, 0.05),
         ]
-        ranked = _sort_candidates_by_atr_then_ticker(candidates)
+        ranked = _sort_candidates_by_atr_then_market_cap_then_ticker(candidates)
         self.assertEqual(
             ranked,
             [
-                ("000660", 0.20),
-                ("373220", 0.20),
-                ("005930", 0.10),
-                ("035420", 0.05),
+                ("373220", 2000, 300, 0.20),
+                ("000660", 2000, 200, 0.20),
+                ("005930", 1000, 100, 0.10),
+                ("035420", 500, 900, 0.05),
             ],
         )
 
