@@ -40,6 +40,12 @@ class BacktestEngine:
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
+        entry_stats = {
+            "entry_opportunity_days": 0,
+            "empty_entry_days": 0,
+            "tier1_source_days": 0,
+            "tier2_fallback_days": 0,
+        }
 
         debug_ticker = self.debug_ticker
         if not debug_ticker:
@@ -79,7 +85,19 @@ class BacktestEngine:
 
             # 단계 1-2: 매수 신호를 '신규 진입' -> '추가 매수' 순으로 분리하여 실행
             # (1) 신규 진입 신호 생성 및 실행
+            strategy_max_stocks = int(getattr(self.strategy, "max_stocks", 0) or 0)
+            available_slots_before_entry = max(0, strategy_max_stocks - len(self.portfolio.positions))
             new_entry_signals = self.strategy.generate_new_entry_signals(current_date, self.portfolio, self.data_handler, trading_dates, i)
+            entry_context = getattr(self.strategy, "last_entry_context", {}) or {}
+            if available_slots_before_entry > 0:
+                entry_stats["entry_opportunity_days"] += 1
+                if not new_entry_signals:
+                    entry_stats["empty_entry_days"] += 1
+                tier_source = str(entry_context.get("tier_source", ""))
+                if tier_source.startswith("TIER_1"):
+                    entry_stats["tier1_source_days"] += 1
+                if tier_source.startswith("TIER_2_FALLBACK"):
+                    entry_stats["tier2_fallback_days"] += 1
             if new_entry_signals:
                 for signal in new_entry_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler, i)
@@ -137,5 +155,30 @@ class BacktestEngine:
                 log_message += footer
                 self.logger.debug(log_message)
 
+        opportunity_days = entry_stats["entry_opportunity_days"]
+        empty_entry_rate = (
+            float(entry_stats["empty_entry_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        tier1_coverage = (
+            float(entry_stats["tier1_source_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        tier2_fallback_rate = (
+            float(entry_stats["tier2_fallback_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        self.last_run_metrics = {
+            "entry_opportunity_days": int(opportunity_days),
+            "empty_entry_days": int(entry_stats["empty_entry_days"]),
+            "empty_entry_day_rate": round(empty_entry_rate, 4),
+            "tier1_coverage": round(tier1_coverage, 4),
+            "tier2_fallback_rate": round(tier2_fallback_rate, 4),
+        }
+        setattr(self.portfolio, "run_metrics", self.last_run_metrics)
+        self.logger.info("[EntryMetrics] %s", self.last_run_metrics)
         self.logger.info("백테스팅이 완료되었습니다.")
         return self.portfolio

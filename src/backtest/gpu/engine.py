@@ -13,7 +13,7 @@ from .logic import (
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
 )
-from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_market_cap_then_atr_then_ticker
+from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_atr_then_market_cap_then_ticker
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -168,7 +168,7 @@ def run_magic_split_strategy_on_gpu(
                 else:
                     final_candidate_indices = candidate_indices_list
 
-            # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
+            # (D) Valid Data Check + deterministic ranking metrics (ATR -> MarketCap -> Ticker)
             if final_candidate_indices and signal_date is not None:
                 final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
@@ -203,9 +203,9 @@ def run_magic_split_strategy_on_gpu(
                             market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
 
                         atr_q = int(round(atr_float * 10000))
-                        candidate_records.append((ticker, market_cap_q, atr_q, atr_float))
+                        candidate_records.append((ticker, atr_q, market_cap_q, atr_float))
 
-                    ranked_records = _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records)
+                    ranked_records = _sort_candidates_by_atr_then_market_cap_then_ticker(candidate_records)
 
                     if ranked_records:
                         candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]

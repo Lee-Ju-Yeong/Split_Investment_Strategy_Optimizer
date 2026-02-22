@@ -39,13 +39,27 @@ def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.Datetime
     signal_day_idx = day_idx - 1
     return trading_dates_pd_cpu[signal_day_idx], signal_day_idx
 
-def _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records):
+def _sort_candidates_by_atr_then_market_cap_then_ticker(candidate_records):
     """
     Deterministic candidate ranking for parity:
-    1) market_cap_q desc
-    2) atr_q desc
+    1) atr_q desc
+    2) market_cap_q desc
     3) ticker asc
+    candidate_records item format:
+      (ticker, atr_q, market_cap_q, ...)
+    """
+    return sorted(candidate_records, key=lambda item: (-item[1], -item[2], item[0]))
+
+
+def _sort_candidates_by_market_cap_then_atr_then_ticker(candidate_records):
+    """
+    Backward-compatible helper kept for legacy callers.
     candidate_records item format:
       (ticker, market_cap_q, atr_q, ...)
     """
     return sorted(candidate_records, key=lambda item: (-item[1], -item[2], item[0]))
+
+
+def _sort_candidates_by_atr_then_ticker(candidate_pairs):
+    pairs_sorted_by_ticker = sorted(candidate_pairs, key=lambda pair: pair[0])
+    return sorted(pairs_sorted_by_ticker, key=lambda pair: pair[1], reverse=True)

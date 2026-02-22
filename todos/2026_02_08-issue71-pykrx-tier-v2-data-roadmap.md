@@ -155,3 +155,78 @@
 - PIT 위반 테스트 0건
 - Optuna ON/OFF 실험 재현 가능(seed/기간/모드 고정) 및 legacy 롤백 절차 문서화 완료
 - Optuna 승격 전 하드게이트 동시 통과: parity `0건` + robust gate 3종 통과 + stress/jackknife 통과
+
+## 8. 운영 결정 메모 (2026-02-22)
+
+### 8-1. 데이터 품질 확인 결과(기준일: 2026-02-03 단면)
+- `ShortSellingDaily`는 현재 실질적으로 `short_balance_value`만 안정적으로 적재됨
+  - `short_volume/short_value/short_balance`는 운영 DB에서 비어 있는 상태
+- 따라서 Tier v2 공매도 신호는 임시로 `sbv_ratio = short_balance_value / market_cap` 단일 경로를 사용
+- 분포(2721 종목):
+  - `sbv_ratio` p75=`0.0047`, p95=`0.0146`, p99=`0.0297`
+  - `liquidity_20d_avg_value` p50=`855,682,139`, p75=`4,740,323,724`
+
+### 8-2. 다중 에이전트 검토 요약
+- 검토 방식: 내부 3-agent(`reviewer`, `explorer`, `default`)로 `Conservative/Balanced/Aggressive` 비교
+- 합의:
+  - Hard-risk는 Tier3를 먼저 적용해야 함 (`bps<=0`, `roe<0`, 비정상/결측, 과도한 `sbv_ratio`, 과도한 ATR)
+  - Tier1은 고유동성 + 낮은 `sbv_ratio` 조건으로 좁게 정의
+  - 현재 단계에서 운영 기본안은 `Balanced`가 가장 현실적
+- 분할 결과(샘플 시뮬레이션, 2721 종목):
+  - Conservative: `Tier1=282`, `Tier2=666`, `Tier3=1773`
+  - Balanced: `Tier1=298`, `Tier2=878`, `Tier3=1545`
+  - Aggressive: `Tier1=974`, `Tier2=808`, `Tier3=939`
+
+### 8-3. Balanced 기준(임시 운영안)
+- Tier3 (hard-risk 우선):
+  - `liquidity_20d_avg_value < 855,682,139` 또는 결측
+  - `market_cap <= 0` 또는 결측
+  - `sbv_ratio >= 0.0146` 또는 계산불가
+  - `atr_14_ratio >= 0.4` 또는 결측
+  - `bps <= 0` 또는 `roe < 0`
+- Tier1:
+  - `liquidity_20d_avg_value >= 4,740,323,724`
+  - `sbv_ratio < 0.0047`
+  - `atr_14_ratio < 0.2`
+  - `bps > 0`, `roe >= 0` (결측은 Tier1 제외)
+- Tier2:
+  - 위 조건에 해당하지 않는 나머지
+
+```sql
+CASE
+  WHEN liquidity_20d_avg_value IS NULL OR liquidity_20d_avg_value < 855682139 THEN 3
+  WHEN market_cap IS NULL OR market_cap <= 0 THEN 3
+  WHEN short_balance_value IS NULL THEN 3
+  WHEN atr_14_ratio IS NULL OR atr_14_ratio >= 0.4 THEN 3
+  WHEN (bps IS NOT NULL AND bps <= 0) OR (roe IS NOT NULL AND roe < 0) THEN 3
+  WHEN (short_balance_value / market_cap) >= 0.0146 THEN 3
+  WHEN liquidity_20d_avg_value >= 4740323724
+       AND (short_balance_value / market_cap) < 0.0047
+       AND atr_14_ratio < 0.2
+       AND (bps IS NULL OR bps > 0)
+       AND (roe IS NULL OR roe >= 0) THEN 1
+  ELSE 2
+END AS tier
+```
+
+### 8-4. 후속 액션
+- [ ] `DailyStockTier` 계산 경로에 위 Balanced 규칙을 `read-only shadow`로 추가
+- [ ] shadow 결과(`tier 분포`, `기존 대비 이동률`, `최근 20영업일 안정성`) 검증 후 default 전환 여부 결정
+- [ ] `short_volume/short_value/short_balance` 수집 정상화 및 컬럼 매핑 drift 방지 가드 추가
+
+## 9. 코드 수정 요약 (2026-02-22)
+
+### 9-1. 신규 진입 우선순위 및 필터링
+- [x] `src/backtest/cpu/strategy.py`에서 Tier 후보 중 보유 종목/쿨다운 종목을 제외한 뒤 정렬하도록 유지/명시
+- [x] `src/backtest/cpu/strategy.py` 신규 진입 정렬 기준을 `ATR -> market_cap -> ticker` 순으로 변경
+- [x] `src/backtest/gpu/engine.py`, `src/backtest/gpu/utils.py` 정렬 기준을 CPU와 동일하게 `ATR -> market_cap -> ticker`로 통일
+- [x] `src/data_handler.py` `load_stock_data` 쿼리에 `MarketCapDaily.market_cap` 조인을 추가해 CPU 랭킹 분모 확보
+
+### 9-2. 운영 모니터링 지표
+- [x] `src/backtest/cpu/backtester.py`에 `empty_entry_day_rate`, `tier1_coverage`, `tier2_fallback_rate` 집계 추가
+- [x] `src/backtest/cpu/backtester.py` 실행 종료 시 `self.last_run_metrics` 및 `portfolio.run_metrics`에 지표 저장
+
+### 9-3. 회귀 테스트 보강
+- [x] `tests/test_issue67_tier_universe.py`에 `ATR 동률 시 market_cap -> ticker` 우선순위 테스트 추가
+- [x] `tests/test_issue67_tier_universe.py`에 보유/쿨다운 제외 선행 필터 테스트 추가
+- [x] `src/backtest/gpu/data.py`에 `_collect_candidate_atr_asof` 호환 헬퍼를 추가해 기존 테스트 경로와 호환 유지

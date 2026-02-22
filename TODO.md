@@ -97,11 +97,19 @@
     - Forbidden: `candidate_source_mode`, execution/fee/tick/lag 규칙, WFO fold 분할 규칙
     - Preflight: `#67` 모드 고정 + `#56` parity mismatch `0건` + `#68` hard gate 설정 완료
     - Promotion: feature flag canary 통과 + 재현성(seed/기간/모드) 증적 확보 시에만 운영 반영
+  - [x] 운영 결정(2026-02-22): `ShortSellingDaily`는 현재 `short_balance_value`만 안정 커버리지를 확인했으므로 Tier v2 공매도 신호는 `sbv_ratio = short_balance_value / market_cap` 단일 경로로 우선 적용
+  - [x] 다중 에이전트 기준안 검토(2026-02-22): `Conservative/Balanced/Aggressive` 3안 비교 후 현시점 운영 기본안을 `Balanced`로 채택
+    - 분포 근거(2026-02-03): `sbv_ratio` p75=`0.0047`, p95=`0.0146`; 유동성 p50=`855,682,139`, p75=`4,740,323,724`
+    - 샘플 분할(2721 종목): Conservative `T1/T2/T3=282/666/1773`, Balanced `298/878/1545`, Aggressive `974/808/939`
+  - [x] CPU/GPU 신규 진입 정렬 기준 통일(2026-02-22): `ATR -> market_cap -> ticker` 적용 + 보유/쿨다운 제외 선행 필터 검증 테스트 추가
+  - [x] 운영 지표 집계 구현(2026-02-22): `empty_entry_day_rate`, `tier1_coverage`, `tier2_fallback_rate`를 CPU 백테스터 실행 결과(`portfolio.run_metrics`)에 기록
   - [ ] P0 테이블 DDL/인덱스 확정
   - [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
   - [ ] Tier v2 read-only 실험 스크립트 추가
   - [ ] PIT/왜곡 방지 검증 항목 테스트화
   - [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+  - [ ] `short_volume`/`short_value`/`short_balance` 수집 정상화 및 컬럼 스키마 drift guard 추가
+  - [ ] `sbv_ratio` 기반 Tier v2 CASE 규칙을 `DailyStockTier` 배치에 read-only shadow mode로 반영
   - [ ] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정)
   - [ ] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가
   - [ ] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`)
