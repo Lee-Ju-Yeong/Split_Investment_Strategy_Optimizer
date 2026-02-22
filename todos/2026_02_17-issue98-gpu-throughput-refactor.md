@@ -1,7 +1,7 @@
 # perf(gpu): GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (Issue #98)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98`
 - 작성일: 2026-02-17
-- 최종 갱신: 2026-02-20
+- 최종 갱신: 2026-02-22
 - 목적: GPU 처리량 병목과 fallback 유발 성능 저하를 제거하되, CPU=SSOT 원칙과 decision-level parity(`#56`)를 유지
 
 ## 0. 분리 원칙 (Issue #97/#56/#67 관계)
@@ -70,8 +70,9 @@
 ## 6. 실행 체크리스트
 - [ ] Gate A: `P-001~P-015`의 `PC/PO` 분류와 PR 매핑 확정
 - [x] PR-98A: `P-001~P-004` fallback 축소/정리
-- [ ] PR-98B(PC): `P-005/P-006/P-008/P-009` CPU/GPU 동시 수정 + parity 통과
+- [x] PR-98B(PC): `P-005/P-006/P-008/P-009` CPU/GPU 동시 수정 + parity 통과
 - [ ] PR-98C(PO): `P-007/P-010/P-011/P-012/P-013/P-015` 캐시/동기화/I/O 최적화
+- [x] PR-98C-1(PO): `P-012/P-013` 1차 반영(data_handler cache key 정규화 + data_loading engine 재사용)
 - [ ] PR-98D: `P-014` 성능 회귀 가드/벤치마크 테스트 반영
 - [ ] 성능 측정 결과 문서화(before/after)
 - [ ] `#56` strict parity 재검증(`0 mismatch`)
@@ -146,15 +147,15 @@
   - mismatch 발생 시 즉시 롤백, 원인 태깅 후 재시도
 
 ### 8-4. PR-98C (PO) CPU I/O/캐시 + GPU 로딩 최적화
-- [ ] `src/backtest/cpu/strategy.py`
+- [x] `src/backtest/cpu/strategy.py` (PR-98C-2 1차)
   - 일자 단위 배치 조회 캐시
 - [ ] `src/backtest/cpu/portfolio.py`
   - 평가/스냅샷 가격 조회 중복 제거
-- [ ] `src/backtest/cpu/execution.py`
+- [x] `src/backtest/cpu/execution.py` (PR-98C-2 1차)
   - 주문 실행 경로 OHLC/이름 조회 캐시 주입
-- [ ] `src/data_handler.py`
+- [x] `src/data_handler.py`
   - 캐시 정책(`maxsize`, 구간 단위 로딩) 재설계
-- [ ] `src/optimization/gpu/data_loading.py`
+- [x] `src/optimization/gpu/data_loading.py`
   - `create_engine` 재사용
   - pandas round-trip 최소화
 - [ ] 검증:
@@ -450,7 +451,7 @@
   - Codex 실행 샌드박스에서는 CUDA 디바이스 접근 불가(`cudaErrorOperatingSystem`)로 통합 parity 실행 불가
   - 운영 GPU 호스트에서 strict parity를 재실행해 증적 첨부 완료
 
-## 15. PR-98C-1 진행 현황 (2026-02-21)
+## 15. PR-98C-1 진행 현황 (2026-02-22)
 - 반영 범위(저위험 캐시/로딩 개선):
   - `src/optimization/gpu/data_loading.py`
     - DB 엔진 생성을 `_get_sql_engine`(LRU 캐시)로 통합해 동일 connection string에서 `create_engine` 재사용
@@ -465,8 +466,120 @@
   - 실행:
     - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_data_loading_engine_cache tests.test_data_handler.TestDataHandler.test_load_stock_data tests.test_data_handler.TestDataHandler.test_load_stock_data_empty tests.test_data_handler.TestDataHandler.test_load_stock_data_cache_key_is_normalized tests.test_gpu_new_entry_signals tests.test_gpu_candidate_sorting_utils tests.test_backtest_strategy_gpu tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path tests.test_cpu_gpu_parity_topk`
   - 결과: 통과(28 tests)
+- throughput 재측정(PR-98C-1 적용 후):
+  - baseline(B0): `results/perf_baseline_strict_hyst_20260219_212900.log`
+  - after(PR-98C-1): `results/perf_after_pr98c1_20260222_003754.log`
+  - 결과 CSV: `results/standalone_simulation_results_20260222_055113.csv`
+  - wall-clock(B0 대비): `18688s -> 18800s` (`+112s`, `+0.60%`)
+  - kernel time(B0 대비): `18633.54s -> 18739.92s` (`+106.38s`, `+0.57%`)
+  - sims/sec(B0 대비): `0.019264 -> 0.019149`
+  - 참고(PR-98B-4 대비): wall-clock `+407s` (`+2.21%`)
+- strict parity 재검증(PR-98C-1):
+  - 증적: `results/parity_topk_strict_pr98c1_20260222_055115.json`
+  - 로그: `results/parity_topk_strict_pr98c1_20260222_055115.log`
+  - 결과: `passed rows=1`, `failed=0`
+- 결론/의사결정:
+  - PR-98C-1은 정합성/안정성 목적(캐시/로더 구조 정리)으로는 수용 가능
+  - throughput 개선 근거는 없음(단일 run 기준 소폭 회귀), 성능 기준선은 `PR-98B-4` 유지
 - 남은 PR-98C 범위:
   - `src/backtest/cpu/strategy.py` 일자/신호 row 캐시 도입
   - `src/backtest/cpu/portfolio.py`, `src/backtest/cpu/execution.py` lookup cache 주입
   - `src/data_handler.py` 캐시 정책(구간 단위/size) 후속 조정
   - `src/optimization/gpu/data_loading.py` pandas round-trip 최소화 검토
+
+## 16. PR-98C-2 착수 기준 (3번 진행 전 문서 고정)
+- 목표:
+  - `P-010/P-011` 중심의 CPU 조회 병목 완화(전략/포트폴리오/체결 경로)
+  - 결과 의미(매매 의사결정/체결가/수수료) 변경 금지
+- 우선 대상 파일:
+  - `src/backtest/cpu/strategy.py`: 동일 거래일 `as-of` 조회 캐시(티커별 반복 조회 제거)
+  - `src/backtest/cpu/portfolio.py`: 동일 일자 평가가격 lookup 중복 제거
+  - `src/backtest/cpu/execution.py`: 체결 경로 OHLC/name lookup cache 주입
+- 검증 게이트:
+  - 단위 테스트 + strict parity(`mismatch=0`) 통과
+  - throughput 비교는 `baseline(B0)`와 `PR-98B-4` 둘 다 대비로 기록
+
+## 17. PR-98C-2 1차 진행 현황 (WIP, 2026-02-22)
+- 반영 범위:
+  - `src/backtest/cpu/strategy.py`
+    - strict hysteresis 경로에서 티커별 `get_stock_tier_as_of` 반복 호출 제거
+    - `signal_date` 단위 tier cache(`_tier_cache_signal_date`, `_tier_cache`) 도입, `get_tiers_as_of` 우선 조회 + fallback 유지
+    - 신규 진입 신호에 당일 OHLC를 `_cached_ohlc`로 실어 execution 재조회 제거
+  - `src/backtest/cpu/execution.py`
+    - `execute_order`에서 `_cached_ohlc`가 있으면 DB OHLC 조회 생략
+    - ticker name lookup cache(`_name_cache`) 도입
+- 테스트:
+  - 신규: `tests/test_cpu_strategy_cache.py`
+  - 신규: `tests/test_cpu_execution_cache.py`
+  - 실행: `conda run --no-capture-output -n rapids-env python -m unittest tests.test_cpu_strategy_cache tests.test_cpu_execution_cache`
+  - 결과: 통과(5 tests)
+- 남은 검증:
+  - strict parity 재실행(운영 GPU 호스트)
+  - full throughput 재측정(B0 / PR-98B-4 대비)
+  - `src/backtest/cpu/portfolio.py` 평가/스냅샷 lookup cache 반영
+
+## 18. Throughput 재측정 중 OOM 이슈 및 완화 (2026-02-22)
+- 증상:
+  - `python -m src.parameter_simulation_gpu` 재측정 런에서 day `25/244` 시점 OOM 발생
+  - 오류 지점: `src/backtest/gpu/logic.py`의 liquidation reset 경로
+  - 로그: `MemoryError: std::bad_alloc ... failed to allocate 181116000 bytes`
+- 원인:
+  - `(sim, stock)` liquidation mask를 `(sim, stock, split, field)` 전체로 boolean broadcast 후
+    `positions_state[...] = 0`를 수행하는 과정에서 대형 임시 버퍼가 생성됨
+  - 장기 런에서는 allocator fragmentation과 결합되어 OOM 위험이 커짐
+- 수정:
+  - `src/backtest/gpu/logic.py`
+    - liquidation reset: boolean advanced indexing 제거, in-place `cp.multiply(..., out=positions_state)`로 치환
+    - profit-taking reset: 동일 패턴으로 치환
+  - 의미는 동일(해당 마스크 대상 position state를 0으로 클리어), 임시 메모리 피크만 축소
+- 검증:
+  - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_backtest_strategy_gpu`
+  - 결과: 통과(8 tests)
+- 후속:
+  - 동일 throughput 명령을 재실행해 OOM 해소 여부와 wall-time을 다시 수집
+
+### 18-1. 추가 OOM (additional-buy 경로) 및 2차 완화
+- 증상:
+  - 첫 완화 후 재실행에서 `src/backtest/gpu/logic.py`의 additional-buy 경로에서 재차 OOM
+  - 오류 지점: `last_pos_mask = (cp.cumsum(has_positions, axis=2) == ...)`
+  - 로그: `failed to allocate 15093008 bytes`
+- 원인:
+  - `(sim, stock, split)` 기준 `cumsum + 비교`가 대형 임시 텐서를 생성
+  - 직전 단계의 텐서와 결합해 allocator 여유 메모리가 부족해짐
+- 수정:
+  - `src/backtest/gpu/logic.py`
+    - last split 탐색을 `cumsum` 기반 마스크에서 `reverse + argmax + take_along_axis`로 교체
+    - `first_open_day_idx` 계산도 `where(..., inf).min(axis=2)` 대신 `positions_state[..., 0, 2]` 직접 사용으로 단순화
+  - 의미 유지:
+    - 추가매수 트리거의 기준(last buy price)과 “당일 신규진입 제외” 규칙은 동일
+- 검증:
+  - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_backtest_strategy_gpu`
+  - 결과: 통과(8 tests)
+
+## 19. Batch Size 산정식 개선 + OOM 런타임 가드 (2026-02-22)
+- 배경:
+  - 기존 `get_optimal_batch_size`는 `positions_state`를 `max_stocks` 기준으로 과소추정하고,
+    `daily_portfolio_values`/런타임 임시 텐서 피크를 충분히 반영하지 못해 `auto` 값에서도 OOM 발생
+- 반영 범위:
+  - `src/optimization/gpu/kernel.py`
+    - free memory 소스가 둘 다 있을 때 `min(nvidia-smi, cupy.runtime.memGetInfo)` 사용
+    - 여유율/예약 메모리(`margin`, `reserved bytes`)를 반영해 usable memory 보수화
+    - per-sim 메모리 추정식을 실제 상태 텐서 기준으로 교체
+      - `positions_state(num_tickers * max_splits * 3)`
+      - `cooldown/last_trade`
+      - `daily_portfolio_values(num_trading_days)`
+      - sell/additional-buy 임시 workspace 추정치
+  - `src/optimization/gpu/parameter_simulation.py`
+    - fixed memory에 dense price tensor(`open/close/high/low`) 예상 크기 반영
+    - OOM 감지 시 배치를 절반으로 줄여 same range 재시도(최소 배치/최대 재시도 configurable)
+      - `oom_retry_max_attempts` (default 5)
+      - `oom_min_batch_size` (default 16)
+- 의미/정합성:
+  - 전략/체결/정렬 규칙 불변
+  - 변경점은 batch 분할/재시도 정책(PO)
+- 테스트:
+  - `tests/test_gpu_kernel_batch_size.py` 업데이트(메모리 소스 min 선택, per-sim estimator 스케일)
+  - `tests/test_gpu_parameter_batch_fallback.py` 업데이트(OOM 식별/배치 축소 유틸)
+  - 회귀 포함 실행:
+    - `conda run --no-capture-output -n rapids-env python -m unittest tests.test_gpu_kernel_batch_size tests.test_gpu_parameter_batch_fallback tests.test_backtest_strategy_gpu tests.test_cpu_strategy_cache tests.test_cpu_execution_cache`
+  - 결과: 통과(24 tests)
