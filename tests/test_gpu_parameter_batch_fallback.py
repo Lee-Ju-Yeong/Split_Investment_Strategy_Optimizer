@@ -5,8 +5,10 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.optimization.gpu.parameter_simulation import (
+    _is_gpu_oom_error,
     _resolve_adaptive_fallback_batch_size,
     _resolve_batch_size,
+    _shrink_batch_size,
 )
 
 
@@ -49,6 +51,16 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
 
     def test_adaptive_fallback_batch_size_minimum_is_one(self):
         self.assertEqual(_resolve_adaptive_fallback_batch_size(0), 1)
+
+    def test_is_gpu_oom_error_detects_common_patterns(self):
+        self.assertTrue(_is_gpu_oom_error(MemoryError("std::bad_alloc: out_of_memory")))
+        self.assertTrue(_is_gpu_oom_error(RuntimeError("CUDA error (failed to allocate 1024 bytes)")))
+        self.assertFalse(_is_gpu_oom_error(RuntimeError("invalid value")))
+
+    def test_shrink_batch_size_halves_with_minimum_guard(self):
+        self.assertEqual(_shrink_batch_size(360, 16), 180)
+        self.assertEqual(_shrink_batch_size(17, 16), 16)
+        self.assertEqual(_shrink_batch_size(16, 16), 16)
 
 
 if __name__ == "__main__":
