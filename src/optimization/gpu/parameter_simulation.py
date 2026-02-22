@@ -25,6 +25,18 @@ from .kernel import get_optimal_batch_size, run_gpu_optimization
 DEFAULT_FALLBACK_TARGET_BATCHES = 8
 DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+DEFAULT_OOM_RETRY_MAX_ATTEMPTS = 5
+DEFAULT_OOM_MIN_BATCH_SIZE = 16
+PRICE_TENSOR_COUNT = 4
+FIXED_DATA_HEAP_OVERHEAD_FACTOR = 1.05
+OOM_ERROR_TOKENS = (
+    "out_of_memory",
+    "std::bad_alloc",
+    "failed to allocate",
+    "cuda error",
+    "cudaerror",
+    "memoryerror",
+)
 
 
 def _to_positive_int(value):
@@ -60,6 +72,31 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
 
     batch_size = _resolve_adaptive_fallback_batch_size(num_combinations)
     return batch_size, "adaptive-safe-default"
+
+
+def _is_gpu_oom_error(exc):
+    error_text = f"{type(exc).__name__}: {exc}".lower()
+    return any(token in error_text for token in OOM_ERROR_TOKENS)
+
+
+def _shrink_batch_size(current_batch_size, minimum_batch_size):
+    if current_batch_size <= minimum_batch_size:
+        return current_batch_size
+    next_batch_size = max(minimum_batch_size, current_batch_size // 2)
+    if next_batch_size >= current_batch_size:
+        next_batch_size = current_batch_size - 1
+    return max(1, next_batch_size)
+
+
+def _free_gpu_memory_pools(cp):
+    try:
+        cp.get_default_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+    try:
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+    except Exception:
+        pass
 
 
 # -----------------------------------------------------------------------------
@@ -116,8 +153,17 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
+    dense_price_tensor_bytes = len(trading_dates_pd) * len(all_tickers) * PRICE_TENSOR_COUNT * 4
+    fixed_mem += int(dense_price_tensor_bytes * FIXED_DATA_HEAP_OVERHEAD_FACTOR)
 
-    optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    max_splits_from_params = int(cp.max(ctx.param_combinations[:, 6]).get())
+    optimal_batch_size = get_optimal_batch_size(
+        config=config,
+        num_tickers=len(all_tickers),
+        num_trading_days=len(trading_dates_pd),
+        max_splits=max_splits_from_params,
+        fixed_data_memory_bytes=fixed_mem,
+    )
     batch_size, batch_size_source = _resolve_batch_size(
         optimal_batch_size=optimal_batch_size,
         backtest_settings=backtest_settings,
@@ -137,32 +183,74 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     num_batches = (ctx.num_combinations + batch_size - 1) // batch_size
     print(f"  - Total Simulations: {ctx.num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")
 
+    oom_retry_max_attempts = _to_positive_int(backtest_settings.get("oom_retry_max_attempts"))
+    if oom_retry_max_attempts is None:
+        oom_retry_max_attempts = DEFAULT_OOM_RETRY_MAX_ATTEMPTS
+
+    oom_min_batch_size = _to_positive_int(backtest_settings.get("oom_min_batch_size"))
+    if oom_min_batch_size is None:
+        oom_min_batch_size = DEFAULT_OOM_MIN_BATCH_SIZE
+    oom_min_batch_size = min(oom_min_batch_size, ctx.num_combinations)
+
     all_daily_values_list = []
     total_kernel_time = 0.0
-    for idx in range(num_batches):
-        start_idx = idx * batch_size
-        end_idx = min((idx + 1) * batch_size, ctx.num_combinations)
-        param_batch = ctx.param_combinations[start_idx:end_idx]
+    start_idx = 0
+    completed_batches = 0
+    active_batch_size = batch_size
+    while start_idx < ctx.num_combinations:
+        remaining = ctx.num_combinations - start_idx
+        current_batch_size = min(active_batch_size, remaining)
+        attempt = 0
 
-        print(f"\n  --- Running Batch {idx + 1}/{num_batches} (Sims {start_idx}-{end_idx - 1}) ---")
+        while True:
+            end_idx = start_idx + current_batch_size
+            param_batch = ctx.param_combinations[start_idx:end_idx]
+            expected_batches_left = (remaining + current_batch_size - 1) // current_batch_size
+            print(
+                f"\n  --- Running Batch {completed_batches + 1} "
+                f"(Sims {start_idx}-{end_idx - 1} | size={current_batch_size} | est_left={expected_batches_left}) ---"
+            )
 
-        start_time_kernel = time.time()
-        daily_values_batch = run_gpu_optimization(
-            param_batch,
-            all_data_gpu,
-            weekly_filtered_gpu,
-            all_tickers,
-            trading_date_indices_gpu,
-            trading_dates_pd,
-            initial_cash,
-            execution_params,
-            tier_tensor=tier_tensor,
-        )
-        batch_time = time.time() - start_time_kernel
-        total_kernel_time += batch_time
-        print(f"  - Batch {idx + 1} Kernel Execution Time: {batch_time:.2f}s")
+            start_time_kernel = time.time()
+            try:
+                daily_values_batch = run_gpu_optimization(
+                    param_batch,
+                    all_data_gpu,
+                    weekly_filtered_gpu,
+                    all_tickers,
+                    trading_date_indices_gpu,
+                    trading_dates_pd,
+                    initial_cash,
+                    execution_params,
+                    tier_tensor=tier_tensor,
+                )
+            except Exception as exc:
+                if not _is_gpu_oom_error(exc):
+                    raise
+                attempt += 1
+                if attempt > oom_retry_max_attempts or current_batch_size <= oom_min_batch_size:
+                    print(
+                        "❌ GPU OOM persisted. "
+                        f"start_idx={start_idx}, batch_size={current_batch_size}, attempts={attempt}"
+                    )
+                    raise
+                next_batch_size = _shrink_batch_size(current_batch_size, oom_min_batch_size)
+                print(
+                    "⚠️  GPU OOM detected. "
+                    f"Reducing batch size {current_batch_size} -> {next_batch_size} and retrying."
+                )
+                _free_gpu_memory_pools(cp)
+                current_batch_size = min(next_batch_size, remaining)
+                continue
 
-        all_daily_values_list.append(daily_values_batch)
+            batch_time = time.time() - start_time_kernel
+            total_kernel_time += batch_time
+            print(f"  - Batch {completed_batches + 1} Kernel Execution Time: {batch_time:.2f}s")
+            all_daily_values_list.append(daily_values_batch)
+            start_idx = end_idx
+            completed_batches += 1
+            active_batch_size = current_batch_size
+            break
 
     print(f"\n  - Total GPU Kernel Execution Time: {total_kernel_time:.2f}s")
     if not all_daily_values_list:
