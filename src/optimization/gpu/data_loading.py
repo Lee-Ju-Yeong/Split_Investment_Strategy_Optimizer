@@ -60,7 +60,7 @@ def _set_index_lean(gdf, keys):
     try:
         gdf.set_index(keys, inplace=True)
         return gdf
-    except TypeError:
+    except (TypeError, NotImplementedError):
         # Compatibility fallback for APIs that do not expose inplace.
         return gdf.set_index(keys)
 
