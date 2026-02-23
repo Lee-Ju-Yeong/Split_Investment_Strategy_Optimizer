@@ -8,6 +8,13 @@ import cudf
 import cupy as cp
 import pandas as pd
 
+
+def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.ndarray]:
+    day_indices = cp.asarray(data_valid["day_idx"].astype(cp.int32))
+    ticker_indices = cp.asarray(data_valid["ticker_idx"].astype(cp.int32))
+    return day_indices, ticker_indices
+
+
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
     [수정] 인덱스 매핑을 사용하여 Long-format cuDF를 Wide-format CuPy 텐서로 직접 변환합니다.
@@ -35,6 +42,7 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
     
     # 유효한 인덱스만 필터링
     data_valid = all_data_gpu.dropna(subset=['day_idx', 'ticker_idx'])
+    day_indices, ticker_indices = _build_tensor_indices(data_valid)
     
     # 3. 필요한 각 컬럼에 대해 (num_days, num_tickers) 텐서 생성하고 값 채우기
     tensors = {}
@@ -43,8 +51,6 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
         tensor = cp.zeros((num_days, num_tickers), dtype=cp.float32)
         
         # 값을 채워넣을 위치(row, col)와 값(value)을 CuPy 배열로 추출
-        day_indices = cp.asarray(data_valid['day_idx'].astype(cp.int32))
-        ticker_indices = cp.asarray(data_valid['ticker_idx'].astype(cp.int32))
         values = cp.asarray(data_valid[col_name].astype(cp.float32))
         
         # CuPy의 고급 인덱싱(fancy indexing)을 사용하여 값을 한 번에 할당
@@ -56,50 +62,101 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
 
 
 
-def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
-    if signal_date is None or not final_candidate_tickers:
+def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_indices, signal_date):
+    if signal_date is None:
+        return None
+    if final_candidate_indices is None:
+        return None
+    if int(final_candidate_indices.size) == 0:
+        return None
+    candidate_index_series = cudf.Series(final_candidate_indices.astype(cp.int32, copy=False))
+    if candidate_index_series.empty:
         return None
 
-    # CPU get_stock_row_as_of(ticker, signal_date)의 PIT(as-of <= date) 동작을 맞추기 위해
-    # 우선 signal_date 당일 값을 사용하고, 결측 티커만 직전 최신 행으로 보완한다.
-    # Ranking metrics: atr_14_ratio, market_cap
-    same_day_rows = all_data_reset_idx[
-        (all_data_reset_idx['date'] == signal_date) &
-        (all_data_reset_idx['ticker'].isin(final_candidate_tickers))
-    ][['ticker', 'atr_14_ratio', 'market_cap']]
+    # PIT(as-of <= date) 규칙에 맞춰 signal_date 이전/당일 전체에서 ticker별 최신 1건을 선택한다.
+    candidate_rows = all_data_reset_idx[
+        (all_data_reset_idx["date"] <= signal_date)
+        & (all_data_reset_idx["ticker_idx"].isin(candidate_index_series))
+    ][["ticker_idx", "ticker", "date", "atr_14_ratio", "market_cap"]]
+    if candidate_rows.empty:
+        return None
 
-    available_tickers = set(same_day_rows['ticker'].to_arrow().to_pylist()) if not same_day_rows.empty else set()
-    missing_tickers = [ticker for ticker in final_candidate_tickers if ticker not in available_tickers]
+    latest_rows = candidate_rows.sort_values("date").drop_duplicates(subset=["ticker_idx"], keep="last")
+    return latest_rows[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
 
-    if missing_tickers:
-        historical_rows = all_data_reset_idx[
-            (all_data_reset_idx['date'] < signal_date) &
-            (all_data_reset_idx['ticker'].isin(missing_tickers))
-        ][['ticker', 'date', 'atr_14_ratio', 'market_cap']]
-        if not historical_rows.empty:
-            latest_history_rows = historical_rows.sort_values('date').drop_duplicates(subset=['ticker'], keep='last')
-            same_day_rows = cudf.concat(
-                [same_day_rows, latest_history_rows[['ticker', 'atr_14_ratio', 'market_cap']]],
-                ignore_index=True
+
+def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_records=False):
+    if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
+
+    metrics_rows = valid_candidate_metrics_df[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
+    metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
+    if metrics_rows.empty:
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
+
+    metrics_rows = metrics_rows[metrics_rows["atr_14_ratio"] > 0]
+    if metrics_rows.empty:
+        return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
+
+    metrics_rows = metrics_rows.copy(deep=True)
+    metrics_rows["ticker_idx"] = metrics_rows["ticker_idx"].astype("int32")
+    market_cap_series = metrics_rows["market_cap"].fillna(0).astype("float64")
+    metrics_rows["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
+    metrics_rows["atr_q"] = (metrics_rows["atr_14_ratio"].astype("float64") * 10000.0).round().astype("int64")
+
+    ranked_rows = metrics_rows.sort_values(
+        by=["market_cap_q", "atr_q", "ticker"],
+        ascending=[False, False, True],
+    )
+    candidate_indices_final = cp.asarray(ranked_rows["ticker_idx"].astype("int32"))
+    valid_atrs_final = cp.asarray(ranked_rows["atr_14_ratio"].astype("float32"))
+
+    ranked_records = []
+    if return_ranked_records:
+        ranked_records = list(
+            zip(
+                ranked_rows["ticker"].to_arrow().to_pylist(),
+                ranked_rows["market_cap_q"].to_arrow().to_pylist(),
+                ranked_rows["atr_q"].to_arrow().to_pylist(),
+                ranked_rows["atr_14_ratio"].astype("float32").to_arrow().to_pylist(),
             )
-
-    if same_day_rows.empty:
-        return None
-    dedup_rows = same_day_rows.drop_duplicates(subset=['ticker'], keep='first')
-    return dedup_rows.set_index('ticker')[['atr_14_ratio', 'market_cap']]
+        )
+    return candidate_indices_final, valid_atrs_final, ranked_records
 
 
 def _collect_candidate_atr_asof(all_data_reset_idx, final_candidate_tickers, signal_date):
     """
-    Backward-compatible helper for legacy tests/callers.
+    Backward-compatible helper kept for legacy tests/callers.
     Returns:
       cudf.Series(index=ticker, values=atr_14_ratio) or None
     """
-    metrics_df = _collect_candidate_rank_metrics_asof(
-        all_data_reset_idx=all_data_reset_idx,
-        final_candidate_tickers=final_candidate_tickers,
-        signal_date=signal_date,
-    )
-    if metrics_df is None or metrics_df.empty:
+    if signal_date is None or not final_candidate_tickers:
         return None
-    return metrics_df["atr_14_ratio"].dropna()
+
+    same_day_rows = all_data_reset_idx[
+        (all_data_reset_idx["date"] == signal_date)
+        & (all_data_reset_idx["ticker"].isin(final_candidate_tickers))
+    ][["ticker", "atr_14_ratio"]]
+
+    available_tickers = set(same_day_rows["ticker"].to_arrow().to_pylist()) if not same_day_rows.empty else set()
+    missing_tickers = [ticker for ticker in final_candidate_tickers if ticker not in available_tickers]
+
+    if missing_tickers:
+        historical_rows = all_data_reset_idx[
+            (all_data_reset_idx["date"] < signal_date)
+            & (all_data_reset_idx["ticker"].isin(missing_tickers))
+        ][["ticker", "date", "atr_14_ratio"]]
+        if not historical_rows.empty:
+            latest_history_rows = historical_rows.sort_values("date").drop_duplicates(
+                subset=["ticker"], keep="last"
+            )
+            same_day_rows = cudf.concat(
+                [same_day_rows, latest_history_rows[["ticker", "atr_14_ratio"]]],
+                ignore_index=True,
+            )
+
+    if same_day_rows.empty:
+        return None
+    return same_day_rows.drop_duplicates(subset=["ticker"], keep="first").set_index("ticker")[
+        "atr_14_ratio"
+    ].dropna()

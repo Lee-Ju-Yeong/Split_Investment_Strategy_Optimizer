@@ -2,18 +2,58 @@
 GPU backtest engine runner.
 """
 
+from datetime import timedelta
+import time
+
 import cudf
 import cupy as cp
 import pandas as pd
 
-from .data import _collect_candidate_rank_metrics_asof, create_gpu_data_tensors
+from .data import (
+    _collect_candidate_rank_metrics_asof,
+    build_ranked_candidate_payload,
+    create_gpu_data_tensors,
+)
 from .logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
 )
-from .utils import _resolve_signal_date_for_gpu, _sort_candidates_by_atr_then_market_cap_then_ticker
+from .utils import _resolve_signal_date_for_gpu
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
+    """
+    Forward-fill along day axis for as-of semantics.
+    Missing values are represented by 0.0 and remain 0.0 until first valid price.
+    """
+    if price_tensor.size == 0:
+        return price_tensor
+
+    valid_mask = price_tensor > 0
+    day_indices = cp.arange(price_tensor.shape[0], dtype=cp.int32).reshape(-1, 1)
+    last_valid_day_idx = cp.where(valid_mask, day_indices, 0)
+    ticker_indices = cp.arange(price_tensor.shape[1], dtype=cp.int32).reshape(1, -1)
+
+    try:
+        last_valid_day_idx = cp.maximum.accumulate(last_valid_day_idx, axis=0)
+        return price_tensor[last_valid_day_idx, ticker_indices]
+    except NotImplementedError:
+        # 일부 CuPy 버전에서 ufunc.accumulate가 미지원이므로 호환 경로를 사용한다.
+        filled = price_tensor.copy()
+        for day_idx in range(1, filled.shape[0]):
+            filled[day_idx] = cp.where(filled[day_idx] > 0, filled[day_idx], filled[day_idx - 1])
+        return filled
+
 
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
@@ -35,8 +75,8 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
-    use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
+    use_weekly_alpha_gate = _coerce_bool(execution_params.get("use_weekly_alpha_gate", False))
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
@@ -49,8 +89,8 @@ def run_magic_split_strategy_on_gpu(
     force_liquidate_tier3 = strict_hysteresis_enabled
     valid_modes = {'weekly', 'tier', 'hybrid_transition'}
     if candidate_source_mode not in valid_modes:
-        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'weekly'.")
-        candidate_source_mode = 'weekly'
+        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'tier'.")
+        candidate_source_mode = 'tier'
     if candidate_source_mode in ('tier', 'hybrid_transition') and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
 
@@ -70,8 +110,21 @@ def run_magic_split_strategy_on_gpu(
     
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
-    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
+    ticker_to_idx_gdf = cudf.Series(ticker_to_idx)
+    all_data_reset_idx["ticker_idx"] = (
+        all_data_reset_idx["ticker"].map(ticker_to_idx_gdf).fillna(-1).astype("int32")
+    )
+    all_data_reset_idx = all_data_reset_idx[all_data_reset_idx["ticker_idx"] >= 0]
+    needs_weekly_candidates = (
+        candidate_source_mode == "weekly"
+        or (candidate_source_mode == "hybrid_transition" and use_weekly_alpha_gate)
+    )
+    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index() if needs_weekly_candidates else None
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
+    progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
+    progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
+    run_start_ts = time.time()
+    processed_days = 0
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
@@ -80,11 +133,15 @@ def run_magic_split_strategy_on_gpu(
     monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq='MS'))
     month_first_dates = monthly_grouper.first().dropna()
     month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
-    data_tensors = create_gpu_data_tensors(all_data_gpu.reset_index(), all_tickers, trading_dates_pd_cpu)
+    data_tensors = create_gpu_data_tensors(all_data_reset_idx, all_tickers, trading_dates_pd_cpu)
     open_prices_tensor = data_tensors["open"]
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
     low_prices_tensor = data_tensors["low"]
+    if parity_mode == "strict":
+        close_prices_tensor = _forward_fill_asof_tensor(close_prices_tensor)
+        high_prices_tensor = _forward_fill_asof_tensor(high_prices_tensor)
+        low_prices_tensor = _forward_fill_asof_tensor(low_prices_tensor)
     # 월 블록 루프 시작
     for i in range(len(month_start_indices)):
         start_idx = month_start_indices[i]
@@ -122,7 +179,7 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
 
             # --- [Issue #67] Candidate Selection Logic ---
-            candidate_indices_list = []
+            candidate_indices_gpu = cp.array([], dtype=cp.int32)
             
             # (A) Tier Selection (Primary for Tier/Hybrid)
             if candidate_source_mode in ['tier', 'hybrid_transition'] and tier_tensor is not None:
@@ -139,41 +196,46 @@ def run_magic_split_strategy_on_gpu(
                         # Fallback to Tier 2 (<= 2)
                         tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
                         candidate_indices = cp.where(tier2_mask)[0]
-
-                    candidate_indices_list = candidate_indices.tolist() # Convert to list for intersection
+                    candidate_indices_gpu = candidate_indices.astype(cp.int32, copy=False)
             
             # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
             weekly_indices_list = []
-            if candidate_source_mode == 'weekly' or (candidate_source_mode == 'hybrid_transition' and use_weekly_alpha_gate):
+            if needs_weekly_candidates:
                 past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
                 if not past_or_equal_data.empty:
                     latest_filter_date = past_or_equal_data['date'].max()
                     candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
                     candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
                     weekly_indices_list = [ticker_to_idx.get(t) for t in candidate_tickers_list if t in ticker_to_idx]
+            weekly_indices_gpu = (
+                cp.asarray(weekly_indices_list, dtype=cp.int32)
+                if weekly_indices_list
+                else cp.array([], dtype=cp.int32)
+            )
             
             # (C) Combine
-            final_candidate_indices = []
+            final_candidate_indices = cp.array([], dtype=cp.int32)
             
             if candidate_source_mode == 'weekly':
-                final_candidate_indices = weekly_indices_list
+                final_candidate_indices = weekly_indices_gpu
             elif candidate_source_mode == 'tier':
-                final_candidate_indices = candidate_indices_list
+                final_candidate_indices = candidate_indices_gpu
             elif candidate_source_mode == 'hybrid_transition':
                 if use_weekly_alpha_gate:
-                    weekly_index_set = set(weekly_indices_list)
-                    final_candidate_indices = [
-                        idx for idx in candidate_indices_list if idx in weekly_index_set
-                    ]
+                    if candidate_indices_gpu.size > 0 and weekly_indices_gpu.size > 0:
+                        final_candidate_indices = candidate_indices_gpu[
+                            cp.isin(candidate_indices_gpu, weekly_indices_gpu)
+                        ]
                 else:
-                    final_candidate_indices = candidate_indices_list
+                    final_candidate_indices = candidate_indices_gpu
+            if final_candidate_indices.size > 1:
+                final_candidate_indices = cp.unique(final_candidate_indices)
 
-            # (D) Valid Data Check + deterministic ranking metrics (ATR -> MarketCap -> Ticker)
-            if final_candidate_indices and signal_date is not None:
-                final_candidate_tickers = [all_tickers[i] for i in final_candidate_indices]
+            # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
+            if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
-                    final_candidate_tickers=final_candidate_tickers,
+                    final_candidate_indices=final_candidate_indices,
                     signal_date=signal_date,
                 )
 
@@ -181,37 +243,12 @@ def run_magic_split_strategy_on_gpu(
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    valid_tickers = valid_candidate_metrics_df.index.to_arrow().to_pylist()
-                    candidate_records = []
-                    for ticker in valid_tickers:
-                        if ticker not in ticker_to_idx:
-                            continue
+                    candidate_tickers_for_day, candidate_atrs_for_day, ranked_records = build_ranked_candidate_payload(
+                        valid_candidate_metrics_df=valid_candidate_metrics_df,
+                        return_ranked_records=debug_mode,
+                    )
 
-                        atr_value = valid_candidate_metrics_df.loc[ticker, "atr_14_ratio"]
-                        if pd.isna(atr_value):
-                            continue
-
-                        atr_float = float(atr_value)
-                        if atr_float <= 0.0:
-                            continue
-
-                        market_cap_value = valid_candidate_metrics_df.loc[ticker, "market_cap"]
-                        if pd.isna(market_cap_value):
-                            market_cap_q = 0
-                        else:
-                            market_cap_float = float(market_cap_value)
-                            market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
-
-                        atr_q = int(round(atr_float * 10000))
-                        candidate_records.append((ticker, atr_q, market_cap_q, atr_float))
-
-                    ranked_records = _sort_candidates_by_atr_then_market_cap_then_ticker(candidate_records)
-
-                    if ranked_records:
-                        candidate_indices_final = [ticker_to_idx[ticker] for ticker, _, _, _ in ranked_records]
-                        valid_atrs_final = [atr for _, _, _, atr in ranked_records]
-                        candidate_tickers_for_day = cp.asarray(candidate_indices_final, dtype=cp.int32)
-                        candidate_atrs_for_day = cp.asarray(valid_atrs_final, dtype=cp.float32)
+                    if candidate_tickers_for_day.size > 0:
                         if debug_mode:
                             preview = ", ".join([f"{ticker}" for ticker, _, _, _ in ranked_records[:10]])
                             print(
@@ -306,6 +343,25 @@ def run_magic_split_strategy_on_gpu(
 
                 log_message += footer
                 print(log_message)
+            processed_days += 1
+            if (
+                progress_log_enabled
+                and progress_log_interval_days > 0
+                and (
+                    processed_days % progress_log_interval_days == 0
+                    or processed_days == num_trading_days
+                )
+            ):
+                elapsed_sec = max(time.time() - run_start_ts, 1e-6)
+                progress = processed_days / max(num_trading_days, 1)
+                remaining_days = max(num_trading_days - processed_days, 0)
+                eta_sec = (elapsed_sec / processed_days) * remaining_days if processed_days > 0 else 0.0
+                print(
+                    "[GPU_PROGRESS] "
+                    f"{processed_days}/{num_trading_days} ({progress*100:.1f}%) "
+                    f"elapsed={timedelta(seconds=int(elapsed_sec))} "
+                    f"eta={timedelta(seconds=int(eta_sec))}"
+                )
             # 월 블록의 마지막 날 종가를 다음 리밸런싱을 위한 평가 기준으로 저장
         previous_prices_gpu = close_prices_tensor[end_idx - 1].copy()
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력

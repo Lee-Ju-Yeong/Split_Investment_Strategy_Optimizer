@@ -46,10 +46,7 @@ def run_gpu_optimization(
 # -----------------------------------------------------------------------------
 # Optimal Batch Size Calculation
 # -----------------------------------------------------------------------------
-def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_factor=0.9):
-    """
-    현재 가용 GPU 메모리를 기반으로 최적의 시뮬레이션 배치 크기를 계산합니다.
-    """
+def _query_free_memory_with_nvidia_smi() -> int | None:
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
@@ -57,8 +54,46 @@ def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_
             text=True,
             check=True,
         )
-        free_memory_mib = int(result.stdout.strip())
-        free_memory_bytes = free_memory_mib * 1024 * 1024
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+    output = result.stdout.strip()
+    if not output:
+        return None
+    return int(output.splitlines()[0]) * 1024 * 1024
+
+
+def _query_free_memory_with_cupy_runtime() -> int | None:
+    try:
+        cp, _, _, _ = _ensure_gpu_deps()
+        free_bytes, _ = cp.cuda.runtime.memGetInfo()
+    except Exception:
+        return None
+    return int(free_bytes)
+
+
+def _resolve_free_gpu_memory_bytes() -> tuple[int | None, str]:
+    nvidia_smi_bytes = _query_free_memory_with_nvidia_smi()
+    if nvidia_smi_bytes is not None:
+        return nvidia_smi_bytes, "nvidia-smi"
+
+    runtime_bytes = _query_free_memory_with_cupy_runtime()
+    if runtime_bytes is not None:
+        return runtime_bytes, "cupy.runtime.memGetInfo"
+
+    return None, "unavailable"
+
+
+def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_factor=0.9):
+    """
+    현재 가용 GPU 메모리를 기반으로 최적의 시뮬레이션 배치 크기를 계산합니다.
+    """
+    try:
+        free_memory_bytes, memory_source = _resolve_free_gpu_memory_bytes()
+        if free_memory_bytes is None:
+            raise ValueError("Unable to resolve free GPU memory from nvidia-smi/cupy runtime.")
+
+        free_memory_mib = free_memory_bytes // (1024 * 1024)
 
         p_space = config["parameter_space"]
         max_stocks = (
@@ -89,6 +124,7 @@ def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_
         optimal_size = int(usable_memory / estimated_mem_per_sim_with_buffer)
 
         print("\n--- 📊 Optimal Batch Size Calculation ---")
+        print(f"  - Memory Source          : {memory_source}")
         print(f"  - Available GPU Memory   : {free_memory_mib} MiB")
         print(f"  - Memory for Fixed Data  : {fixed_data_memory_bytes / (1024 * 1024):.2f} MiB")
         print(f"  - Usable Memory (90% SF) : {usable_memory / (1024 * 1024):.2f} MiB")
@@ -101,8 +137,8 @@ def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_
 
         return optimal_size
 
-    except (FileNotFoundError, subprocess.CalledProcessError, ValueError) as err:
-        print(f"⚠️  Could not execute nvidia-smi or calculate optimal batch size: {err}")
+    except ValueError as err:
+        print(f"⚠️  Could not calculate optimal batch size: {err}")
         return None
 
 

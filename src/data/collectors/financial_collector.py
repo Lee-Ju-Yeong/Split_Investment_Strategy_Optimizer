@@ -23,12 +23,36 @@ DEFAULT_WORKERS = 4
 DEFAULT_WRITE_BATCH_SIZE = 20000
 
 
-def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
+def _build_universe_unavailable_message(mode, end_date):
+    return (
+        "Ticker universe lookup failed for FinancialData collector: "
+        f"mode={mode}, end_date={end_date}. "
+        "TickerUniverseSnapshot/History returned no rows. "
+        "Run `python -m src.ticker_universe_batch --mode backfill` first. "
+        "Legacy fallback (WeeklyFilteredStocks -> CompanyInfo) is deprecated and "
+        "disabled by default; enable only for emergency recovery with "
+        "`allow_legacy_fallback=True`."
+    )
+
+
+def _finalize_universe(tickers, source, return_source):
+    if return_source:
+        return tickers, source
+    return tickers
+
+
+def get_financial_ticker_universe(
+    conn,
+    end_date=None,
+    mode="daily",
+    allow_legacy_fallback=False,
+    return_source=False,
+):
     """
     Resolves ticker universe consistently by mode.
     - backfill: TickerUniverseHistory
     - daily: TickerUniverseSnapshot(as-of end_date) -> active history(as-of) fallback
-    - legacy fallback: WeeklyFilteredStocks -> CompanyInfo
+    - legacy fallback (explicit opt-in): WeeklyFilteredStocks -> CompanyInfo
     """
     with conn.cursor() as cur:
         if mode == "backfill":
@@ -52,7 +76,8 @@ def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
                 )
             rows = cur.fetchall()
             if rows:
-                return [row[0] for row in rows]
+                tickers = [row[0] for row in rows]
+                return _finalize_universe(tickers, "history", return_source)
         else:
             if end_date is None:
                 cur.execute(
@@ -81,7 +106,8 @@ def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
                 )
             rows = cur.fetchall()
             if rows:
-                return [row[0] for row in rows]
+                tickers = [row[0] for row in rows]
+                return _finalize_universe(tickers, "snapshot", return_source)
 
             if end_date is not None:
                 cur.execute(
@@ -96,7 +122,16 @@ def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
                 )
                 rows = cur.fetchall()
                 if rows:
-                    return [row[0] for row in rows]
+                    tickers = [row[0] for row in rows]
+                    return _finalize_universe(tickers, "history_active", return_source)
+
+        if not allow_legacy_fallback:
+            raise RuntimeError(_build_universe_unavailable_message(mode, end_date))
+
+        print(
+            "[financial_collector] warning using legacy fallback (DEPRECATED) "
+            f"mode={mode}, end_date={end_date}"
+        )
 
         if end_date is None:
             cur.execute("SELECT DISTINCT stock_code FROM WeeklyFilteredStocks")
@@ -111,10 +146,12 @@ def get_financial_ticker_universe(conn, end_date=None, mode="daily"):
             )
         rows = cur.fetchall()
         if rows:
-            return [row[0] for row in rows]
+            tickers = [row[0] for row in rows]
+            return _finalize_universe(tickers, "legacy_weekly", return_source)
 
         cur.execute("SELECT stock_code FROM CompanyInfo")
-        return [row[0] for row in cur.fetchall()]
+        tickers = [row[0] for row in cur.fetchall()]
+        return _finalize_universe(tickers, "legacy_companyinfo", return_source)
 
 
 def get_latest_financial_dates(conn, ticker_codes, chunk_size=1000):
@@ -332,6 +369,7 @@ def run_financial_batch(
     start_date_str=None,
     end_date_str=None,
     ticker_codes=None,
+    allow_legacy_fallback=False,
     api_call_delay=API_CALL_DELAY,
     workers=DEFAULT_WORKERS,
     write_batch_size=DEFAULT_WRITE_BATCH_SIZE,
@@ -348,11 +386,14 @@ def run_financial_batch(
         end_date_str = datetime.today().strftime("%Y%m%d")
     end_date = datetime.strptime(end_date_str, "%Y%m%d").date()
 
+    universe_source = "explicit"
     if ticker_codes is None:
-        ticker_codes = get_financial_ticker_universe(
+        ticker_codes, universe_source = get_financial_ticker_universe(
             conn,
             end_date=end_date,
             mode=mode,
+            allow_legacy_fallback=allow_legacy_fallback,
+            return_source=True,
         )
 
     summary = {
@@ -361,6 +402,11 @@ def run_financial_batch(
         "tickers_skipped": 0,
         "rows_saved": 0,
         "errors": 0,
+        "universe_source": universe_source,
+        "allow_legacy_fallback": allow_legacy_fallback,
+        "legacy_fallback_used": universe_source.startswith("legacy_"),
+        "legacy_fallback_tickers": len(ticker_codes) if universe_source.startswith("legacy_") else 0,
+        "legacy_fallback_runs": 1 if universe_source.startswith("legacy_") else 0,
     }
 
     if not ticker_codes:
@@ -384,7 +430,8 @@ def run_financial_batch(
         f"[financial_collector] start mode={mode}, "
         f"tickers={total_tickers}, target_tickers={len(target_items)}, "
         f"workers={max(int(workers), 1)}, write_batch_size={max(int(write_batch_size), 1)}, "
-        f"end_date={end_date_str}"
+        f"end_date={end_date_str}, universe_source={universe_source}, "
+        f"allow_legacy_fallback={allow_legacy_fallback}"
     )
 
     row_buffer = []

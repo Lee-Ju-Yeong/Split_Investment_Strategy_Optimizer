@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import inspect
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,12 +31,12 @@ import urllib.parse
 import pandas as pd
 from sqlalchemy import create_engine
 
-from .backtester import BacktestEngine
+from .backtest.cpu.backtester import BacktestEngine
+from .backtest.cpu.execution import BasicExecutionHandler
+from .backtest.cpu.portfolio import Portfolio
+from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
-from .execution import BasicExecutionHandler
-from .portfolio import Portfolio
-from .strategy import MagicSplitStrategy
 
 
 def _require_gpu_stack():
@@ -68,7 +69,7 @@ def _load_trading_dates(sql_engine, start_date: str, end_date: str) -> pd.Dateti
         WHERE date BETWEEN %s AND %s
         ORDER BY date
     """
-    df = pd.read_sql(query, sql_engine, params=[start_date, end_date], parse_dates=["date"])
+    df = pd.read_sql(query, sql_engine, params=(start_date, end_date), parse_dates=["date"])
     if df.empty:
         return pd.DatetimeIndex([])
     return pd.DatetimeIndex(pd.to_datetime(df["date"]).sort_values().unique())
@@ -86,13 +87,16 @@ def _load_all_data_to_gpu(sql_engine, start_date: str, end_date: str):
             dsp.low_price,
             dsp.close_price,
             dsp.volume,
-            ci.atr_14_ratio
+            ci.atr_14_ratio,
+            mcd.market_cap
         FROM DailyStockPrice dsp
         LEFT JOIN CalculatedIndicators ci
           ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
+        LEFT JOIN MarketCapDaily mcd
+          ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
         WHERE dsp.date BETWEEN %s AND %s
     """
-    df_pd = pd.read_sql(query, sql_engine, params=[start_date, end_date], parse_dates=["date"])
+    df_pd = pd.read_sql(query, sql_engine, params=(start_date, end_date), parse_dates=["date"])
     if df_pd.empty:
         return cudf.DataFrame()
     return cudf.from_pandas(df_pd).set_index(["ticker", "date"])
@@ -133,17 +137,34 @@ def _load_tier_tensor(
     df_pd = pd.read_sql(
         query,
         sql_engine,
-        params=[start_date, end_date, start_date],
+        params=(start_date, end_date, start_date),
         parse_dates=["date"],
     )
     if df_pd.empty:
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
-    tier_wide = df_pd.pivot_table(index="date", columns="ticker", values="tier")
-    liq_wide = df_pd.pivot_table(index="date", columns="ticker", values="liquidity_20d_avg_value")
+    all_tickers_str = [str(t) for t in all_tickers]
+    tier_wide = (
+        df_pd.assign(ticker=df_pd["ticker"].astype(str))
+        .pivot_table(index="date", columns="ticker", values="tier")
+        .sort_index()
+    )
+    liq_wide = (
+        df_pd.assign(ticker=df_pd["ticker"].astype(str))
+        .pivot_table(index="date", columns="ticker", values="liquidity_20d_avg_value")
+        .sort_index()
+    )
 
-    tier_asof = tier_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
-    liq_asof = liq_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill()
+    union_index = tier_wide.index.union(pd.DatetimeIndex(trading_dates_pd)).sort_values()
+    tier_ffilled = tier_wide.reindex(index=union_index).ffill()
+    liq_ffilled = liq_wide.reindex(index=union_index).ffill()
+
+    tier_asof = (
+        tier_ffilled.reindex(index=trading_dates_pd, columns=all_tickers_str)
+        .fillna(0)
+        .astype(int)
+    )
+    liq_asof = liq_ffilled.reindex(index=trading_dates_pd, columns=all_tickers_str)
 
     min_liq = max(int(min_liquidity_20d_avg_value or 0), 0)
     if min_liq > 0:
@@ -255,11 +276,25 @@ def _run_cpu_equity_curve(
     initial_cash: float,
     row: ParityParamRow,
 ) -> pd.Series:
-    execution_params = base_config["execution_params"]
+    execution_params = dict(base_config["execution_params"])
     strategy_params = dict(base_config.get("strategy_params", {}))
     strategy_params.update(row.to_strategy_kwargs())
     strategy_params["backtest_start_date"] = start_date
     strategy_params["backtest_end_date"] = end_date
+
+    strategy_allowed = {
+        key
+        for key in inspect.signature(MagicSplitStrategy.__init__).parameters.keys()
+        if key != "self"
+    }
+    strategy_params = {k: v for k, v in strategy_params.items() if k in strategy_allowed}
+
+    execution_allowed = {
+        key
+        for key in inspect.signature(BasicExecutionHandler.__init__).parameters.keys()
+        if key != "self"
+    }
+    execution_params = {k: v for k, v in execution_params.items() if k in execution_allowed}
 
     strategy = MagicSplitStrategy(**strategy_params)
     portfolio = Portfolio(initial_cash=initial_cash, start_date=start_date, end_date=end_date)
@@ -323,12 +358,23 @@ def main() -> None:
     parser.add_argument("--topk", type=int, default=3, help="Number of param rows to validate (default: 3).")
     parser.add_argument("--sort-by", default=None, help="Sort CSV by this metric column desc before topk selection.")
     parser.add_argument("--tolerance", type=float, default=1e-3, help="Absolute tolerance (default: 1e-3).")
+    parser.add_argument(
+        "--parity-mode",
+        choices=["fast", "strict"],
+        default="strict",
+        help="GPU parity mode for evaluation path (default: strict).",
+    )
     parser.add_argument("--out", default=None, help="Write JSON report to this path.")
+    parser.add_argument(
+        "--no-fail-on-mismatch",
+        action="store_true",
+        help="Do not raise AssertionError even if mismatch exists (report still records failures).",
+    )
     args = parser.parse_args()
 
     _require_gpu_stack()
     import cupy as cp
-    from .backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+    from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
 
     config = load_config()
     start_date = _parse_date(args.start_date) if args.start_date else str(config["backtest_settings"]["start_date"])
@@ -338,6 +384,11 @@ def main() -> None:
     if args.params_csv:
         rows = _load_params_from_csv(args.params_csv, topk=int(args.topk), sort_by=args.sort_by)
     else:
+        if int(args.topk) != 1:
+            print(
+                "[cpu_gpu_parity_topk] info: --params-csv not provided. "
+                "Using a single parameter row from config.strategy_params."
+            )
         rows = [ParityParamRow.from_mapping(config.get("strategy_params", {}))]
 
     if not rows:
@@ -374,6 +425,8 @@ def main() -> None:
     exec_params = copy.deepcopy(config["execution_params"])
     exec_params["cooldown_period_days"] = config.get("strategy_params", {}).get("cooldown_period_days", 5)
     exec_params["candidate_source_mode"] = "tier"
+    exec_params["parity_mode"] = str(args.parity_mode).strip().lower()
+    exec_params["tier_hysteresis_mode"] = config.get("strategy_params", {}).get("tier_hysteresis_mode", "legacy")
 
     daily_values_gpu = run_magic_split_strategy_on_gpu(
         initial_cash=float(initial_cash),
@@ -398,9 +451,13 @@ def main() -> None:
             "start_date": start_date,
             "end_date": end_date,
             "initial_cash": initial_cash,
+            "requested_topk": int(args.topk),
+            "validated_rows": int(len(rows)),
             "topk": int(len(rows)),
             "tolerance": float(args.tolerance),
             "candidate_source_mode": "tier",
+            "parity_mode": exec_params["parity_mode"],
+            "tier_hysteresis_mode": exec_params["tier_hysteresis_mode"],
         },
         "rows": [],
         "summary": {"failed": 0, "passed": 0},
@@ -434,7 +491,7 @@ def main() -> None:
             json.dump(report, f, ensure_ascii=False, indent=2)
         print(f"[cpu_gpu_parity_topk] report_saved path={args.out}")
 
-    if report["summary"]["failed"] > 0:
+    if report["summary"]["failed"] > 0 and not args.no_fail_on_mismatch:
         first_failed = next((r for r in report["rows"] if (r["compare"].get("mismatch_count") or 0) > 0), None)
         raise AssertionError(f"CPU/GPU parity failed. first_failed={first_failed}")
 

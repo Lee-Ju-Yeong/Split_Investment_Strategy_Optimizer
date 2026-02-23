@@ -31,7 +31,7 @@ class TestDataHandler(unittest.TestCase):
 
         self.data_handler = DataHandler(self.db_config)
         # 각 테스트의 독립성을 위해 lru_cache를 초기화
-        self.data_handler.load_stock_data.cache_clear()
+        self.data_handler.clear_load_stock_data_cache()
 
 
     def tearDown(self):
@@ -89,6 +89,24 @@ class TestDataHandler(unittest.TestCase):
         stock_data = self.data_handler.load_stock_data('000000', '2022-01-01', '2022-01-31')
         
         self.assertTrue(stock_data.empty)
+
+    @patch('pandas.read_sql')
+    def test_load_stock_data_cache_key_is_normalized(self, mock_read_sql):
+        d = {
+            'date': pd.to_datetime(['2022-01-03', '2022-01-04', '2022-01-05']),
+            'close_price': [102, 103, 104],
+        }
+        mock_read_sql.return_value = pd.DataFrame(data=d)
+
+        stock_data_str = self.data_handler.load_stock_data('005930', '2022-01-04', '2022-01-05')
+        stock_data_ts = self.data_handler.load_stock_data(
+            '005930',
+            pd.Timestamp('2022-01-04'),
+            pd.Timestamp('2022-01-05'),
+        )
+
+        self.assertEqual(mock_read_sql.call_count, 1)
+        self.assertTrue(stock_data_str.equals(stock_data_ts))
 
     def test_get_latest_price(self):
         """특정 날짜의 최근 가격을 올바르게 가져오는지 테스트"""
