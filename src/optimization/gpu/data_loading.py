@@ -17,12 +17,36 @@ def _get_sql_engine(engine_url: str):
     return create_engine(engine_url)
 
 
+def _read_sql_to_cudf(query, sql_engine, parse_dates=None):
+    """
+    Prefer cuDF SQL read path to reduce pandas->cuDF round-trip overhead.
+    Falls back to pandas.read_sql + cudf.from_pandas for compatibility.
+    """
+    _, cudf, _, _ = _ensure_gpu_deps()
+    parse_dates = parse_dates or []
+
+    reader = getattr(cudf, "read_sql_query", None) or getattr(cudf, "read_sql", None)
+    if reader is not None:
+        gdf = reader(query, sql_engine)
+        for col in parse_dates:
+            if col not in gdf.columns:
+                continue
+            dtype_name = str(getattr(gdf[col], "dtype", ""))
+            if "datetime64" in dtype_name:
+                continue
+            gdf[col] = cudf.to_datetime(gdf[col])
+        return gdf
+
+    _, pd = _ensure_core_deps()
+    df_pd = pd.read_sql(query, sql_engine, parse_dates=parse_dates)
+    return cudf.from_pandas(df_pd)
+
+
 # -----------------------------------------------------------------------------
 # GPU Data Pre-loader
 # -----------------------------------------------------------------------------
 def preload_all_data_to_gpu(engine, start_date, end_date):
-    _, cudf, _, _ = _ensure_gpu_deps()
-    _, pd = _ensure_core_deps()
+    _ensure_gpu_deps()
 
     print("⏳ Loading all stock data into GPU memory...")
     start_time = time.time()
@@ -47,14 +71,13 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
         dsp.date BETWEEN '{start_date}' AND '{end_date}'
     """
     sql_engine = _get_sql_engine(str(engine))
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=["date"])
-    gdf = cudf.from_pandas(df_pd).set_index(["ticker", "date"])
+    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
     print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
 
 def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    _, cudf, _, _ = _ensure_gpu_deps()
+    _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
 
     print("⏳ Loading weekly filtered stocks data to GPU memory...")
@@ -66,10 +89,20 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
         f"WHERE `filter_date` BETWEEN '{extended_start_date.strftime('%Y-%m-%d')}' AND '{end_date}'"
     )
     sql_engine = _get_sql_engine(str(engine))
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=["date"])
-    gdf = cudf.from_pandas(df_pd).set_index("date")
+    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index("date")
     print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
+
+
+def build_empty_weekly_filtered_gpu():
+    _, cudf, _, _ = _ensure_gpu_deps()
+    empty_df = cudf.DataFrame(
+        {
+            "date": cudf.Series([], dtype="datetime64[ns]"),
+            "ticker": cudf.Series([], dtype="str"),
+        }
+    )
+    return empty_df.set_index("date")
 
 
 def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
@@ -132,6 +165,8 @@ def _build_tier_frame(df_pd, trading_dates_pd, all_tickers):
 
 __all__ = [
     "_get_sql_engine",
+    "_read_sql_to_cudf",
+    "build_empty_weekly_filtered_gpu",
     "preload_all_data_to_gpu",
     "preload_weekly_filtered_stocks_to_gpu",
     "preload_tier_data_to_tensor",

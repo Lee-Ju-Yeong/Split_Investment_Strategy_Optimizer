@@ -23,6 +23,14 @@ from .logic import (
 from .utils import _resolve_signal_date_for_gpu
 
 
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
     """
     Forward-fill along day axis for as-of semantics.
@@ -67,8 +75,8 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "weekly")
-    use_weekly_alpha_gate = execution_params.get("use_weekly_alpha_gate", False)
+    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
+    use_weekly_alpha_gate = _coerce_bool(execution_params.get("use_weekly_alpha_gate", False))
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
@@ -81,8 +89,8 @@ def run_magic_split_strategy_on_gpu(
     force_liquidate_tier3 = strict_hysteresis_enabled
     valid_modes = {'weekly', 'tier', 'hybrid_transition'}
     if candidate_source_mode not in valid_modes:
-        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'weekly'.")
-        candidate_source_mode = 'weekly'
+        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'tier'.")
+        candidate_source_mode = 'tier'
     if candidate_source_mode in ('tier', 'hybrid_transition') and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
 

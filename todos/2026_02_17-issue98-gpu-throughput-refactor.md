@@ -470,3 +470,106 @@
   - `src/backtest/cpu/portfolio.py`, `src/backtest/cpu/execution.py` lookup cache 주입
   - `src/data_handler.py` 캐시 정책(구간 단위/size) 후속 조정
   - `src/optimization/gpu/data_loading.py` pandas round-trip 최소화 검토
+
+## 16. C1 원복 결정 및 재발방지 규칙 (2026-02-23)
+- 결정:
+  - `PR-98C-1` 상태를 기준선으로 복귀한다.
+  - `PR-98C-2` 구간에서 throughput 회귀가 커서(최대 `+4.52%`) 현재 상태는 운영 기준으로 보류한다.
+- 실측 근거(기록):
+  - C2B 성능 로그: `results/perf_after_pr98c2b_20260222_131310.log`
+  - `Batch 1 Kernel Execution Time: 19482.52s`
+  - `Total GPU Kernel Execution Time: 19482.52s`
+  - `Elapsed (wall clock): 5:25:33` (`19533s`)
+  - 비교 기준(B0): `results/perf_baseline_strict_hyst_20260219_212900.log` (`18688s`)
+- 실제 원복(완료):
+  - `Revert "docs(issue98): record PR-98C2 memory fixes and validation"` (`1f02e35`)
+  - `Revert "perf(cpu): cache strict-tier and execution lookups"` (`2104b3b`)
+  - `Revert "perf(issue98): harden batch sizing and add OOM backoff"` (`1fe8cf0`)
+  - `Revert "fix(gpu): cut temp mask allocations in sell/add-buy paths"` (`7252e63`)
+  - 결과: 브랜치 HEAD는 C1 기준(= `c57f477`/`a3565f3` 계열)으로 복귀
+- 왜 C1로 복귀했는가:
+  - 정합성: C1 strict parity 증적이 이미 존재
+  - 성능: C1 회귀는 소폭(`+0.60%`)이지만, C2B는 회귀 폭이 큼(`+4.52%`)
+  - 운영성: C2는 OOM 안정화 장점이 있으나, 현재 throughput 손실이 큼
+- 같은 반복 방지를 위한 규칙(강제):
+  - Rule-1: hot path(`src/backtest/gpu/logic.py`) 수정은 기본적으로 `PC`로 취급하고, 단위테스트 통과만으로 병합하지 않는다.
+  - Rule-2: OOM 완화 수정은 반드시 `exp/*` 브랜치에서 검증하고, 본선 브랜치에는 성능 게이트 통과 후에만 반영한다.
+  - Rule-3: 성능 판정은 단일 run 금지. 동일 조건 2회 측정 후 `median kernel time`으로 비교한다.
+  - Rule-4: 병합 조건은 아래 3개 동시 충족:
+    - strict parity `mismatch=0`
+    - OOM 미발생
+    - C1 대비 kernel time 비열화(최소 `<= +1.0%`, 목표 `<= 0%`)
+  - Rule-5: 위 조건 불충족 시 즉시 revert하고, 다음 시도는 변경 단위를 더 작게 쪼갠다(한 번에 1개 가설만).
+- 다음 작업 순서:
+  - 1) C1 기준 perf/parity 재확인(스냅샷 고정)
+  - 2) C2 항목은 기능 단위로 분해해 실험 브랜치에서 재도입
+  - 3) 항목별 gate 통과분만 순차 cherry-pick
+
+## 17. C2 제외 잔여 개선안 + 예상 효과 (2026-02-23)
+- 범위:
+  - 아래 항목은 `PR-98C2`에서 revert된 변경(`5e93656`, `e0dc787`, `fe520d5`)을 재도입하지 않고 진행 가능한 후보만 포함한다.
+  - 기준선은 C1(`c57f477`/`a3565f3`) + B0 측정 규칙을 따른다.
+- 추정 방법:
+  - 최근 실측에서 병목의 대부분이 kernel loop 구간(`~18.3k~19.5k sec`)에 집중됨
+  - 예상치는 동일 조건(2024-01-01~2024-12-31, 360 sims)에서의 `kernel time` 변화 범위로 기재
+
+### 17-1. 실행 후보(우선순위순)
+| id | class | location | 변경 요지 | 예상 효과(커널) | 예상 효과(전체 wall) | 리스크 |
+| --- | --- | --- | --- | --- | --- | --- |
+| R-005 | PO | `tests/test_backtest_strategy_gpu.py` 외 | PR-98D 성능 회귀 가드(예산 테스트, median 2-run 규칙 자동화) | 직접 개선 없음 | 직접 개선 없음 | 낮음(운영 안전성↑) |
+| R-002 | PC | `src/backtest/gpu/logic.py` | `run_lengths.tolist()` host sync 제거(CuPy-only segment prefix) | `-0.2% ~ -0.8%` | `-0.1% ~ -0.7%` | 중간(핫패스/정합성 민감) |
+| R-003 | PO | `src/backtest/gpu/engine.py` | `signal_day_idx<0` 분기의 `cp.zeros` 4종을 루프 밖 1회 생성 후 재사용(P-015) | `0.0% ~ -0.3%` | `0.0% ~ -0.3%` | 낮음 |
+| R-001 | PC | `src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py` | as-of 후보 메트릭을 일별 `sort/drop_duplicates` 반복 대신 텐서 사전생성+gather로 전환 | `-1.0% ~ -3.0%` (stretch: `-4.0%`) | `-0.9% ~ -2.8%` | 중간(정렬/시점 parity 민감) |
+| R-004 | PO | `src/optimization/gpu/analysis.py` | 결과 분석에서 불필요한 host copy/포맷팅 최소화(옵션화) | `~0.0%` | `0.0% ~ -0.3%` | 낮음(결과표시만 영향) |
+
+### 17-2. 제외/보류 항목 (C2 범주)
+- 아래는 본 섹션 범위에서 제외한다.
+  - `perf(issue98): harden batch sizing and add OOM backoff` (`5e93656`)
+  - `fix(gpu): cut temp mask allocations in sell/add-buy paths` (`e0dc787`)
+  - `perf(cpu): cache strict-tier and execution lookups` (`fe520d5`)
+- 사유:
+  - C2 구간 실측에서 throughput 회귀가 커서(`+4.52%`) 현재 본선 기준으로는 재도입 보류
+  - 재시도 시 `exp/*`에서 단일 가설 단위로 분리 검증 후 gate 통과분만 cherry-pick
+
+### 17-3. 권장 실행 순서 (C2 제외)
+- 1) `R-005` 먼저 반영(회귀 가드 선설치)
+- 2) `R-003` 단독 반영 후 측정/게이트
+- 3) `R-002` 단독 반영 후 측정/게이트
+- 4) `R-001` 단독 반영 후 측정/게이트
+- 5) `R-004` 마지막 반영(운영 결정 경로 비개입 항목)
+- 원칙:
+  - Rule-5에 따라 한 번에 1개 가설만 반영한다(묶음 반영 금지).
+
+### 17-4. 합격 기준(동일 유지)
+- strict parity `decision-level mismatch=0` (two-tier/full-13 정책은 `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md` 11장 준수)
+- OOM 미발생
+- C1 대비 `kernel time <= +1.0%` (목표: `<= 0%`)
+- 측정 규격:
+  - 동일 입력 2회 실행, 첫 실행은 warm-up으로만 사용
+  - 판정값은 `median kernel time` 사용
+  - branch hit-rate(`signal_day_idx<0`)와 host-sync 지표(`tolist()/to_pylist()`)를 함께 기록
+
+### 17-5. 실행 체크리스트(신규 참여자용)
+- [ ] Scope Lock: 이번 PR에 포함할 항목을 `R-*` 1개로 고정
+- [ ] Baseline Lock: 비교 기준은 C1 + `results/perf_baseline_strict_hyst_20260219_212900.log`
+- [ ] Environment Pin:
+  - `conda run -n rapids-env python -V`
+  - `conda run -n rapids-env python -c "import cupy,cudf; print(cupy.__version__, cudf.__version__)"`
+  - `nvidia-smi --query-gpu=name,driver_version --format=csv,noheader`
+- [ ] Input Snapshot:
+  - `config/config.yaml` 해시, params CSV 경로, 기간, sim 수를 `results/sec17_input_<ts>.txt`에 저장
+- [ ] Unit Gate: 변경 항목 연관 테스트 + 회귀 테스트 통과
+- [ ] Parity Gate: strict parity 실행 후 JSON 증적 첨부(`mismatch=0`)
+- [ ] Perf Gate: 동일 조건 2회 측정 후 median kernel time 비교
+- [ ] Evidence Links: env/input/perf/parity 로그 경로를 PR 본문에 명시
+- [ ] Rollback Trigger:
+  - 조건 미충족 시 즉시 `git revert <candidate_commit_sha>`
+  - 실패 로그 경로를 TODO/PR에 함께 남긴다
+
+### 17-6. PC 항목 사전 명시(게이트 A 정합)
+- `R-002` (`src/backtest/gpu/logic.py`):
+  - 변경 전후 strict parity를 동일 params/date 범위로 필수 비교
+  - 동점/동일 자본 상황에서 자본 차감 순서 회귀 케이스를 단위테스트로 고정
+- `R-001` (`src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py`):
+  - GPU 후보군/정렬 변경이므로 CPU 대응 변경 필요 여부를 PR 시작 시 명시
+  - CPU 코드 변경이 없다면 `정렬/시점 계약 불변 근거`를 PR 본문에 서술

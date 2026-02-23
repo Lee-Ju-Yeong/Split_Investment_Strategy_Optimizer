@@ -15,6 +15,7 @@ from datetime import datetime
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
 from .data_loading import (
+    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
     preload_tier_data_to_tensor,
     preload_weekly_filtered_stocks_to_gpu,
@@ -25,6 +26,14 @@ from .kernel import get_optimal_batch_size, run_gpu_optimization
 DEFAULT_FALLBACK_TARGET_BATCHES = 8
 DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _to_positive_int(value):
@@ -62,6 +71,13 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
     return batch_size, "adaptive-safe-default"
 
 
+def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_gate):
+    return (
+        candidate_source_mode == "weekly"
+        or (candidate_source_mode == "hybrid_transition" and _coerce_bool(use_weekly_alpha_gate))
+    )
+
+
 # -----------------------------------------------------------------------------
 # Worker: find_optimal_parameters
 # -----------------------------------------------------------------------------
@@ -83,13 +99,30 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
+    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "tier")
+    execution_params["use_weekly_alpha_gate"] = _coerce_bool(
+        strategy_params.get("use_weekly_alpha_gate", False)
+    )
+    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     print("\n" + "=" * 80)
     print(f"WORKER: Running GPU Simulations for {start_date} to {end_date}")
     print("=" * 80)
 
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
+    needs_weekly_candidates = _should_preload_weekly_candidates(
+        execution_params["candidate_source_mode"],
+        execution_params["use_weekly_alpha_gate"],
+    )
+    if needs_weekly_candidates:
+        weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(
+            db_connection_str,
+            start_date,
+            end_date,
+        )
+    else:
+        print("⏭️ Skipping weekly filtered preload (mode=tier, weekly gate disabled).")
+        weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -109,10 +142,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
     tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
-
-    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "weekly")
-    execution_params["use_weekly_alpha_gate"] = strategy_params.get("use_weekly_alpha_gate", False)
-    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
