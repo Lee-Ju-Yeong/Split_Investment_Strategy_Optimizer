@@ -53,6 +53,18 @@ def _read_sql_to_cudf(query, sql_engine, parse_dates=None):
     return cudf.from_pandas(df_pd)
 
 
+def _set_index_lean(gdf, keys):
+    """
+    Prefer in-place index set to avoid an extra deep-copy allocation peak on large loads.
+    """
+    try:
+        gdf.set_index(keys, inplace=True)
+        return gdf
+    except TypeError:
+        # Compatibility fallback for APIs that do not expose inplace.
+        return gdf.set_index(keys)
+
+
 # -----------------------------------------------------------------------------
 # GPU Data Pre-loader
 # -----------------------------------------------------------------------------
@@ -398,7 +410,8 @@ def preload_all_data_to_gpu(
         {universe_filter_clause}
     """
     sql_engine = _get_sql_engine(str(engine))
-    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
+    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"])
+    gdf = _set_index_lean(gdf, ["ticker", "date"])
     gdf = _normalize_loaded_types(gdf)
     if use_adjusted_prices:
         _validate_adjusted_ohlc_not_null(gdf, adjusted_gate_sql)
@@ -419,7 +432,8 @@ def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
         f"WHERE `filter_date` BETWEEN '{extended_start_date.strftime('%Y-%m-%d')}' AND '{end_date}'"
     )
     sql_engine = _get_sql_engine(str(engine))
-    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index("date")
+    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"])
+    gdf = _set_index_lean(gdf, "date")
     print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
