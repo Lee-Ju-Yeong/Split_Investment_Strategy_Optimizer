@@ -25,7 +25,6 @@ class BasicExecutionHandler:
         self.buy_commission_rate = buy_commission_rate
         self.sell_commission_rate = sell_commission_rate
         self.sell_tax_rate = sell_tax_rate
-        self._name_cache = {}
 
     def _get_tick_size(self, price):
         if price < 2000: return 1
@@ -42,23 +41,12 @@ class BasicExecutionHandler:
         rounded = round(divided, 5)
         return math.ceil(rounded) * tick_size
 
-    def _get_cached_name(self, data_handler, ticker):
-        if ticker not in self._name_cache:
-            self._name_cache[ticker] = data_handler.get_name_from_ticker(ticker)
-        return self._name_cache[ticker]
-
     def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx):
         ticker = order_event["ticker"]
         order_type = order_event["type"]
         current_date = order_event["date"]
-        ohlc_data = order_event.get("_cached_ohlc")
-        if ohlc_data is None:
-            ohlc_data = data_handler.get_ohlc_data_on_date(
-                current_date,
-                ticker,
-                order_event["start_date"],
-                order_event["end_date"],
-            )
+        
+        ohlc_data = data_handler.get_ohlc_data_on_date(current_date, ticker, order_event["start_date"], order_event["end_date"])
 
         if ohlc_data is None:
             return
@@ -117,7 +105,7 @@ class BasicExecutionHandler:
         trade = Trade(
             date=order_event["date"],
             code=ticker,
-            name=self._get_cached_name(data_handler, ticker),
+            name=data_handler.get_name_from_ticker(ticker),
             trade_type='BUY',
             order=position_to_add.order,
             reason_for_trade=order_event.get("reason_for_trade", "N/A"),
@@ -211,7 +199,7 @@ class BasicExecutionHandler:
         trade = Trade(
             date=order_event["date"],
             code=ticker,
-            name=self._get_cached_name(data_handler, ticker),
+            name=data_handler.get_name_from_ticker(ticker),
             trade_type="SELL",
             order=position_to_sell.order,
             reason_for_trade=order_event.get("reason_for_trade", "N/A"),

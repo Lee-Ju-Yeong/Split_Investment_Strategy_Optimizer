@@ -88,8 +88,6 @@ class MagicSplitStrategy(Strategy):
         self.investment_per_order = 0
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
-        self._tier_cache_signal_date = None
-        self._tier_cache = {}
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -103,38 +101,6 @@ class MagicSplitStrategy(Strategy):
                 "Forcing 'tier' (A-path)."
             )
         return "tier"
-
-    @staticmethod
-    def _tier_value_from_info(tier_info):
-        if tier_info is None:
-            return 0
-        try:
-            return int(tier_info.get("tier", 0))
-        except Exception:
-            return 0
-
-    def _get_cached_tiers(self, data_handler, signal_date, tickers):
-        if not tickers:
-            return {}
-        date_key = pd.to_datetime(signal_date)
-        if self._tier_cache_signal_date is None or self._tier_cache_signal_date != date_key:
-            self._tier_cache_signal_date = date_key
-            self._tier_cache = {}
-        cached_for_date = self._tier_cache
-        unique_tickers = list(dict.fromkeys(str(ticker) for ticker in tickers))
-        missing_tickers = [ticker for ticker in unique_tickers if ticker not in cached_for_date]
-        if missing_tickers:
-            fetched = {}
-            get_tiers_as_of = getattr(data_handler, "get_tiers_as_of", None)
-            if callable(get_tiers_as_of):
-                fetched = get_tiers_as_of(as_of_date=date_key, tickers=missing_tickers) or {}
-            get_stock_tier_as_of = getattr(data_handler, "get_stock_tier_as_of", None)
-            for ticker in missing_tickers:
-                tier_info = fetched.get(ticker)
-                if tier_info is None and callable(get_stock_tier_as_of):
-                    tier_info = get_stock_tier_as_of(ticker, date_key)
-                cached_for_date[ticker] = tier_info
-        return {ticker: cached_for_date.get(ticker) for ticker in unique_tickers}
 
     @staticmethod
     def _get_tick_size(price):
@@ -332,7 +298,6 @@ class MagicSplitStrategy(Strategy):
                             (-candidate["market_cap_q"], -candidate["atr_q"]),
                             "신규 진입",
                             signal_close_price,
-                            cached_ohlc=ohlc_row.copy(),
                         )
                     )
                     temp_cash -= total_cost
@@ -355,13 +320,6 @@ class MagicSplitStrategy(Strategy):
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
         if signal_date is None:
             return buy_signals
-        strict_tier_lookup = {}
-        if self.strict_hysteresis_enabled and portfolio.positions:
-            strict_tier_lookup = self._get_cached_tiers(
-                data_handler,
-                signal_date,
-                list(portfolio.positions.keys()),
-            )
 
         # 추가 매수 신호 생성 로직
         for ticker in list(portfolio.positions.keys()):
@@ -369,8 +327,8 @@ class MagicSplitStrategy(Strategy):
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
             if self.strict_hysteresis_enabled:
-                tier_info = strict_tier_lookup.get(ticker)
-                tier_value = self._tier_value_from_info(tier_info)
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
                 if tier_value <= 0 or tier_value > 2:
                     continue
             
@@ -422,45 +380,14 @@ class MagicSplitStrategy(Strategy):
     def _create_sell_signal(self, date, ticker, position, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "SELL", "quantity": position.quantity, "position": position, "reason_for_trade": reason, "trigger_price": trigger_price}
 
-    def _create_buy_signal(
-        self,
-        date,
-        ticker,
-        investment_amount,
-        position,
-        priority,
-        sort_metric,
-        reason,
-        trigger_price,
-        cached_ohlc=None,
-    ):
-        signal = {
-            "date": date,
-            "ticker": ticker,
-            "type": "BUY",
-            "investment_amount": investment_amount,
-            "position": position,
-            "priority_group": priority,
-            "sort_metric": sort_metric,
-            "reason_for_trade": reason,
-            "trigger_price": trigger_price,
-        }
-        if cached_ohlc is not None:
-            signal["_cached_ohlc"] = cached_ohlc
-        return signal
+    def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
+        return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
     def generate_sell_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         signals = []
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
         if signal_date is None:
             return signals
-        strict_tier_lookup = {}
-        if self.strict_hysteresis_enabled and portfolio.positions:
-            strict_tier_lookup = self._get_cached_tiers(
-                data_handler,
-                signal_date,
-                list(portfolio.positions.keys()),
-            )
 
         for ticker in list(portfolio.positions.keys()):
             row = data_handler.get_stock_row_as_of(
@@ -481,8 +408,8 @@ class MagicSplitStrategy(Strategy):
             reason = ""
             trigger_price = current_price
             if self.strict_hysteresis_enabled:
-                tier_info = strict_tier_lookup.get(ticker)
-                tier_value = self._tier_value_from_info(tier_info)
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
                 if tier_value >= 3:
                     liquidate = True
                     reason = "Tier3 강제 청산"
