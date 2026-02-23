@@ -5,6 +5,7 @@ This module contains the functions for generating the signals for the Magic Spli
 """
 
 from abc import ABC, abstractmethod
+import math
 import pandas as pd
 import numpy as np
 import uuid
@@ -57,6 +58,8 @@ class MagicSplitStrategy(Strategy):
         use_weekly_alpha_gate=False,
         min_liquidity_20d_avg_value=0,
         min_tier12_coverage_ratio=0.0,
+        tier_hysteresis_mode="legacy",
+        buy_commission_rate=0.00015,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -75,11 +78,16 @@ class MagicSplitStrategy(Strategy):
         self.use_weekly_alpha_gate = use_weekly_alpha_gate
         self.min_liquidity_20d_avg_value = min_liquidity_20d_avg_value
         self.min_tier12_coverage_ratio = min_tier12_coverage_ratio
+        self.tier_hysteresis_mode = str(tier_hysteresis_mode).strip().lower()
+        self.buy_commission_rate = float(buy_commission_rate)
+        self.strict_hysteresis_enabled = (
+            self.tier_hysteresis_mode == "strict_hysteresis_v1"
+            and self.candidate_source_mode in {"tier", "hybrid_transition"}
+        )
         
         self.investment_per_order = 0
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
-        self.last_entry_context = {}
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -95,13 +103,27 @@ class MagicSplitStrategy(Strategy):
         return "tier"
 
     @staticmethod
-    def _to_market_cap_rank_value(market_cap):
-        if pd.isna(market_cap):
-            return 0
-        market_cap_float = float(market_cap)
-        if market_cap_float <= 0.0:
-            return 0
-        return int(market_cap_float // 1_000_000)
+    def _get_tick_size(price):
+        if price < 2000:
+            return 1
+        if price < 5000:
+            return 5
+        if price < 20000:
+            return 10
+        if price < 50000:
+            return 50
+        if price < 200000:
+            return 100
+        if price < 500000:
+            return 500
+        return 1000
+
+    @classmethod
+    def _adjust_price_up(cls, price):
+        tick_size = cls._get_tick_size(price)
+        divided = price / tick_size
+        rounded = round(divided, 5)
+        return math.ceil(rounded) * tick_size
 
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
@@ -123,23 +145,11 @@ class MagicSplitStrategy(Strategy):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
-        self.last_entry_context = {
-            "date": pd.to_datetime(current_date),
-            "signal_date": signal_date,
-            "available_slots": 0,
-            "tier_source": "NO_SIGNAL_DATE",
-            "candidate_count_raw": 0,
-            "candidate_count_active": 0,
-            "candidate_count_ranked": 0,
-            "new_entry_count": 0,
-        }
         if signal_date is None:
             return buy_signals
 
         # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
-        self.last_entry_context["available_slots"] = int(max(0, available_slots))
-        self.last_entry_context["tier_source"] = "NO_CANDIDATES"
         if (current_date - self.backtest_start_date).days < 15:
             from tqdm import tqdm
             log_msg = (
@@ -178,8 +188,8 @@ class MagicSplitStrategy(Strategy):
                         tier_result = get_tier_candidates(signal_date)
                     tier_codes, used_tier = tier_result
                     candidate_codes = tier_codes
-                    self.last_entry_context["tier_source"] = str(used_tier)
-                    self.last_entry_context["candidate_count_raw"] = int(len(candidate_codes))
+                    if self.strict_hysteresis_enabled and used_tier.startswith("TIER_2_FALLBACK"):
+                        candidate_codes = []
 
                     from tqdm import tqdm
                     if used_tier.startswith("TIER_2_FALLBACK"):
@@ -189,11 +199,9 @@ class MagicSplitStrategy(Strategy):
                 except Exception as exc:
                     print(f"[Warning] Tier candidate lookup failed ({exc}). Returning empty candidate set.")
                     candidate_codes = []
-                    self.last_entry_context["tier_source"] = "LOOKUP_ERROR"
             else:
                 print("[Warning] get_candidates_with_tier_fallback missing. Returning empty candidate set.")
                 candidate_codes = []
-                self.last_entry_context["tier_source"] = "LOOKUP_MISSING"
             # --- [Issue #67] Logic End ---
             
             active_candidates = []
@@ -207,9 +215,8 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
-            self.last_entry_context["candidate_count_active"] = int(len(active_candidates))
             
-            candidate_rank_metrics = []
+            ranked_candidates = []
             for ticker in active_candidates:
                 signal_row = data_handler.get_stock_row_as_of(
                     ticker, signal_date, self.backtest_start_date, self.backtest_end_date
@@ -218,37 +225,68 @@ class MagicSplitStrategy(Strategy):
                     continue
                 latest_atr = signal_row["atr_14_ratio"]
                 signal_close = signal_row.get("close_price")
-                if pd.isna(latest_atr) or pd.isna(signal_close):
+                if not (pd.notna(latest_atr) and pd.notna(signal_close)):
                     continue
 
                 atr_float = float(latest_atr)
                 if atr_float <= 0.0:
                     continue
 
-                market_cap_rank = self._to_market_cap_rank_value(signal_row.get("market_cap"))
-                candidate_rank_metrics.append(
+                market_cap_raw = signal_row.get("market_cap")
+                if pd.notna(market_cap_raw):
+                    market_cap_float = float(market_cap_raw)
+                    market_cap_q = int(market_cap_float // 1_000_000) if market_cap_float > 0.0 else 0
+                else:
+                    market_cap_q = 0
+
+                atr_q = int(round(atr_float * 10000))
+                ranked_candidates.append(
                     {
                         "ticker": ticker,
-                        "atr_14_ratio": atr_float,
-                        "atr_q": int(round(atr_float * 10000)),
-                        "market_cap_rank": market_cap_rank,
-                        "signal_close_price": signal_close,
+                        "signal_close_price": float(signal_close),
+                        "market_cap_q": market_cap_q,
+                        "atr_q": atr_q,
                     }
                 )
-                        
-            # ATR -> 시총 -> 티커 순으로 결정론적 정렬
+
+            # GPU와 동일한 후보 정렬 계약:
+            # market_cap_q desc -> atr_q desc -> ticker asc
             sorted_candidates = sorted(
-                candidate_rank_metrics,
-                key=lambda x: (-x["atr_q"], -x["market_cap_rank"], x["ticker"]),
+                ranked_candidates,
+                key=lambda x: (-x["market_cap_q"], -x["atr_q"], x["ticker"]),
             )
-            self.last_entry_context["candidate_count_ranked"] = int(len(sorted_candidates))
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
+            temp_cash = float(portfolio.cash)
             for candidate in sorted_candidates:
                 if num_new_entries >= available_slots: break
                 ticker = candidate["ticker"]
                 signal_close_price = candidate["signal_close_price"]
                 if signal_close_price > 0 and self.investment_per_order > 0:
+                    if temp_cash < float(self.investment_per_order):
+                        break
+                    ohlc_row = data_handler.get_ohlc_data_on_date(
+                        current_date,
+                        ticker,
+                        self.backtest_start_date,
+                        self.backtest_end_date,
+                    )
+                    if ohlc_row is None:
+                        continue
+                    open_price = ohlc_row.get("open_price")
+                    if not pd.notna(open_price):
+                        continue
+                    execution_price = self._adjust_price_up(float(open_price))
+                    if execution_price <= 0:
+                        continue
+                    expected_quantity = int(math.floor(float(self.investment_per_order) / float(execution_price)))
+                    if expected_quantity <= 0:
+                        continue
+                    gross_cost = float(execution_price) * float(expected_quantity)
+                    commission = math.floor(gross_cost * float(self.buy_commission_rate))
+                    total_cost = gross_cost + commission
+                    if temp_cash < total_cost:
+                        continue
                     new_pos = Position(signal_close_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
                     buy_signals.append(
                         self._create_buy_signal(
@@ -257,13 +295,13 @@ class MagicSplitStrategy(Strategy):
                             self.investment_per_order,
                             new_pos,
                             1,
-                            (-candidate["atr_q"], -candidate["market_cap_rank"]),
+                            (-candidate["market_cap_q"], -candidate["atr_q"]),
                             "신규 진입",
                             signal_close_price,
                         )
                     )
+                    temp_cash -= total_cost
                     num_new_entries += 1
-            self.last_entry_context["new_entry_count"] = int(num_new_entries)
 
         # 신규 매수 신호 내에서의 정렬
         buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))
@@ -288,6 +326,11 @@ class MagicSplitStrategy(Strategy):
             # 당일 매도된 종목은 추가 매수 안 함
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
+            if self.strict_hysteresis_enabled:
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
+                if tier_value <= 0 or tier_value > 2:
+                    continue
             
             positions = portfolio.positions[ticker]
             # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
@@ -364,6 +407,13 @@ class MagicSplitStrategy(Strategy):
             liquidate = False
             reason = ""
             trigger_price = current_price
+            if self.strict_hysteresis_enabled:
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
+                if tier_value >= 3:
+                    liquidate = True
+                    reason = "Tier3 강제 청산"
+                    trigger_price = current_price
 
             if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
                 liquidate = True

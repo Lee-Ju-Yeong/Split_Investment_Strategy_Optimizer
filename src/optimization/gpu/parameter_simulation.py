@@ -15,11 +15,67 @@ from datetime import datetime
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
 from .data_loading import (
+    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
     preload_tier_data_to_tensor,
     preload_weekly_filtered_stocks_to_gpu,
 )
 from .kernel import get_optimal_batch_size, run_gpu_optimization
+
+
+DEFAULT_FALLBACK_TARGET_BATCHES = 8
+DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
+DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _to_positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_adaptive_fallback_batch_size(num_combinations):
+    if num_combinations <= 0:
+        return 1
+
+    target_batches = DEFAULT_FALLBACK_TARGET_BATCHES
+    adaptive = (num_combinations + target_batches - 1) // target_batches
+    adaptive = max(adaptive, DEFAULT_FALLBACK_MIN_BATCH_SIZE)
+    adaptive = min(adaptive, DEFAULT_FALLBACK_MAX_BATCH_SIZE)
+    return min(adaptive, num_combinations)
+
+
+def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations):
+    if optimal_batch_size:
+        batch_size = min(int(optimal_batch_size), num_combinations)
+        return batch_size, "auto"
+
+    configured_batch_size = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+    if configured_batch_size:
+        batch_size = min(configured_batch_size, num_combinations)
+        return batch_size, "config.simulation_batch_size"
+
+    batch_size = _resolve_adaptive_fallback_batch_size(num_combinations)
+    return batch_size, "adaptive-safe-default"
+
+
+def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_gate):
+    return (
+        candidate_source_mode == "weekly"
+        or (candidate_source_mode == "hybrid_transition" and _coerce_bool(use_weekly_alpha_gate))
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -43,13 +99,30 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
+    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "tier")
+    execution_params["use_weekly_alpha_gate"] = _coerce_bool(
+        strategy_params.get("use_weekly_alpha_gate", False)
+    )
+    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
 
     print("\n" + "=" * 80)
     print(f"WORKER: Running GPU Simulations for {start_date} to {end_date}")
     print("=" * 80)
 
     all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
+    needs_weekly_candidates = _should_preload_weekly_candidates(
+        execution_params["candidate_source_mode"],
+        execution_params["use_weekly_alpha_gate"],
+    )
+    if needs_weekly_candidates:
+        weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(
+            db_connection_str,
+            start_date,
+            end_date,
+        )
+    else:
+        print("⏭️ Skipping weekly filtered preload (mode=tier, weekly gate disabled).")
+        weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -70,23 +143,25 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
 
-    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "weekly")
-    execution_params["use_weekly_alpha_gate"] = strategy_params.get("use_weekly_alpha_gate", False)
-    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
-
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
 
     optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    batch_size, batch_size_source = _resolve_batch_size(
+        optimal_batch_size=optimal_batch_size,
+        backtest_settings=backtest_settings,
+        num_combinations=ctx.num_combinations,
+    )
+    if batch_size <= 0:
+        raise ValueError(f"Invalid batch size resolved: {batch_size}")
 
-    if optimal_batch_size:
-        batch_size = min(optimal_batch_size, ctx.num_combinations)
+    if batch_size_source == "auto":
         print(f"✅ Using automatically calculated optimal batch size: {batch_size}")
     else:
-        batch_size = backtest_settings.get("simulation_batch_size")
-        if batch_size is None or batch_size <= 0:
-            batch_size = ctx.num_combinations
-        print(f"⚠️ Using fallback batch size from config: {batch_size}")
+        print(
+            "⚠️ Using fallback batch size "
+            f"({batch_size_source}): {batch_size}"
+        )
 
     num_batches = (ctx.num_combinations + batch_size - 1) // batch_size
     print(f"  - Total Simulations: {ctx.num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")
