@@ -248,13 +248,8 @@ def _process_sell_signals_gpu(
 
         portfolio_state[:, 0] += net_proceeds
 
-        # Avoid large temporary boolean indexing buffers on long runs.
-        liquidation_keep_mask = (~stock_liquidation_mask).astype(positions_state.dtype, copy=False)
-        cp.multiply(
-            positions_state,
-            liquidation_keep_mask[:, :, cp.newaxis, cp.newaxis],
-            out=positions_state,
-        )
+        reset_mask = stock_liquidation_mask[:, :, cp.newaxis, cp.newaxis]
+        positions_state[cp.broadcast_to(reset_mask, positions_state.shape)] = 0
 
         sell_occurred_stock_mask |= stock_liquidation_mask
         valid_positions = positions_state[..., 0] > 0
@@ -312,12 +307,7 @@ def _process_sell_signals_gpu(
             net_proceeds = cp.floor(total_profit_revenue * cost_factor)
 
         portfolio_state[:, 0] += net_proceeds
-        profit_keep_mask = (~profit_taking_mask).astype(positions_state.dtype, copy=False)
-        cp.multiply(
-            positions_state,
-            profit_keep_mask[:, :, :, cp.newaxis],
-            out=positions_state,
-        )
+        positions_state[profit_taking_mask] = 0
         profit_occurred_stock_mask = cp.any(profit_taking_mask, axis=2)
         sell_occurred_stock_mask |= profit_occurred_stock_mask
 
@@ -361,22 +351,14 @@ def _process_additional_buy_signals_gpu(
     if signal_day_idx < 0 or not cp.any(has_any_position):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
-    # Avoid large temporary tensors from cumsum/compare masks on long runs.
-    # Find the last active split index per (sim, stock) using reverse-argmax.
-    max_splits = positions_state.shape[2]
-    last_pos_from_end = cp.argmax(has_positions[:, :, ::-1], axis=2)
-    last_pos_indices = (max_splits - 1 - last_pos_from_end).astype(cp.int32)
-    last_buy_prices = cp.take_along_axis(
-        buy_prices_state,
-        last_pos_indices[:, :, cp.newaxis],
-        axis=2,
-    ).squeeze(axis=2)
-    last_buy_prices = cp.where(has_any_position, last_buy_prices, cp.float32(0.0))
+    last_pos_mask = (cp.cumsum(has_positions, axis=2) == num_positions[:, :, cp.newaxis]) & has_positions
+    last_buy_prices = cp.sum(buy_prices_state * last_pos_mask, axis=2)
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
     has_first_split = positions_state[..., 0, 0] > 0
-    first_open_day_idx = positions_state[..., 0, 2]
+    open_day_indices = positions_state[..., 2]
+    first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
     is_not_new_today = (first_open_day_idx < current_day_idx)
     
     signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
