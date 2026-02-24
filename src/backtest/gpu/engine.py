@@ -13,6 +13,7 @@ from .data import (
     _collect_candidate_rank_metrics_asof,
     build_ranked_candidate_payload,
     create_gpu_data_tensors,
+    ensure_cheap_score_columns,
 )
 from .logic import (
     _calculate_monthly_investment_gpu,
@@ -115,6 +116,13 @@ def run_magic_split_strategy_on_gpu(
         all_data_reset_idx["ticker"].map(ticker_to_idx_gdf).fillna(-1).astype("int32")
     )
     all_data_reset_idx = all_data_reset_idx[all_data_reset_idx["ticker_idx"] >= 0]
+    missing_cheap_columns = ensure_cheap_score_columns(all_data_reset_idx)
+    if missing_cheap_columns:
+        missing_str = ", ".join(missing_cheap_columns)
+        print(
+            f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
+            "Fallback to zeros enabled."
+        )
     needs_weekly_candidates = (
         candidate_source_mode == "weekly"
         or (candidate_source_mode == "hybrid_transition" and use_weekly_alpha_gate)
@@ -231,7 +239,7 @@ def run_magic_split_strategy_on_gpu(
             if final_candidate_indices.size > 1:
                 final_candidate_indices = cp.unique(final_candidate_indices)
 
-            # (D) Valid Data Check + deterministic ranking metrics (MarketCap -> ATR -> Ticker)
+            # (D) Valid Data Check + deterministic ranking metrics (Cheap -> ATR -> MarketCap -> Ticker)
             if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
@@ -250,7 +258,7 @@ def run_magic_split_strategy_on_gpu(
 
                     if candidate_tickers_for_day.size > 0:
                         if debug_mode:
-                            preview = ", ".join([f"{ticker}" for ticker, _, _, _ in ranked_records[:10]])
+                            preview = ", ".join([str(row[0]) for row in ranked_records[:10]])
                             print(
                                 f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
                                 f"(signal={signal_date.strftime('%Y-%m-%d')}) "
