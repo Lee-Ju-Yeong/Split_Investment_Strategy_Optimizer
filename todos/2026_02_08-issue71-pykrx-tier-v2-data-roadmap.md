@@ -137,6 +137,14 @@
 - [ ] Tier v2 read-only 실험 스크립트 추가
 - [ ] PIT/왜곡 방지 검증 항목 테스트화
 - [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+- [x] `DailyStockTier` 멀티팩터 저평가 점수 저장 경로 추가(2026-02-24)
+  - 스키마: `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`, `cheap_score_confidence`
+  - 규칙: `div_yield <= 0`은 Tier1 제외(강등)
+- [x] 공매도 보수 반영(2026-02-24)
+  - `sbv_ratio = short_balance_value / market_cap`를 Tier batch에서 계산/저장
+  - `sbv_ratio >= 0.0272(p99)`는 Tier3 강등, `Tier1 & sbv_ratio >= 0.0139(p95)`는 Tier2 강등
+- [ ] 공매도 랭킹 반영은 보류(후속)
+  - 런타임 재조인 금지 원칙 유지, Tier 저장값 기반 `shadow -> gated -> default` 방식으로 별도 진행
 - [ ] `MarketCapDaily` 적재 단계에서 `Common Stock`만 포함되도록 종목 마스터/유니버스와 조인해 제외 규칙 고정(ETF/ETN/ELW/SPAC 등)
 - [ ] 거래정지/비정상 거래일 파생 플래그(halt/zero-volume) 정책 정의(매수 제한/리스크 대응용)
 - [ ] (선택) `get_market_fundamental(date)` 기반 `FundamentalDaily` 병행 수집 여부 결정(일별 trailing PER/PBR 등)
@@ -230,3 +238,31 @@ END AS tier
 - [x] `tests/test_issue67_tier_universe.py`에 `ATR 동률 시 market_cap -> ticker` 우선순위 테스트 추가
 - [x] `tests/test_issue67_tier_universe.py`에 보유/쿨다운 제외 선행 필터 테스트 추가
 - [x] `src/backtest/gpu/data.py`에 `_collect_candidate_atr_asof` 호환 헬퍼를 추가해 기존 테스트 경로와 호환 유지
+
+### 9-4. Tier 멀티팩터 저평가 점수 저장(2026-02-24)
+- [x] `src/db_setup.py`에 `DailyStockTier` 신규 컬럼 6종 추가 및 `ensure_column` 마이그레이션 반영
+- [x] `src/pipeline/daily_stock_tier_batch.py`에서 `FinancialData(per/pbr/div_yield)`를 as-of 조인해
+  `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`,
+  `cheap_score_confidence` 계산/저장 경로 추가
+- [x] `src/pipeline/daily_stock_tier_batch.py` Tier 규칙에 `div_yield <= 0`이면 Tier1 강등(`div_zero_or_negative`) 반영
+- [x] `tests/test_daily_stock_tier_batch.py`, `tests/test_db_setup.py`에 신규 컬럼/강등 규칙 회귀 테스트 추가
+- [x] `docs/database/schema.md` 스키마 문서 동기화
+
+### 9-5. Tier 공매도 보수 반영(2026-02-24)
+- [x] `src/pipeline/daily_stock_tier_batch.py`에 `ShortSellingDaily + MarketCapDaily` 조회를 추가하고 `sbv_ratio` 계산 경로 반영
+- [x] Tier 규칙에 공매도 오버레이 추가:
+  - `sbv_ratio >= 0.0272` → Tier3 (`sbv_ratio_extreme`)
+  - `Tier1 and sbv_ratio >= 0.0139` → Tier2 (`sbv_ratio_elevated`)
+- [x] `DailyStockTier` 저장 컬럼에 `sbv_ratio` 추가(upsert 반영)
+- [x] `tests/test_daily_stock_tier_batch.py`, `tests/test_db_setup.py`에 `sbv_ratio` 규칙/스키마 회귀 테스트 추가
+
+### 9-6. Tier 백필 실행 증적(2026-02-24)
+- [x] 실행 커맨드
+  - `python -m src.pipeline.batch --mode backfill --start-date 20131120 --end-date 20260224 --skip-financial --skip-investor`
+- [x] 실행 결과(요약)
+  - `[pipeline_batch] completed elapsed=5200s`
+  - `rows_saved=13,847,092`, `rows_calculated=6,958,239`
+- [x] DB 검증(실행 직후)
+  - `DailyStockTier`: `min_date=2013-11-20`, `max_date=2026-02-06`, `rows_total=6,960,502`, `tickers=3,319`
+  - 채움률: `cheap_score_not_null=6,419,761`, `sbv_ratio_not_null=6,939,898`
+  - 주의: `max_date`는 원천 데이터 최대일(현재 `2026-02-06`) 기준으로 제한됨
