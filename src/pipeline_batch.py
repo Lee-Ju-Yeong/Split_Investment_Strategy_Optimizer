@@ -94,7 +94,7 @@ def run_pipeline_batch(
     universe_with_names=False,
     universe_api_call_delay=0.2,
     lookback_days=20,
-    financial_lag_days=45,
+    financial_lag_days=1,
     tier_v1_write_enabled=False,
     tier_v1_flow5_threshold=-500_000_000,
     log_interval=50,
@@ -681,7 +681,7 @@ def _build_arg_parser():
     parser.add_argument(
         "--financial-lag-days",
         type=int,
-        default=45,
+        default=1,
         help="Lag days for financial data alignment in tier calculation.",
     )
     parser.add_argument(
