@@ -207,10 +207,22 @@ def create_tables(conn):
         tier TINYINT NOT NULL,
         reason VARCHAR(255),
         liquidity_20d_avg_value BIGINT NULL,
+        pbr_discount FLOAT NULL,
+        per_discount FLOAT NULL,
+        div_premium FLOAT NULL,
+        cheap_score FLOAT NULL,
+        cheap_score_version VARCHAR(80) NULL,
+        cheap_score_confidence FLOAT NULL,
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (date, stock_code)
     )
     ''')
+    ensure_column('DailyStockTier', 'pbr_discount', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'per_discount', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'div_premium', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'cheap_score', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'cheap_score_version', 'VARCHAR(80) NULL')
+    ensure_column('DailyStockTier', 'cheap_score_confidence', 'FLOAT NULL')
     cur.execute('''
     CREATE TABLE IF NOT EXISTS TickerUniverseSnapshot (
         snapshot_date DATE,

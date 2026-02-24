@@ -137,6 +137,9 @@
 - [ ] Tier v2 read-only 실험 스크립트 추가
 - [ ] PIT/왜곡 방지 검증 항목 테스트화
 - [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+- [x] `DailyStockTier` 멀티팩터 저평가 점수 저장 경로 추가(2026-02-24)
+  - 스키마: `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`, `cheap_score_confidence`
+  - 규칙: `div_yield <= 0`은 Tier1 제외(강등)
 - [ ] `MarketCapDaily` 적재 단계에서 `Common Stock`만 포함되도록 종목 마스터/유니버스와 조인해 제외 규칙 고정(ETF/ETN/ELW/SPAC 등)
 - [ ] 거래정지/비정상 거래일 파생 플래그(halt/zero-volume) 정책 정의(매수 제한/리스크 대응용)
 - [ ] (선택) `get_market_fundamental(date)` 기반 `FundamentalDaily` 병행 수집 여부 결정(일별 trailing PER/PBR 등)
@@ -230,3 +233,12 @@ END AS tier
 - [x] `tests/test_issue67_tier_universe.py`에 `ATR 동률 시 market_cap -> ticker` 우선순위 테스트 추가
 - [x] `tests/test_issue67_tier_universe.py`에 보유/쿨다운 제외 선행 필터 테스트 추가
 - [x] `src/backtest/gpu/data.py`에 `_collect_candidate_atr_asof` 호환 헬퍼를 추가해 기존 테스트 경로와 호환 유지
+
+### 9-4. Tier 멀티팩터 저평가 점수 저장(2026-02-24)
+- [x] `src/db_setup.py`에 `DailyStockTier` 신규 컬럼 6종 추가 및 `ensure_column` 마이그레이션 반영
+- [x] `src/pipeline/daily_stock_tier_batch.py`에서 `FinancialData(per/pbr/div_yield)`를 as-of 조인해
+  `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`,
+  `cheap_score_confidence` 계산/저장 경로 추가
+- [x] `src/pipeline/daily_stock_tier_batch.py` Tier 규칙에 `div_yield <= 0`이면 Tier1 강등(`div_zero_or_negative`) 반영
+- [x] `tests/test_daily_stock_tier_batch.py`, `tests/test_db_setup.py`에 신규 컬럼/강등 규칙 회귀 테스트 추가
+- [x] `docs/database/schema.md` 스키마 문서 동기화

@@ -18,6 +18,13 @@ DEFAULT_DANGER_LIQUIDITY = 300_000_000
 DEFAULT_PRIME_LIQUIDITY = 1_000_000_000
 DEFAULT_ENABLE_INVESTOR_V1_WRITE = False
 DEFAULT_INVESTOR_FLOW5_THRESHOLD = -500_000_000
+DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS = 5
+DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS = 3
+DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS = 7
+DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.45
+DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.35
+DEFAULT_CHEAP_SCORE_WEIGHT_DIV = 0.20
+DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS = 126
 
 
 def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
@@ -169,7 +176,7 @@ def fetch_financial_history(conn, end_date, ticker_codes=None, start_date=None):
     if start_date is None:
         params = [end_date]
         query = """
-            SELECT stock_code, date, roe, bps
+            SELECT stock_code, date, roe, bps, per, pbr, div_yield
             FROM FinancialData
             WHERE date <= %s
         """
@@ -184,7 +191,7 @@ def fetch_financial_history(conn, end_date, ticker_codes=None, start_date=None):
 
     params = [start_date, end_date]
     range_query = """
-        SELECT stock_code, date, roe, bps
+        SELECT stock_code, date, roe, bps, per, pbr, div_yield
         FROM FinancialData
         WHERE date BETWEEN %s AND %s
     """
@@ -197,7 +204,7 @@ def fetch_financial_history(conn, end_date, ticker_codes=None, start_date=None):
 
     prev_params = [start_date]
     prev_query = """
-        SELECT f.stock_code, f.date, f.roe, f.bps
+        SELECT f.stock_code, f.date, f.roe, f.bps, f.per, f.pbr, f.div_yield
         FROM FinancialData f
         JOIN (
             SELECT stock_code, MAX(date) AS max_date
@@ -243,18 +250,175 @@ def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
         return pd.read_sql(query, conn, params=params)
 
 
+def _to_trading_window_days(lookback_years):
+    return max(int(lookback_years) * 252, 1)
+
+
+def _to_calendar_lookback_days(lookback_years):
+    return max(int(lookback_years) * 366, 1)
+
+
+def _grouped_rolling_pct_rank(frame, values, window_days, min_obs_days):
+    return (
+        values.groupby(frame["stock_code"], sort=False)
+        .rolling(window=window_days, min_periods=min_obs_days)
+        .rank(pct=True)
+        .reset_index(level=0, drop=True)
+    )
+
+
+def _build_cheap_score_version(
+    pbr_lookback_years,
+    per_lookback_years,
+    div_lookback_years,
+    weight_pbr,
+    weight_per,
+    weight_div,
+):
+    pbr_token = int(round(float(weight_pbr) * 100))
+    per_token = int(round(float(weight_per) * 100))
+    div_token = int(round(float(weight_div) * 100))
+    return (
+        f"cheap_v1_pbr{int(pbr_lookback_years)}"
+        f"_per{int(per_lookback_years)}"
+        f"_div{int(div_lookback_years)}"
+        f"_w{pbr_token:02d}{per_token:02d}{div_token:02d}"
+    )
+
+
+def _augment_financial_factors(
+    financial_df,
+    pbr_lookback_years,
+    per_lookback_years,
+    div_lookback_years,
+    weight_pbr,
+    weight_per,
+    weight_div,
+    min_obs_days,
+):
+    if financial_df is None or financial_df.empty:
+        return financial_df
+
+    output = financial_df.copy()
+    output["date"] = pd.to_datetime(output["date"], errors="coerce")
+    output.sort_values(["stock_code", "date"], inplace=True)
+    for col in ["roe", "bps", "per", "pbr", "div_yield"]:
+        if col not in output.columns:
+            output[col] = np.nan
+
+    output["per"] = pd.to_numeric(output["per"], errors="coerce")
+    output["pbr"] = pd.to_numeric(output["pbr"], errors="coerce")
+    output["div_yield"] = pd.to_numeric(output["div_yield"], errors="coerce")
+
+    pbr_values = output["pbr"].where(output["pbr"] > 0)
+    per_values = output["per"].where(output["per"] > 0)
+    div_values = output["div_yield"].where(output["div_yield"] > 0)
+
+    pbr_rank = _grouped_rolling_pct_rank(
+        output,
+        pbr_values,
+        window_days=_to_trading_window_days(pbr_lookback_years),
+        min_obs_days=min_obs_days,
+    )
+    per_rank = _grouped_rolling_pct_rank(
+        output,
+        per_values,
+        window_days=_to_trading_window_days(per_lookback_years),
+        min_obs_days=min_obs_days,
+    )
+    div_rank = _grouped_rolling_pct_rank(
+        output,
+        div_values,
+        window_days=_to_trading_window_days(div_lookback_years),
+        min_obs_days=min_obs_days,
+    )
+
+    output["pbr_discount"] = 1.0 - pbr_rank
+    output["per_discount"] = 1.0 - per_rank
+    output["div_premium"] = div_rank
+
+    total_weight = float(weight_pbr + weight_per + weight_div)
+    if total_weight <= 0:
+        raise ValueError("cheap score weights must sum to a positive value")
+
+    pbr_available = output["pbr_discount"].notna().astype(float)
+    per_available = output["per_discount"].notna().astype(float)
+    div_available = output["div_premium"].notna().astype(float)
+
+    weighted_numerator = (
+        float(weight_pbr) * output["pbr_discount"].fillna(0.0)
+        + float(weight_per) * output["per_discount"].fillna(0.0)
+        + float(weight_div) * output["div_premium"].fillna(0.0)
+    )
+    weighted_available = (
+        float(weight_pbr) * pbr_available
+        + float(weight_per) * per_available
+        + float(weight_div) * div_available
+    )
+    output["cheap_score"] = np.where(
+        weighted_available > 0,
+        weighted_numerator / weighted_available,
+        np.nan,
+    )
+    output["cheap_score_confidence"] = weighted_available / total_weight
+    output["cheap_score_version"] = _build_cheap_score_version(
+        pbr_lookback_years=pbr_lookback_years,
+        per_lookback_years=per_lookback_years,
+        div_lookback_years=div_lookback_years,
+        weight_pbr=weight_pbr,
+        weight_per=weight_per,
+        weight_div=weight_div,
+    )
+    return output
+
+
 def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     if financial_df is None or financial_df.empty:
         output = price_df.copy()
         output["financial_risk"] = False
+        output["per"] = np.nan
+        output["pbr"] = np.nan
+        output["div_yield"] = np.nan
+        output["pbr_discount"] = np.nan
+        output["per_discount"] = np.nan
+        output["div_premium"] = np.nan
+        output["cheap_score"] = np.nan
+        output["cheap_score_confidence"] = 0.0
+        output["cheap_score_version"] = None
         return output
+
+    financial_base = financial_df.copy()
+    for col in [
+        "per",
+        "pbr",
+        "div_yield",
+        "pbr_discount",
+        "per_discount",
+        "div_premium",
+        "cheap_score",
+        "cheap_score_confidence",
+        "cheap_score_version",
+    ]:
+        if col not in financial_base.columns:
+            financial_base[col] = np.nan if col != "cheap_score_version" else None
 
     output_groups = []
     for stock_code, price_group in price_df.groupby("stock_code", sort=False):
         stock_prices = price_group.copy().sort_values("date")
-        stock_financials = financial_df[financial_df["stock_code"] == stock_code].copy()
+        stock_financials = financial_base[
+            financial_base["stock_code"] == stock_code
+        ].copy()
         if stock_financials.empty:
             stock_prices["financial_risk"] = False
+            stock_prices["per"] = np.nan
+            stock_prices["pbr"] = np.nan
+            stock_prices["div_yield"] = np.nan
+            stock_prices["pbr_discount"] = np.nan
+            stock_prices["per_discount"] = np.nan
+            stock_prices["div_premium"] = np.nan
+            stock_prices["cheap_score"] = np.nan
+            stock_prices["cheap_score_confidence"] = 0.0
+            stock_prices["cheap_score_version"] = None
             output_groups.append(stock_prices)
             continue
 
@@ -266,7 +430,22 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
         )
         merged = pd.merge_asof(
             stock_prices.sort_values("financial_as_of"),
-            stock_financials[["date", "roe", "bps"]].sort_values("date"),
+            stock_financials[
+                [
+                    "date",
+                    "roe",
+                    "bps",
+                    "per",
+                    "pbr",
+                    "div_yield",
+                    "pbr_discount",
+                    "per_discount",
+                    "div_premium",
+                    "cheap_score",
+                    "cheap_score_confidence",
+                    "cheap_score_version",
+                ]
+            ].sort_values("date"),
             left_on="financial_as_of",
             right_on="date",
             direction="backward",
@@ -277,6 +456,11 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
             | (pd.to_numeric(merged["roe"], errors="coerce") < 0)
         ).fillna(False)
         merged["financial_risk"] = financial_risk
+        merged["cheap_score_confidence"] = (
+            pd.to_numeric(merged["cheap_score_confidence"], errors="coerce")
+            .fillna(0.0)
+            .clip(lower=0.0, upper=1.0)
+        )
         merged = merged.sort_values("date").drop(
             columns=["financial_as_of", "date_financial"], errors="ignore"
         )
@@ -340,6 +524,13 @@ def build_daily_stock_tier_frame(
     prime_liquidity=DEFAULT_PRIME_LIQUIDITY,
     enable_investor_v1_write=DEFAULT_ENABLE_INVESTOR_V1_WRITE,
     investor_flow5_threshold=DEFAULT_INVESTOR_FLOW5_THRESHOLD,
+    cheap_score_pbr_lookback_years=DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS,
+    cheap_score_per_lookback_years=DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS,
+    cheap_score_div_lookback_years=DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS,
+    cheap_score_weight_pbr=DEFAULT_CHEAP_SCORE_WEIGHT_PBR,
+    cheap_score_weight_per=DEFAULT_CHEAP_SCORE_WEIGHT_PER,
+    cheap_score_weight_div=DEFAULT_CHEAP_SCORE_WEIGHT_DIV,
+    cheap_score_min_obs_days=DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS,
 ):
     if price_df is None or price_df.empty:
         return pd.DataFrame(
@@ -349,6 +540,12 @@ def build_daily_stock_tier_frame(
                 "tier",
                 "reason",
                 "liquidity_20d_avg_value",
+                "pbr_discount",
+                "per_discount",
+                "div_premium",
+                "cheap_score",
+                "cheap_score_version",
+                "cheap_score_confidence",
             ]
         )
 
@@ -365,7 +562,21 @@ def build_daily_stock_tier_frame(
         .reset_index(level=0, drop=True)
     )
 
-    with_financial = _apply_financial_risk(base, financial_df, financial_lag_days)
+    financial_with_factors = _augment_financial_factors(
+        financial_df=financial_df,
+        pbr_lookback_years=cheap_score_pbr_lookback_years,
+        per_lookback_years=cheap_score_per_lookback_years,
+        div_lookback_years=cheap_score_div_lookback_years,
+        weight_pbr=cheap_score_weight_pbr,
+        weight_per=cheap_score_weight_per,
+        weight_div=cheap_score_weight_div,
+        min_obs_days=cheap_score_min_obs_days,
+    )
+    with_financial = _apply_financial_risk(
+        base,
+        financial_with_factors,
+        financial_lag_days,
+    )
     avg_value = pd.to_numeric(with_financial["liquidity_20d_avg_value"], errors="coerce")
 
     with_financial["tier"] = np.where(
@@ -384,6 +595,17 @@ def build_daily_stock_tier_frame(
     with_financial.loc[risk_mask, "reason"] = with_financial.loc[risk_mask, "reason"].apply(
         lambda reason: _append_reason(reason, "financial_risk")
     )
+    div_yield = pd.to_numeric(with_financial["div_yield"], errors="coerce")
+    div_non_positive_mask = (
+        (with_financial["tier"] == 1)
+        & div_yield.notna()
+        & (div_yield <= 0)
+    )
+    with_financial.loc[div_non_positive_mask, "tier"] = 2
+    with_financial.loc[div_non_positive_mask, "reason"] = with_financial.loc[
+        div_non_positive_mask, "reason"
+    ].apply(lambda reason: _append_reason(reason, "div_zero_or_negative"))
+
     if enable_investor_v1_write:
         with_financial = _apply_investor_flow_overlay(
             with_financial=with_financial,
@@ -392,7 +614,19 @@ def build_daily_stock_tier_frame(
         )
 
     output = with_financial[
-        ["date", "stock_code", "tier", "reason", "liquidity_20d_avg_value"]
+        [
+            "date",
+            "stock_code",
+            "tier",
+            "reason",
+            "liquidity_20d_avg_value",
+            "pbr_discount",
+            "per_discount",
+            "div_premium",
+            "cheap_score",
+            "cheap_score_version",
+            "cheap_score_confidence",
+        ]
     ].copy()
     output["date"] = pd.to_datetime(output["date"]).dt.strftime("%Y-%m-%d")
     output["tier"] = output["tier"].astype(int)
@@ -401,6 +635,17 @@ def build_daily_stock_tier_frame(
         .fillna(0)
         .astype(np.int64)
     )
+    for col in ["pbr_discount", "per_discount", "div_premium", "cheap_score"]:
+        output[col] = (
+            pd.to_numeric(output[col], errors="coerce")
+            .clip(lower=0.0, upper=1.0)
+        )
+    output["cheap_score_confidence"] = (
+        pd.to_numeric(output["cheap_score_confidence"], errors="coerce")
+        .fillna(0.0)
+        .clip(lower=0.0, upper=1.0)
+    )
+    output["cheap_score_version"] = output["cheap_score_version"].astype(object)
     return output
 
 
@@ -410,19 +655,36 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
 
     sql = """
         INSERT INTO DailyStockTier (
-            date, stock_code, tier, reason, liquidity_20d_avg_value
+            date,
+            stock_code,
+            tier,
+            reason,
+            liquidity_20d_avg_value,
+            pbr_discount,
+            per_discount,
+            div_premium,
+            cheap_score,
+            cheap_score_version,
+            cheap_score_confidence
         )
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             tier = VALUES(tier),
             reason = VALUES(reason),
             liquidity_20d_avg_value = VALUES(liquidity_20d_avg_value),
+            pbr_discount = VALUES(pbr_discount),
+            per_discount = VALUES(per_discount),
+            div_premium = VALUES(div_premium),
+            cheap_score = VALUES(cheap_score),
+            cheap_score_version = VALUES(cheap_score_version),
+            cheap_score_confidence = VALUES(cheap_score_confidence),
             computed_at = CURRENT_TIMESTAMP
     """
     total_affected = 0
     with conn.cursor() as cur:
         for offset in range(0, len(rows_df), batch_size):
-            chunk_df = rows_df.iloc[offset : offset + batch_size]
+            chunk_df = rows_df.iloc[offset : offset + batch_size].copy()
+            chunk_df = chunk_df.where(pd.notna(chunk_df), None)
             chunk_rows = list(chunk_df.itertuples(index=False, name=None))
             cur.executemany(sql, chunk_rows)
             chunk_affected = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -457,6 +719,13 @@ def run_daily_stock_tier_batch(
     prime_liquidity=DEFAULT_PRIME_LIQUIDITY,
     enable_investor_v1_write=DEFAULT_ENABLE_INVESTOR_V1_WRITE,
     investor_flow5_threshold=DEFAULT_INVESTOR_FLOW5_THRESHOLD,
+    cheap_score_pbr_lookback_years=DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS,
+    cheap_score_per_lookback_years=DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS,
+    cheap_score_div_lookback_years=DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS,
+    cheap_score_weight_pbr=DEFAULT_CHEAP_SCORE_WEIGHT_PBR,
+    cheap_score_weight_per=DEFAULT_CHEAP_SCORE_WEIGHT_PER,
+    cheap_score_weight_div=DEFAULT_CHEAP_SCORE_WEIGHT_DIV,
+    cheap_score_min_obs_days=DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -478,6 +747,14 @@ def run_daily_stock_tier_batch(
         }
 
     query_start = start_date - timedelta(days=lookback_days + financial_lag_days + 5)
+    financial_lookback_days = _to_calendar_lookback_days(
+        max(
+            cheap_score_pbr_lookback_years,
+            cheap_score_per_lookback_years,
+            cheap_score_div_lookback_years,
+        )
+    )
+    financial_query_start = query_start - timedelta(days=financial_lookback_days + 30)
     price_df = fetch_price_history(
         conn=conn,
         start_date=query_start.strftime("%Y-%m-%d"),
@@ -494,7 +771,7 @@ def run_daily_stock_tier_batch(
 
     financial_df = fetch_financial_history(
         conn=conn,
-        start_date=query_start.strftime("%Y-%m-%d"),
+        start_date=financial_query_start.strftime("%Y-%m-%d"),
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
@@ -516,6 +793,13 @@ def run_daily_stock_tier_batch(
         prime_liquidity=prime_liquidity,
         enable_investor_v1_write=enable_investor_v1_write,
         investor_flow5_threshold=investor_flow5_threshold,
+        cheap_score_pbr_lookback_years=cheap_score_pbr_lookback_years,
+        cheap_score_per_lookback_years=cheap_score_per_lookback_years,
+        cheap_score_div_lookback_years=cheap_score_div_lookback_years,
+        cheap_score_weight_pbr=cheap_score_weight_pbr,
+        cheap_score_weight_per=cheap_score_weight_per,
+        cheap_score_weight_div=cheap_score_weight_div,
+        cheap_score_min_obs_days=cheap_score_min_obs_days,
     )
     if calculated.empty:
         return {
@@ -530,7 +814,19 @@ def run_daily_stock_tier_batch(
         & (pd.to_datetime(calculated["date"]).dt.date <= end_date)
     ]
     rows_df = in_range[
-        ["date", "stock_code", "tier", "reason", "liquidity_20d_avg_value"]
+        [
+            "date",
+            "stock_code",
+            "tier",
+            "reason",
+            "liquidity_20d_avg_value",
+            "pbr_discount",
+            "per_discount",
+            "div_premium",
+            "cheap_score",
+            "cheap_score_version",
+            "cheap_score_confidence",
+        ]
     ]
     saved = upsert_daily_stock_tier(conn, rows_df)
     investor_overlay_rows = 0

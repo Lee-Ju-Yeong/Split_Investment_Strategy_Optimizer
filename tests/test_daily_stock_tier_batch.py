@@ -163,11 +163,69 @@ class TestDailyStockTierBatch(unittest.TestCase):
         self.assertEqual(latest["tier"], 3)
         self.assertIn("financial_risk", str(latest["reason"]))
 
+    def test_dividend_non_positive_demotes_tier1_to_tier2(self):
+        dates = pd.date_range("2024-01-01", periods=5, freq="D")
+        price_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0010",
+                    "date": date_value,
+                    "close_price": 100,
+                    "volume": 20_000_000,
+                }
+                for date_value in dates
+            ]
+        )
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0010",
+                    "date": date_value,
+                    "roe": 5.0,
+                    "bps": 1000.0,
+                    "per": 10.0 + idx,
+                    "pbr": 1.0 + (idx * 0.1),
+                    "div_yield": 0.0,
+                }
+                for idx, date_value in enumerate(dates)
+            ]
+        )
+
+        output = build_daily_stock_tier_frame(
+            price_df=price_df,
+            financial_df=financial_df,
+            investor_df=pd.DataFrame(),
+            lookback_days=2,
+            financial_lag_days=0,
+            danger_liquidity=300_000_000,
+            prime_liquidity=1_000_000_000,
+            cheap_score_min_obs_days=2,
+        )
+        latest = output[
+            (output["stock_code"] == "A0010") & (output["date"] == "2024-01-05")
+        ].iloc[0]
+        self.assertEqual(latest["tier"], 2)
+        self.assertIn("div_zero_or_negative", str(latest["reason"]))
+        self.assertIn("cheap_score", output.columns)
+        self.assertIn("cheap_score_confidence", output.columns)
+
     def test_upsert_daily_stock_tier_uses_chunked_batches(self):
         conn = self._FakeConn()
         rows = pd.DataFrame(
             [
-                ("2024-01-01", f"A{i:05d}", 2, "normal_liquidity", 1000)
+                (
+                    "2024-01-01",
+                    f"A{i:05d}",
+                    2,
+                    "normal_liquidity",
+                    1000,
+                    0.5,
+                    0.5,
+                    0.5,
+                    0.5,
+                    "cheap_v1",
+                    1.0,
+                )
                 for i in range(25_001)
             ],
             columns=[
@@ -176,6 +234,12 @@ class TestDailyStockTierBatch(unittest.TestCase):
                 "tier",
                 "reason",
                 "liquidity_20d_avg_value",
+                "pbr_discount",
+                "per_discount",
+                "div_premium",
+                "cheap_score",
+                "cheap_score_version",
+                "cheap_score_confidence",
             ],
         )
 
