@@ -103,6 +103,15 @@
     - 샘플 분할(2721 종목): Conservative `T1/T2/T3=282/666/1773`, Balanced `298/878/1545`, Aggressive `974/808/939`
   - [x] CPU/GPU 신규 진입 정렬 기준 통일(2026-02-22): `ATR -> market_cap -> ticker` 적용 + 보유/쿨다운 제외 선행 필터 검증 테스트 추가
   - [x] 운영 지표 집계 구현(2026-02-22): `empty_entry_day_rate`, `tier1_coverage`, `tier2_fallback_rate`를 CPU 백테스터 실행 결과(`portfolio.run_metrics`)에 기록
+  - [x] `DailyStockTier` 멀티팩터 저평가 점수 저장(2026-02-24): `pbr_discount/per_discount/div_premium/cheap_score/cheap_score_version/cheap_score_confidence` 컬럼 추가 및 배치 적재 반영
+  - [x] 공통 필터 반영(2026-02-24): `div_yield <= 0`인 종목은 Tier1에서 제외(강등) 규칙 추가
+  - [x] 공매도 보수 반영(2026-02-24): `sbv_ratio=short_balance_value/market_cap`를 Tier batch에서 계산/저장하고, `p99`는 Tier3 강등, `p95`는 Tier1→Tier2 강등
+  - [x] Tier 전체 백필 완료(2026-02-24): `python -m src.pipeline.batch --mode backfill --start-date 20131120 --end-date 20260224 --skip-financial --skip-investor`
+    - 실행 로그: `elapsed=5200s`, `rows_saved=13,847,092`, `rows_calculated=6,958,239`
+    - DB 검증: `DailyStockTier(min=2013-11-20, max=2026-02-06, rows=6,960,502, tickers=3,319, cheap_score_not_null=6,419,761, sbv_ratio_not_null=6,939,898)`
+  - [ ] 공매도 랭킹 반영(보류): 런타임 재조인 없이 Tier 저장값(`sbv_ratio`)을 점진 반영(`shadow -> gated -> default`)
+  - [ ] 결정론 편향 완화 + 분포 기반 강건 최적화 프레임 도입 (이슈 #101): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101
+    - `theta x scenario(omega) x fold` 평가 단위 도입 + `shadow -> gated -> default` 전환 게이트 설계
   - [ ] P0 테이블 DDL/인덱스 확정
   - [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
   - [ ] Tier v2 read-only 실험 스크립트 추가
