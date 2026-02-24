@@ -181,6 +181,10 @@ class MagicSplitStrategy(Strategy):
         rounded = round(divided, 5)
         return math.ceil(rounded) * tick_size
 
+    @staticmethod
+    def _mul_f32(a, b):
+        return float(np.float32(a) * np.float32(b))
+
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
         current_month = current_date.month
@@ -509,7 +513,10 @@ class MagicSplitStrategy(Strategy):
                 continue
 
             last_pos = portfolio.positions[ticker][-1]
-            buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
+            buy_trigger_price = self._mul_f32(
+                last_pos.buy_price,
+                np.float32(1.0) - np.float32(self.additional_buy_drop_rate),
+            )
             
             if signal_low <= buy_trigger_price:
                 if self.investment_per_order > 0:
@@ -567,10 +574,14 @@ class MagicSplitStrategy(Strategy):
             reason = ""
             trigger_price = current_price
 
-            if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
+            stop_loss_trigger_price = self._mul_f32(
+                avg_buy_price,
+                np.float32(1.0) + np.float32(self.stop_loss_rate),
+            )
+            if current_price <= stop_loss_trigger_price:
                 liquidate = True
                 reason = "손절매 (평균가 기준)"
-                trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
+                trigger_price = stop_loss_trigger_price
 
             if not liquidate:
                 last_trade_idx = portfolio.last_trade_day_indices.get(ticker)
@@ -599,7 +610,10 @@ class MagicSplitStrategy(Strategy):
                 if p.open_date is not None and p.open_date >= current_date:
                     continue
                 
-                sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
+                sell_trigger_price = self._mul_f32(
+                    p.buy_price,
+                    np.float32(1.0) + np.float32(self.sell_profit_rate),
+                )
                 if current_high >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
                     # 1차 매도 여부와 상관없이 개별 익절이므로 cooldown만 설정
