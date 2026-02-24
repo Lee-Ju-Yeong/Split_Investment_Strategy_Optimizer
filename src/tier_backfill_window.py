@@ -21,7 +21,7 @@ import time
 import pymysql
 
 from .config_loader import load_config
-from .daily_stock_tier_batch import run_daily_stock_tier_batch
+from .pipeline.daily_stock_tier_batch import run_daily_stock_tier_batch
 
 
 def _parse_yyyymmdd(value: str) -> date:
@@ -48,18 +48,22 @@ def _connect_from_yaml(cfg: dict):
     )
 
 
-def main() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Windowed backfill for DailyStockTier.")
     parser.add_argument("--start-date", required=True, help="Start date in YYYYMMDD.")
     parser.add_argument("--end-date", required=True, help="End date in YYYYMMDD.")
     parser.add_argument("--chunk-days", type=int, default=90)
     parser.add_argument("--lookback-days", type=int, default=20)
-    parser.add_argument("--financial-lag-days", type=int, default=45)
+    parser.add_argument("--financial-lag-days", type=int, default=1)
     parser.add_argument("--danger-liquidity", type=int, default=300_000_000)
     parser.add_argument("--prime-liquidity", type=int, default=1_000_000_000)
     parser.add_argument("--enable-tier-v1-write", action="store_true")
     parser.add_argument("--tier-v1-flow5-threshold", type=int, default=-500_000_000)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = _build_arg_parser().parse_args()
 
     start_date = _parse_yyyymmdd(args.start_date)
     end_date = _parse_yyyymmdd(args.end_date)
