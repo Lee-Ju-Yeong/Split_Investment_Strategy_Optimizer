@@ -25,6 +25,9 @@ DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.45
 DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.35
 DEFAULT_CHEAP_SCORE_WEIGHT_DIV = 0.20
 DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS = 126
+DEFAULT_ENABLE_SBV_TIER_OVERLAY = True
+DEFAULT_SBV_TIER3_THRESHOLD = 0.0272
+DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD = 0.0139
 
 
 def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
@@ -250,6 +253,30 @@ def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
         return pd.read_sql(query, conn, params=params)
 
 
+def fetch_short_balance_ratio_inputs(conn, start_date, end_date, ticker_codes=None):
+    params = [start_date, end_date]
+    query = """
+        SELECT
+            s.stock_code,
+            s.date,
+            s.short_balance_value,
+            m.market_cap
+        FROM ShortSellingDaily s
+        LEFT JOIN MarketCapDaily m
+          ON m.stock_code = s.stock_code
+         AND m.date = s.date
+        WHERE s.date BETWEEN %s AND %s
+    """
+    if ticker_codes:
+        in_sql, in_params = _build_in_clause_params(" AND s.stock_code IN", ticker_codes)
+        query += in_sql
+        params.extend(in_params)
+    query += " ORDER BY s.stock_code, s.date"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return pd.read_sql(query, conn, params=params)
+
+
 def _to_trading_window_days(lookback_years):
     return max(int(lookback_years) * 252, 1)
 
@@ -469,6 +496,35 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     return pd.concat(output_groups, ignore_index=True)
 
 
+def _apply_short_balance_ratio(base_df, short_balance_df):
+    output = base_df.copy()
+    output["sbv_ratio"] = np.nan
+    if short_balance_df is None or short_balance_df.empty:
+        return output
+
+    short_data = short_balance_df.copy()
+    short_data["date"] = pd.to_datetime(short_data["date"], errors="coerce")
+    short_data["short_balance_value"] = pd.to_numeric(
+        short_data["short_balance_value"], errors="coerce"
+    )
+    short_data["market_cap"] = pd.to_numeric(short_data["market_cap"], errors="coerce")
+    short_data = short_data.dropna(subset=["date"])
+
+    merged = output.merge(
+        short_data[["stock_code", "date", "short_balance_value", "market_cap"]],
+        on=["stock_code", "date"],
+        how="left",
+    )
+    valid_mask = merged["short_balance_value"].notna() & (merged["market_cap"] > 0)
+    merged["sbv_ratio"] = np.where(
+        valid_mask,
+        merged["short_balance_value"] / merged["market_cap"],
+        np.nan,
+    )
+    merged["sbv_ratio"] = pd.to_numeric(merged["sbv_ratio"], errors="coerce")
+    return merged
+
+
 def _append_reason(base_reason, suffix):
     if suffix in str(base_reason):
         return str(base_reason)
@@ -518,6 +574,7 @@ def build_daily_stock_tier_frame(
     price_df,
     financial_df=None,
     investor_df=None,
+    short_balance_df=None,
     lookback_days=DEFAULT_LOOKBACK_DAYS,
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
     danger_liquidity=DEFAULT_DANGER_LIQUIDITY,
@@ -531,6 +588,9 @@ def build_daily_stock_tier_frame(
     cheap_score_weight_per=DEFAULT_CHEAP_SCORE_WEIGHT_PER,
     cheap_score_weight_div=DEFAULT_CHEAP_SCORE_WEIGHT_DIV,
     cheap_score_min_obs_days=DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS,
+    enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
+    sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
+    sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
 ):
     if price_df is None or price_df.empty:
         return pd.DataFrame(
@@ -540,6 +600,7 @@ def build_daily_stock_tier_frame(
                 "tier",
                 "reason",
                 "liquidity_20d_avg_value",
+                "sbv_ratio",
                 "pbr_discount",
                 "per_discount",
                 "div_premium",
@@ -561,6 +622,7 @@ def build_daily_stock_tier_frame(
         .mean()
         .reset_index(level=0, drop=True)
     )
+    base = _apply_short_balance_ratio(base, short_balance_df)
 
     financial_with_factors = _augment_financial_factors(
         financial_df=financial_df,
@@ -612,6 +674,23 @@ def build_daily_stock_tier_frame(
             investor_df=investor_df,
             investor_flow5_threshold=investor_flow5_threshold,
         )
+    if enable_sbv_tier_overlay:
+        sbv_ratio = pd.to_numeric(with_financial["sbv_ratio"], errors="coerce")
+        sbv_tier3_mask = sbv_ratio.notna() & (sbv_ratio >= float(sbv_tier3_threshold))
+        with_financial.loc[sbv_tier3_mask, "tier"] = 3
+        with_financial.loc[sbv_tier3_mask, "reason"] = with_financial.loc[
+            sbv_tier3_mask, "reason"
+        ].apply(lambda reason: _append_reason(reason, "sbv_ratio_extreme"))
+
+        sbv_tier1_demote_mask = (
+            (with_financial["tier"] == 1)
+            & sbv_ratio.notna()
+            & (sbv_ratio >= float(sbv_tier1_demote_threshold))
+        )
+        with_financial.loc[sbv_tier1_demote_mask, "tier"] = 2
+        with_financial.loc[sbv_tier1_demote_mask, "reason"] = with_financial.loc[
+            sbv_tier1_demote_mask, "reason"
+        ].apply(lambda reason: _append_reason(reason, "sbv_ratio_elevated"))
 
     output = with_financial[
         [
@@ -620,6 +699,7 @@ def build_daily_stock_tier_frame(
             "tier",
             "reason",
             "liquidity_20d_avg_value",
+            "sbv_ratio",
             "pbr_discount",
             "per_discount",
             "div_premium",
@@ -634,6 +714,10 @@ def build_daily_stock_tier_frame(
         pd.to_numeric(output["liquidity_20d_avg_value"], errors="coerce")
         .fillna(0)
         .astype(np.int64)
+    )
+    output["sbv_ratio"] = (
+        pd.to_numeric(output["sbv_ratio"], errors="coerce")
+        .clip(lower=0.0)
     )
     for col in ["pbr_discount", "per_discount", "div_premium", "cheap_score"]:
         output[col] = (
@@ -660,6 +744,7 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             tier,
             reason,
             liquidity_20d_avg_value,
+            sbv_ratio,
             pbr_discount,
             per_discount,
             div_premium,
@@ -667,11 +752,12 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             cheap_score_version,
             cheap_score_confidence
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             tier = VALUES(tier),
             reason = VALUES(reason),
             liquidity_20d_avg_value = VALUES(liquidity_20d_avg_value),
+            sbv_ratio = VALUES(sbv_ratio),
             pbr_discount = VALUES(pbr_discount),
             per_discount = VALUES(per_discount),
             div_premium = VALUES(div_premium),
@@ -681,11 +767,26 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             computed_at = CURRENT_TIMESTAMP
     """
     total_affected = 0
+
+    def _to_mysql_safe(value):
+        if value is None:
+            return None
+        if pd.isna(value):
+            return None
+        if isinstance(value, (float, np.floating)) and not np.isfinite(float(value)):
+            return None
+        return value
+
+    def _to_mysql_safe_rows(frame):
+        return [
+            tuple(_to_mysql_safe(value) for value in row)
+            for row in frame.itertuples(index=False, name=None)
+        ]
+
     with conn.cursor() as cur:
         for offset in range(0, len(rows_df), batch_size):
             chunk_df = rows_df.iloc[offset : offset + batch_size].copy()
-            chunk_df = chunk_df.where(pd.notna(chunk_df), None)
-            chunk_rows = list(chunk_df.itertuples(index=False, name=None))
+            chunk_rows = _to_mysql_safe_rows(chunk_df)
             cur.executemany(sql, chunk_rows)
             chunk_affected = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             total_affected += chunk_affected
@@ -726,6 +827,9 @@ def run_daily_stock_tier_batch(
     cheap_score_weight_per=DEFAULT_CHEAP_SCORE_WEIGHT_PER,
     cheap_score_weight_div=DEFAULT_CHEAP_SCORE_WEIGHT_DIV,
     cheap_score_min_obs_days=DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS,
+    enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
+    sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
+    sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -775,6 +879,12 @@ def run_daily_stock_tier_batch(
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
+    short_balance_df = fetch_short_balance_ratio_inputs(
+        conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+        ticker_codes=ticker_codes,
+    )
     investor_df = None
     if enable_investor_v1_write:
         investor_df = fetch_investor_history(
@@ -787,6 +897,7 @@ def run_daily_stock_tier_batch(
         price_df=price_df,
         financial_df=financial_df,
         investor_df=investor_df,
+        short_balance_df=short_balance_df,
         lookback_days=lookback_days,
         financial_lag_days=financial_lag_days,
         danger_liquidity=danger_liquidity,
@@ -800,6 +911,9 @@ def run_daily_stock_tier_batch(
         cheap_score_weight_per=cheap_score_weight_per,
         cheap_score_weight_div=cheap_score_weight_div,
         cheap_score_min_obs_days=cheap_score_min_obs_days,
+        enable_sbv_tier_overlay=enable_sbv_tier_overlay,
+        sbv_tier3_threshold=sbv_tier3_threshold,
+        sbv_tier1_demote_threshold=sbv_tier1_demote_threshold,
     )
     if calculated.empty:
         return {
@@ -820,6 +934,7 @@ def run_daily_stock_tier_batch(
             "tier",
             "reason",
             "liquidity_20d_avg_value",
+            "sbv_ratio",
             "pbr_discount",
             "per_discount",
             "div_premium",
