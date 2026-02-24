@@ -239,21 +239,34 @@ class MagicSplitStrategy(Strategy):
                 else:
                     market_cap_q = 0
 
+                cheap_score_raw = signal_row.get("cheap_score")
+                cheap_conf_raw = signal_row.get("cheap_score_confidence")
+                cheap_score = float(cheap_score_raw) if pd.notna(cheap_score_raw) else 0.0
+                cheap_conf = float(cheap_conf_raw) if pd.notna(cheap_conf_raw) else 0.0
+                cheap_effective = max(min(cheap_score, 1.0), 0.0) * max(min(cheap_conf, 1.0), 0.0)
+                cheap_score_q = int(round(cheap_effective * 10000.0))
+
                 atr_q = int(round(atr_float * 10000))
                 ranked_candidates.append(
                     {
                         "ticker": ticker,
                         "signal_close_price": float(signal_close),
+                        "cheap_score_q": cheap_score_q,
                         "market_cap_q": market_cap_q,
                         "atr_q": atr_q,
                     }
                 )
 
             # GPU와 동일한 후보 정렬 계약:
-            # market_cap_q desc -> atr_q desc -> ticker asc
+            # cheap_score_q desc -> atr_q desc -> market_cap_q desc -> ticker asc
             sorted_candidates = sorted(
                 ranked_candidates,
-                key=lambda x: (-x["market_cap_q"], -x["atr_q"], x["ticker"]),
+                key=lambda x: (
+                    -x["cheap_score_q"],
+                    -x["atr_q"],
+                    -x["market_cap_q"],
+                    x["ticker"],
+                ),
             )
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
@@ -295,7 +308,11 @@ class MagicSplitStrategy(Strategy):
                             self.investment_per_order,
                             new_pos,
                             1,
-                            (-candidate["market_cap_q"], -candidate["atr_q"]),
+                            (
+                                -candidate["cheap_score_q"],
+                                -candidate["atr_q"],
+                                -candidate["market_cap_q"],
+                            ),
                             "신규 진입",
                             signal_close_price,
                         )

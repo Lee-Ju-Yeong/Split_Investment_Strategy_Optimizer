@@ -88,17 +88,24 @@ def _load_all_data_to_gpu(sql_engine, start_date: str, end_date: str):
             dsp.close_price,
             dsp.volume,
             ci.atr_14_ratio,
-            mcd.market_cap
+            mcd.market_cap,
+            dst.cheap_score,
+            dst.cheap_score_confidence
         FROM DailyStockPrice dsp
         LEFT JOIN CalculatedIndicators ci
           ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
         LEFT JOIN MarketCapDaily mcd
           ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
+        LEFT JOIN DailyStockTier dst
+          ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
         WHERE dsp.date BETWEEN %s AND %s
     """
     df_pd = pd.read_sql(query, sql_engine, params=(start_date, end_date), parse_dates=["date"])
     if df_pd.empty:
         return cudf.DataFrame()
+    for col in ("cheap_score", "cheap_score_confidence"):
+        if col in df_pd.columns:
+            df_pd[col] = pd.to_numeric(df_pd[col], errors="coerce").astype("float32")
     return cudf.from_pandas(df_pd).set_index(["ticker", "date"])
 
 

@@ -540,7 +540,7 @@ def _process_new_entry_signals_gpu(
 
     # --- [수정] 1. 후보 우선순위 순회(입력 순서 고정) + 시뮬레이션 축 벡터화 ---
     # candidate_tickers_for_day는 엔진에서 이미
-    # market_cap_q desc -> atr_q desc -> ticker asc 순으로 정렬되어 전달된다.
+    # cheap_score_q desc -> atr_q desc -> market_cap_q desc -> ticker asc 순으로 정렬되어 전달된다.
     # 신규 진입에서는 이 입력 순서를 그대로 사용해야 CPU/GPU parity가 유지된다.
     num_simulations = param_combinations.shape[0]
     num_candidates = int(candidate_tickers_for_day.size)

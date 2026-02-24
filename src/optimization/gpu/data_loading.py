@@ -60,18 +60,25 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
         dsp.close_price,
         dsp.volume,
         ci.atr_14_ratio,
-        mcd.market_cap
+        mcd.market_cap,
+        dst.cheap_score,
+        dst.cheap_score_confidence
     FROM
         DailyStockPrice AS dsp
     LEFT JOIN
         CalculatedIndicators AS ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
     LEFT JOIN
         MarketCapDaily AS mcd ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
+    LEFT JOIN
+        DailyStockTier AS dst ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
     WHERE
         dsp.date BETWEEN '{start_date}' AND '{end_date}'
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
+    for col in ("cheap_score", "cheap_score_confidence"):
+        if col in gdf.columns:
+            gdf[col] = gdf[col].astype("float32")
     print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
