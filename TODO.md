@@ -103,6 +103,10 @@
     - 샘플 분할(2721 종목): Conservative `T1/T2/T3=282/666/1773`, Balanced `298/878/1545`, Aggressive `974/808/939`
   - [x] CPU/GPU 신규 진입 정렬 기준 통일(2026-02-22): `ATR -> market_cap -> ticker` 적용 + 보유/쿨다운 제외 선행 필터 검증 테스트 추가
   - [x] 운영 지표 집계 구현(2026-02-22): `empty_entry_day_rate`, `tier1_coverage`, `tier2_fallback_rate`를 CPU 백테스터 실행 결과(`portfolio.run_metrics`)에 기록
+  - [x] `DailyStockTier` 멀티팩터 저평가 점수 저장(2026-02-24): `pbr_discount/per_discount/div_premium/cheap_score/cheap_score_version/cheap_score_confidence` 컬럼 추가 및 배치 적재 반영
+  - [x] 공통 필터 반영(2026-02-24): `div_yield <= 0`인 종목은 Tier1에서 제외(강등) 규칙 추가
+  - [ ] 결정론 편향 완화 + 분포 기반 강건 최적화 프레임 도입 (이슈 #101): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101
+    - `theta x scenario(omega) x fold` 평가 단위 도입 + `shadow -> gated -> default` 전환 게이트 설계
   - [ ] P0 테이블 DDL/인덱스 확정
   - [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
   - [ ] Tier v2 read-only 실험 스크립트 추가

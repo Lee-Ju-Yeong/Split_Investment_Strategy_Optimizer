@@ -150,6 +150,12 @@
 | `tier` | `TINYINT` | `NOT NULL` | 1(Prime)/2(Normal)/3(Danger) |
 | `reason` | `VARCHAR(255)` |  | 등급 사유 |
 | `liquidity_20d_avg_value` | `BIGINT` | `NULL` | 20일 평균 거래대금 |
+| `pbr_discount` | `FLOAT` | `NULL` | 종목별 과거 대비 PBR 할인 점수(0~1) |
+| `per_discount` | `FLOAT` | `NULL` | 종목별 과거 대비 PER 할인 점수(0~1) |
+| `div_premium` | `FLOAT` | `NULL` | 종목별 과거 대비 배당 프리미엄 점수(0~1) |
+| `cheap_score` | `FLOAT` | `NULL` | 멀티팩터 저평가 종합 점수(0~1) |
+| `cheap_score_version` | `VARCHAR(80)` | `NULL` | 점수 계산식 버전 문자열 |
+| `cheap_score_confidence` | `FLOAT` | `NULL` | 점수 신뢰도(0~1) |
 | `computed_at` | `DATETIME` | `DEFAULT CURRENT_TIMESTAMP` | 계산 시각 |
 
 인덱스:
