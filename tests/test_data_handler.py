@@ -38,15 +38,11 @@ class TestDataHandler(unittest.TestCase):
         """테스트 케이스 실행 후 정리"""
         self.pool_patcher.stop()
 
-    def test_get_trading_dates(self):
+    @patch('pandas.read_sql')
+    def test_get_trading_dates(self, mock_read_sql):
         """주어진 기간 내의 거래일 목록을 올바르게 가져오는지 테스트"""
-        # DB 커서가 반환할 모의 데이터 설정
-        expected_dates_raw = [
-            (date(2022, 1, 3),),
-            (date(2022, 1, 4),),
-            (date(2022, 1, 5),)
-        ]
-        self.mock_cursor.fetchall.return_value = expected_dates_raw
+        expected_dates_raw = ['2022-01-03', '2022-01-04', '2022-01-05']
+        mock_read_sql.return_value = pd.DataFrame({'date': pd.to_datetime(expected_dates_raw)})
         
         # 테스트 대상 메서드 호출
         start_date_str = '2022-01-01'
@@ -54,12 +50,25 @@ class TestDataHandler(unittest.TestCase):
         trading_dates = self.data_handler.get_trading_dates(start_date_str, end_date_str)
         
         # 결과 검증
-        expected_dates = [d[0] for d in expected_dates_raw]
+        expected_dates = [pd.Timestamp(d) for d in expected_dates_raw]
         self.assertEqual(trading_dates, expected_dates)
-        self.mock_cursor.execute.assert_called_once_with(
-            "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date",
-            (start_date_str, end_date_str)
-        )
+        mock_read_sql.assert_called_once()
+        _, kwargs = mock_read_sql.call_args
+        self.assertEqual(kwargs['params'], (start_date_str, end_date_str))
+
+    def test_get_trading_dates_adjusted_gate_raises_before_start(self):
+        with self.assertRaises(ValueError):
+            self.data_handler.get_trading_dates('2013-01-01', '2013-12-31')
+
+    @patch('pandas.read_sql')
+    def test_get_trading_dates_raw_mode_allows_pre_gate(self, mock_read_sql):
+        raw_handler = DataHandler(self.db_config, price_basis="raw")
+        raw_handler.clear_load_stock_data_cache()
+        mock_read_sql.return_value = pd.DataFrame({'date': pd.to_datetime(['2010-01-04'])})
+
+        trading_dates = raw_handler.get_trading_dates('2010-01-01', '2010-01-31')
+
+        self.assertEqual(trading_dates, [pd.Timestamp('2010-01-04')])
 
     @patch('pandas.read_sql')
     def test_load_stock_data(self, mock_read_sql):
@@ -67,6 +76,9 @@ class TestDataHandler(unittest.TestCase):
         # pd.read_sql이 반환할 모의 DataFrame 설정
         d = {
             'date': pd.to_datetime(['2022-01-03', '2022-01-04', '2022-01-05']),
+            'open_price': [101, 102, 103],
+            'high_price': [103, 104, 105],
+            'low_price': [100, 101, 102],
             'close_price': [102, 103, 104],
             # ... 다른 컬럼들
         }
@@ -91,9 +103,30 @@ class TestDataHandler(unittest.TestCase):
         self.assertTrue(stock_data.empty)
 
     @patch('pandas.read_sql')
+    def test_load_stock_data_adjusted_query_contains_adj_fields(self, mock_read_sql):
+        mock_read_sql.return_value = pd.DataFrame(
+            {
+                'date': pd.to_datetime(['2022-01-03']),
+                'open_price': [100.0],
+                'high_price': [101.0],
+                'low_price': [99.0],
+                'close_price': [100.0],
+            }
+        )
+
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+
+        query = mock_read_sql.call_args.args[0]
+        self.assertIn("dsp.adj_ratio", query)
+        self.assertIn("dsp.adj_close AS close_price", query)
+
+    @patch('pandas.read_sql')
     def test_load_stock_data_cache_key_is_normalized(self, mock_read_sql):
         d = {
             'date': pd.to_datetime(['2022-01-03', '2022-01-04', '2022-01-05']),
+            'open_price': [101, 102, 103],
+            'high_price': [103, 104, 105],
+            'low_price': [100, 101, 102],
             'close_price': [102, 103, 104],
         }
         mock_read_sql.return_value = pd.DataFrame(data=d)

@@ -159,6 +159,10 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         mock_preload_weekly.assert_not_called()
         mock_build_empty_weekly.assert_called_once()
+        mock_preload_all.assert_called_once()
+        _, kwargs = mock_preload_all.call_args
+        self.assertTrue(kwargs["use_adjusted_prices"])
+        self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
     @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
@@ -199,6 +203,26 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         mock_preload_weekly.assert_called_once()
         mock_build_empty_weekly.assert_not_called()
+        mock_preload_all.assert_called_once()
+        _, kwargs = mock_preload_all.call_args
+        self.assertTrue(kwargs["use_adjusted_prices"])
+        self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
+
+    @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
+    @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
+    @patch("src.optimization.gpu.parameter_simulation._get_context")
+    def test_find_optimal_parameters_rejects_pre_gate_start_in_adjusted_mode(
+        self,
+        mock_get_context,
+        mock_gpu_deps,
+        mock_core_deps,
+    ):
+        mock_get_context.return_value = self._build_context("tier", False)
+        mock_gpu_deps.return_value = self._fake_gpu_deps()
+        mock_core_deps.return_value = self._fake_core_deps()
+
+        with self.assertRaises(ValueError):
+            sim.find_optimal_parameters("2013-01-01", "2013-12-31", 10_000_000.0)
 
 
 if __name__ == "__main__":
