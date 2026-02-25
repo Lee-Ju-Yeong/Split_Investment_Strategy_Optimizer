@@ -512,6 +512,184 @@ def preload_tier_data_to_tensor(
     return tier_tensor
 
 
+def _load_snapshot_rows_for_window(sql_engine, start_date_str, end_date_str):
+    _, pd = _ensure_core_deps()
+
+    between_df = pd.read_sql(
+        """
+        SELECT DISTINCT snapshot_date
+        FROM TickerUniverseSnapshot
+        WHERE snapshot_date BETWEEN %s AND %s
+        ORDER BY snapshot_date
+        """,
+        sql_engine,
+        params=(start_date_str, end_date_str),
+        parse_dates=["snapshot_date"],
+    )
+    prev_df = pd.read_sql(
+        """
+        SELECT MAX(snapshot_date) AS snapshot_date
+        FROM TickerUniverseSnapshot
+        WHERE snapshot_date < %s
+        """,
+        sql_engine,
+        params=(start_date_str,),
+        parse_dates=["snapshot_date"],
+    )
+
+    snapshot_dates = []
+    if not between_df.empty:
+        snapshot_dates.extend(pd.to_datetime(between_df["snapshot_date"]).dropna().tolist())
+    if not prev_df.empty:
+        prev_date = pd.to_datetime(prev_df.iloc[0]["snapshot_date"])
+        if pd.notna(prev_date):
+            snapshot_dates.append(prev_date)
+
+    if not snapshot_dates:
+        return pd.DataFrame(columns=["snapshot_date", "ticker"])
+
+    unique_dates = sorted({pd.Timestamp(d) for d in snapshot_dates})
+    placeholders = ", ".join(["%s"] * len(unique_dates))
+    rows_query = f"""
+        SELECT snapshot_date, stock_code AS ticker
+        FROM TickerUniverseSnapshot
+        WHERE snapshot_date IN ({placeholders})
+        ORDER BY snapshot_date, stock_code
+    """
+    params = tuple(d.strftime("%Y-%m-%d") for d in unique_dates)
+    return pd.read_sql(rows_query, sql_engine, params=params, parse_dates=["snapshot_date"])
+
+
+def _fill_snapshot_asof_mask_inplace(mask, has_snapshot, snapshot_df, trading_dates_pd, ticker_to_idx):
+    np, pd = _ensure_core_deps()
+
+    if snapshot_df.empty:
+        return
+
+    snapshot_df = snapshot_df.assign(
+        snapshot_date=pd.to_datetime(snapshot_df["snapshot_date"]),
+        ticker=snapshot_df["ticker"].astype(str),
+    )
+    grouped = snapshot_df.groupby("snapshot_date")["ticker"].apply(list).sort_index()
+    if grouped.empty:
+        return
+
+    snapshot_dates = pd.DatetimeIndex(grouped.index)
+    snapshot_arr = snapshot_dates.to_numpy(dtype="datetime64[ns]")
+    trading_arr = pd.DatetimeIndex(trading_dates_pd).to_numpy(dtype="datetime64[ns]")
+
+    asof_pos = np.searchsorted(snapshot_arr, trading_arr, side="right") - 1
+    valid_day_mask = asof_pos >= 0
+    if not valid_day_mask.any():
+        return
+
+    has_snapshot[valid_day_mask] = True
+    ticker_index_by_snapshot = []
+    for snapshot_date in snapshot_dates:
+        tickers = grouped.loc[snapshot_date]
+        ticker_indices = [ticker_to_idx[t] for t in tickers if t in ticker_to_idx]
+        ticker_index_by_snapshot.append(np.asarray(ticker_indices, dtype=np.int32))
+
+    for pos in np.unique(asof_pos[valid_day_mask]):
+        day_rows = np.where(asof_pos == pos)[0]
+        ticker_cols = ticker_index_by_snapshot[int(pos)]
+        if day_rows.size == 0 or ticker_cols.size == 0:
+            continue
+        mask[np.ix_(day_rows, ticker_cols)] = True
+
+
+def _fill_history_fallback_mask_inplace(mask, has_snapshot, sql_engine, trading_dates_pd, ticker_to_idx):
+    np, pd = _ensure_core_deps()
+
+    missing_rows = np.flatnonzero(~has_snapshot)
+    if missing_rows.size == 0:
+        return
+
+    missing_dates = pd.DatetimeIndex(trading_dates_pd)[missing_rows]
+    missing_start_str = missing_dates[0].strftime("%Y-%m-%d")
+    missing_end_str = missing_dates[-1].strftime("%Y-%m-%d")
+
+    history_df = pd.read_sql(
+        """
+        SELECT stock_code AS ticker, listed_date, delisted_date
+        FROM TickerUniverseHistory
+        WHERE listed_date <= %s
+          AND (delisted_date IS NULL OR delisted_date > %s)
+        """,
+        sql_engine,
+        params=(missing_end_str, missing_start_str),
+        parse_dates=["listed_date", "delisted_date"],
+    )
+    if history_df.empty:
+        return
+
+    history_df = history_df.assign(ticker=history_df["ticker"].astype(str))
+    missing_arr = missing_dates.to_numpy(dtype="datetime64[ns]")
+    for row in history_df.itertuples(index=False):
+        ticker_idx = ticker_to_idx.get(str(row.ticker))
+        if ticker_idx is None:
+            continue
+        listed_date = pd.Timestamp(row.listed_date).to_datetime64()
+        if pd.isna(row.delisted_date):
+            active_mask = missing_arr >= listed_date
+        else:
+            delisted_date = pd.Timestamp(row.delisted_date).to_datetime64()
+            active_mask = (missing_arr >= listed_date) & (missing_arr < delisted_date)
+        if not active_mask.any():
+            continue
+        mask[missing_rows[active_mask], ticker_idx] = True
+
+
+def preload_pit_universe_mask_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
+    """
+    Build PIT universe mask tensor with CPU parity semantics:
+    - Prefer latest TickerUniverseSnapshot(as-of <= date)
+    - Fallback to TickerUniverseHistory(active as-of) when snapshot is unavailable for a day
+    """
+    cp, _, _, _ = _ensure_gpu_deps()
+    np, pd = _ensure_core_deps()
+
+    print("⏳ Loading PIT universe mask to GPU tensor...")
+    start_time = time.time()
+
+    num_days = len(trading_dates_pd)
+    num_tickers = len(all_tickers)
+    if num_days == 0 or num_tickers == 0:
+        return cp.zeros((num_days, num_tickers), dtype=cp.int8)
+
+    start_date_str = pd.to_datetime(start_date).strftime("%Y-%m-%d")
+    end_date_str = pd.to_datetime(end_date).strftime("%Y-%m-%d")
+    sql_engine = _get_sql_engine(str(engine))
+
+    ticker_to_idx = {str(ticker): idx for idx, ticker in enumerate(all_tickers)}
+    mask = np.zeros((num_days, num_tickers), dtype=np.bool_)
+    has_snapshot = np.zeros(num_days, dtype=np.bool_)
+
+    snapshot_df = _load_snapshot_rows_for_window(
+        sql_engine=sql_engine,
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
+    )
+    _fill_snapshot_asof_mask_inplace(
+        mask=mask,
+        has_snapshot=has_snapshot,
+        snapshot_df=snapshot_df,
+        trading_dates_pd=trading_dates_pd,
+        ticker_to_idx=ticker_to_idx,
+    )
+    _fill_history_fallback_mask_inplace(
+        mask=mask,
+        has_snapshot=has_snapshot,
+        sql_engine=sql_engine,
+        trading_dates_pd=trading_dates_pd,
+        ticker_to_idx=ticker_to_idx,
+    )
+
+    pit_mask_tensor = cp.asarray(mask, dtype=cp.int8)
+    print(f"✅ PIT mask loaded and tensorized. Shape: {pit_mask_tensor.shape}. Time: {time.time() - start_time:.2f}s")
+    return pit_mask_tensor
+
+
 def _build_tier_frame(df_pd, trading_dates_pd, all_tickers):
     df_wide = (
         df_pd.assign(ticker=df_pd["ticker"].astype(str))
@@ -534,6 +712,7 @@ __all__ = [
     "_read_sql_to_cudf",
     "build_empty_weekly_filtered_gpu",
     "preload_all_data_to_gpu",
+    "preload_pit_universe_mask_to_tensor",
     "preload_weekly_filtered_stocks_to_gpu",
     "preload_tier_data_to_tensor",
 ]

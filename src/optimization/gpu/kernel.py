@@ -22,6 +22,7 @@ def run_gpu_optimization(
     initial_cash_value,
     exec_params,
     tier_tensor=None,
+    pit_universe_mask_tensor=None,
 ):
     cp, _, _, run_magic_split_strategy_on_gpu = _ensure_gpu_deps()
 
@@ -38,6 +39,7 @@ def run_gpu_optimization(
         execution_params=exec_params,
         max_splits_limit=max_splits_from_params,
         tier_tensor=tier_tensor,
+        pit_universe_mask_tensor=pit_universe_mask_tensor,
     )
     print("🎉 GPU backtesting kernel finished.")
     return daily_portfolio_values
