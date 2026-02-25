@@ -4,6 +4,23 @@ from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
 
+try:
+    from .price_policy import (
+        is_adjusted_price_basis,
+        normalize_iso_date,
+        normalize_price_basis,
+        resolve_price_policy,
+        validate_backtest_window_for_price_policy,
+    )
+except ImportError:  # pragma: no cover
+    from price_policy import (  # type: ignore
+        is_adjusted_price_basis,
+        normalize_iso_date,
+        normalize_price_basis,
+        resolve_price_policy,
+        validate_backtest_window_for_price_policy,
+    )
+
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
 
@@ -13,8 +30,28 @@ class PointInTimeViolation(ValueError):
 
 
 class DataHandler:
-    def __init__(self, db_config):
+    def __init__(
+        self,
+        db_config,
+        *,
+        price_basis=None,
+        adjusted_price_gate_start_date=None,
+        strategy_params=None,
+    ):
         self.db_config = db_config
+        resolved_price_basis, resolved_gate_start_date = resolve_price_policy(
+            strategy_params=strategy_params
+        )
+        if price_basis is not None:
+            resolved_price_basis = normalize_price_basis(price_basis)
+        if adjusted_price_gate_start_date is not None:
+            resolved_gate_start_date = normalize_iso_date(
+                adjusted_price_gate_start_date,
+                field_name="adjusted_price_gate_start_date",
+            )
+        self.price_basis = resolved_price_basis
+        self.adjusted_price_gate_start_date = resolved_gate_start_date
+        self.use_adjusted_prices = is_adjusted_price_basis(self.price_basis)
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
@@ -76,7 +113,16 @@ class DataHandler:
     def clear_load_stock_data_cache(self):
         self._load_stock_data_cached.cache_clear()
 
+    def _validate_window(self, start_date, end_date):
+        validate_backtest_window_for_price_policy(
+            start_date=start_date,
+            end_date=end_date,
+            price_basis=self.price_basis,
+            adjusted_price_gate_start_date=self.adjusted_price_gate_start_date,
+        )
+
     def get_trading_dates(self, start_date, end_date):
+        self._validate_window(start_date, end_date)
         conn = self.get_connection()
         try:
             query = "SELECT DISTINCT date FROM DailyStockPrice WHERE date BETWEEN %s AND %s ORDER BY date"
@@ -91,6 +137,7 @@ class DataHandler:
             conn.close()
 
     def load_stock_data(self, ticker, start_date, end_date):
+        self._validate_window(start_date, end_date)
         ticker_key = str(ticker)
         start_date_str = self._normalize_date_key(start_date)
         end_date_str = self._normalize_date_key(end_date)
@@ -103,9 +150,26 @@ class DataHandler:
         extended_start_date = pd.to_datetime(start_date_str) - timedelta(days=252*10 + 50)
         extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
         
-        query = """
+        if self.use_adjusted_prices:
+            price_select_sql = """
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
+                dsp.adj_close AS close_price
+            """
+        else:
+            price_select_sql = """
+                dsp.open_price,
+                dsp.high_price,
+                dsp.low_price,
+                dsp.close_price
+            """
+
+        query = f"""
             SELECT
-                dsp.date, dsp.open_price, dsp.high_price, dsp.low_price, dsp.close_price, dsp.volume,
+                dsp.date,
+                {price_select_sql},
+                dsp.volume,
                 ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value,
                 mcd.market_cap,
                 dst.cheap_score,
@@ -123,6 +187,16 @@ class DataHandler:
                 df = pd.read_sql(query, conn, params=(ticker, extended_start_date_str, end_date_str))
             if df.empty:
                 return df
+
+            if self.use_adjusted_prices:
+                missing_price_mask = df[["open_price", "high_price", "low_price", "close_price"]].isna().any(axis=1)
+                if missing_price_mask.any():
+                    first_missing_date = pd.to_datetime(df.loc[missing_price_mask, "date"].iloc[0]).date()
+                    raise ValueError(
+                        "Adjusted price mode found NULL adjusted OHLC values "
+                        f"for ticker={ticker} at date={first_missing_date}. "
+                        f"Backtest window must satisfy date >= {self.adjusted_price_gate_start_date}."
+                    )
 
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)

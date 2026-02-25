@@ -45,19 +45,45 @@ def _read_sql_to_cudf(query, sql_engine, parse_dates=None):
 # -----------------------------------------------------------------------------
 # GPU Data Pre-loader
 # -----------------------------------------------------------------------------
-def preload_all_data_to_gpu(engine, start_date, end_date):
+def _build_price_select_sql(use_adjusted_prices: bool) -> str:
+    if use_adjusted_prices:
+        return """
+            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
+            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
+            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
+            dsp.adj_close AS close_price
+        """
+    return """
+        dsp.open_price,
+        dsp.high_price,
+        dsp.low_price,
+        dsp.close_price
+    """
+
+
+def preload_all_data_to_gpu(
+    engine,
+    start_date,
+    end_date,
+    *,
+    use_adjusted_prices=False,
+    adjusted_price_gate_start_date="2013-11-20",
+):
     _ensure_gpu_deps()
 
     print("⏳ Loading all stock data into GPU memory...")
     start_time = time.time()
+    price_select_sql = _build_price_select_sql(bool(use_adjusted_prices))
+    adjusted_gate_clause = (
+        f" AND dsp.date >= '{adjusted_price_gate_start_date}'"
+        if use_adjusted_prices
+        else ""
+    )
     query = f"""
     SELECT
         dsp.stock_code AS ticker,
         dsp.date,
-        dsp.open_price,
-        dsp.high_price,
-        dsp.low_price,
-        dsp.close_price,
+        {price_select_sql},
         dsp.volume,
         ci.atr_14_ratio,
         mcd.market_cap,
@@ -73,6 +99,7 @@ def preload_all_data_to_gpu(engine, start_date, end_date):
         DailyStockTier AS dst ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
     WHERE
         dsp.date BETWEEN '{start_date}' AND '{end_date}'
+        {adjusted_gate_clause}
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
