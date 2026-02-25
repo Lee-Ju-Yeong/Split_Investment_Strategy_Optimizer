@@ -9,6 +9,22 @@ import cupy as cp
 import pandas as pd
 
 
+CHEAP_SCORE_COLUMNS = ("cheap_score", "cheap_score_confidence")
+
+
+def ensure_cheap_score_columns(metrics_df):
+    """
+    Ensure cheap-score columns exist exactly once on the input frame.
+    Returns list of missing columns that were created with zero defaults.
+    """
+    missing_columns = []
+    for col in CHEAP_SCORE_COLUMNS:
+        if col not in metrics_df.columns:
+            metrics_df[col] = 0.0
+            missing_columns.append(col)
+    return missing_columns
+
+
 def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.ndarray]:
     day_indices = cp.asarray(data_valid["day_idx"].astype(cp.int32))
     ticker_indices = cp.asarray(data_valid["ticker_idx"].astype(cp.int32))
@@ -73,23 +89,55 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_ind
     if candidate_index_series.empty:
         return None
 
+    ensure_cheap_score_columns(all_data_reset_idx)
+    metrics_source = all_data_reset_idx
+
     # PIT(as-of <= date) 규칙에 맞춰 signal_date 이전/당일 전체에서 ticker별 최신 1건을 선택한다.
-    candidate_rows = all_data_reset_idx[
-        (all_data_reset_idx["date"] <= signal_date)
-        & (all_data_reset_idx["ticker_idx"].isin(candidate_index_series))
-    ][["ticker_idx", "ticker", "date", "atr_14_ratio", "market_cap"]]
+    candidate_rows = metrics_source[
+        (metrics_source["date"] <= signal_date)
+        & (metrics_source["ticker_idx"].isin(candidate_index_series))
+    ][
+        [
+            "ticker_idx",
+            "ticker",
+            "date",
+            "atr_14_ratio",
+            "market_cap",
+            "cheap_score",
+            "cheap_score_confidence",
+        ]
+    ]
     if candidate_rows.empty:
         return None
 
     latest_rows = candidate_rows.sort_values("date").drop_duplicates(subset=["ticker_idx"], keep="last")
-    return latest_rows[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
+    return latest_rows[
+        [
+            "ticker_idx",
+            "ticker",
+            "atr_14_ratio",
+            "market_cap",
+            "cheap_score",
+            "cheap_score_confidence",
+        ]
+    ]
 
 
 def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_records=False):
     if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
         return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-    metrics_rows = valid_candidate_metrics_df[["ticker_idx", "ticker", "atr_14_ratio", "market_cap"]]
+    ensure_cheap_score_columns(valid_candidate_metrics_df)
+    metrics_rows = valid_candidate_metrics_df[
+        [
+            "ticker_idx",
+            "ticker",
+            "atr_14_ratio",
+            "market_cap",
+            "cheap_score",
+            "cheap_score_confidence",
+        ]
+    ]
     metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
     if metrics_rows.empty:
         return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
@@ -102,11 +150,20 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
     metrics_rows["ticker_idx"] = metrics_rows["ticker_idx"].astype("int32")
     market_cap_series = metrics_rows["market_cap"].fillna(0).astype("float64")
     metrics_rows["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
+    cheap_score_series = metrics_rows["cheap_score"].fillna(0).astype("float64")
+    cheap_conf_series = metrics_rows["cheap_score_confidence"].fillna(0).astype("float64")
+    metrics_rows["cheap_score_effective"] = (
+        cheap_score_series.clip(lower=0.0, upper=1.0)
+        * cheap_conf_series.clip(lower=0.0, upper=1.0)
+    )
+    metrics_rows["cheap_score_q"] = (
+        metrics_rows["cheap_score_effective"] * 10000.0
+    ).round().astype("int64")
     metrics_rows["atr_q"] = (metrics_rows["atr_14_ratio"].astype("float64") * 10000.0).round().astype("int64")
 
     ranked_rows = metrics_rows.sort_values(
-        by=["market_cap_q", "atr_q", "ticker"],
-        ascending=[False, False, True],
+        by=["cheap_score_q", "atr_q", "market_cap_q", "ticker"],
+        ascending=[False, False, False, True],
     )
     candidate_indices_final = cp.asarray(ranked_rows["ticker_idx"].astype("int32"))
     valid_atrs_final = cp.asarray(ranked_rows["atr_14_ratio"].astype("float32"))
@@ -116,8 +173,9 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
         ranked_records = list(
             zip(
                 ranked_rows["ticker"].to_arrow().to_pylist(),
-                ranked_rows["market_cap_q"].to_arrow().to_pylist(),
+                ranked_rows["cheap_score_q"].to_arrow().to_pylist(),
                 ranked_rows["atr_q"].to_arrow().to_pylist(),
+                ranked_rows["market_cap_q"].to_arrow().to_pylist(),
                 ranked_rows["atr_14_ratio"].astype("float32").to_arrow().to_pylist(),
             )
         )

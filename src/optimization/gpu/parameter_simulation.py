@@ -12,6 +12,18 @@ import os
 import time
 from datetime import datetime
 
+try:
+    from ...price_policy import (
+        is_adjusted_price_basis,
+        resolve_price_policy,
+        validate_backtest_window_for_price_policy,
+    )
+except ImportError:  # pragma: no cover
+    from price_policy import (  # type: ignore
+        is_adjusted_price_basis,
+        resolve_price_policy,
+        validate_backtest_window_for_price_policy,
+    )
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
 from .data_loading import (
@@ -104,12 +116,30 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         strategy_params.get("use_weekly_alpha_gate", False)
     )
     execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
+    price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_params)
+    validate_backtest_window_for_price_policy(
+        start_date=start_date,
+        end_date=end_date,
+        price_basis=price_basis,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+    )
+    use_adjusted_prices = is_adjusted_price_basis(price_basis)
 
     print("\n" + "=" * 80)
     print(f"WORKER: Running GPU Simulations for {start_date} to {end_date}")
+    print(
+        f"Price Policy: basis={price_basis}, "
+        f"adjusted_gate_start={adjusted_gate_start_date}"
+    )
     print("=" * 80)
 
-    all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
+    all_data_gpu = preload_all_data_to_gpu(
+        db_connection_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+    )
     needs_weekly_candidates = _should_preload_weekly_candidates(
         execution_params["candidate_source_mode"],
         execution_params["use_weekly_alpha_gate"],
