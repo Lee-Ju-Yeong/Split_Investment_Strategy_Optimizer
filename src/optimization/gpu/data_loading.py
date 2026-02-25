@@ -48,16 +48,25 @@ def _read_sql_to_cudf(query, sql_engine, parse_dates=None):
 def _build_price_select_sql(use_adjusted_prices: bool) -> str:
     if use_adjusted_prices:
         return """
-            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
-            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
-            CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
-            dsp.adj_close AS close_price
+            CAST(
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END
+                AS FLOAT
+            ) AS open_price,
+            CAST(
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END
+                AS FLOAT
+            ) AS high_price,
+            CAST(
+                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END
+                AS FLOAT
+            ) AS low_price,
+            CAST(dsp.adj_close AS FLOAT) AS close_price
         """
     return """
-        dsp.open_price,
-        dsp.high_price,
-        dsp.low_price,
-        dsp.close_price
+        CAST(dsp.open_price AS FLOAT) AS open_price,
+        CAST(dsp.high_price AS FLOAT) AS high_price,
+        CAST(dsp.low_price AS FLOAT) AS low_price,
+        CAST(dsp.close_price AS FLOAT) AS close_price
     """
 
 
@@ -84,11 +93,11 @@ def preload_all_data_to_gpu(
         dsp.stock_code AS ticker,
         dsp.date,
         {price_select_sql},
-        dsp.volume,
-        ci.atr_14_ratio,
-        mcd.market_cap,
-        dst.cheap_score,
-        dst.cheap_score_confidence
+        CAST(dsp.volume AS SIGNED) AS volume,
+        CAST(ci.atr_14_ratio AS FLOAT) AS atr_14_ratio,
+        CAST(mcd.market_cap AS SIGNED) AS market_cap,
+        CAST(dst.cheap_score AS FLOAT) AS cheap_score,
+        CAST(dst.cheap_score_confidence AS FLOAT) AS cheap_score_confidence
     FROM
         DailyStockPrice AS dsp
     LEFT JOIN
@@ -103,9 +112,12 @@ def preload_all_data_to_gpu(
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
-    for col in ("cheap_score", "cheap_score_confidence"):
+    for col in ("cheap_score", "cheap_score_confidence", "open_price", "high_price", "low_price", "close_price", "atr_14_ratio"):
         if col in gdf.columns:
             gdf[col] = gdf[col].astype("float32")
+    for col in ("volume", "market_cap"):
+        if col in gdf.columns:
+            gdf[col] = gdf[col].astype("int64")
     print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
