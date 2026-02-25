@@ -33,6 +33,7 @@ from .data_handler import DataHandler
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu,
+    preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
     preload_weekly_filtered_stocks_to_gpu,
 )
@@ -281,6 +282,13 @@ def _run_gpu_and_collect_sell_events(
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values("date").isin(trading_dates_pd)]
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
     tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+    pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+    )
 
     param_matrix = cp.asarray(
         [
@@ -317,6 +325,7 @@ def _run_gpu_and_collect_sell_events(
             execution_params=execution_params,
             max_splits_limit=int(params["max_splits_limit"]),
             tier_tensor=tier_tensor,
+            pit_universe_mask_tensor=pit_universe_mask_tensor,
             debug_mode=True,
         )
     gpu_log_text = debug_stdout.getvalue()

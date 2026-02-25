@@ -37,6 +37,7 @@ from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get
 from .data_loading import (
     build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
+    preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
     preload_weekly_filtered_stocks_to_gpu,
 )
@@ -207,9 +208,17 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         trading_dates_pd,
         universe_mode=universe_mode,
     )
+    pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+    )
 
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
+    fixed_mem += int(pit_universe_mask_tensor.nbytes)
 
     optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
     batch_size, batch_size_source = _resolve_batch_size(
@@ -251,6 +260,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
             initial_cash,
             execution_params,
             tier_tensor=tier_tensor,
+            pit_universe_mask_tensor=pit_universe_mask_tensor,
         )
         batch_time = time.time() - start_time_kernel
         total_kernel_time += batch_time

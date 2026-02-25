@@ -67,7 +67,8 @@ def run_magic_split_strategy_on_gpu(
     execution_params: dict,
     max_splits_limit: int = 20,
     debug_mode: bool = False,
-    tier_tensor: cp.ndarray = None # [Issue #67]
+    tier_tensor: cp.ndarray = None,  # [Issue #67]
+    pit_universe_mask_tensor: cp.ndarray = None,
 ):
     # --- 1. 상태 배열 초기화 ---
     num_combinations = param_combinations.shape[0]
@@ -95,6 +96,13 @@ def run_magic_split_strategy_on_gpu(
     force_liquidate_tier3 = False
     if candidate_source_mode == "tier" and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
+    if pit_universe_mask_tensor is not None:
+        expected_shape = (num_trading_days, num_tickers)
+        if tuple(pit_universe_mask_tensor.shape) != expected_shape:
+            raise ValueError(
+                "pit_universe_mask_tensor shape mismatch: "
+                f"expected={expected_shape} got={tuple(pit_universe_mask_tensor.shape)}"
+            )
 
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
     portfolio_state[:, 0] = initial_cash
@@ -192,7 +200,11 @@ def run_magic_split_strategy_on_gpu(
                 # 1. Select Tier 1
                 if signal_day_idx >= 0:
                     signal_tiers = tier_tensor[signal_day_idx] # (num_tickers,)
-                    tier1_mask = (signal_tiers == 1)
+                    if pit_universe_mask_tensor is not None:
+                        pit_mask = pit_universe_mask_tensor[signal_day_idx] > 0
+                    else:
+                        pit_mask = cp.ones(num_tickers, dtype=cp.bool_)
+                    tier1_mask = (signal_tiers == 1) & pit_mask
 
                     if cp.any(tier1_mask):
                         candidate_indices = cp.where(tier1_mask)[0]
@@ -200,7 +212,7 @@ def run_magic_split_strategy_on_gpu(
                         candidate_indices = cp.array([], dtype=cp.int32)
                     else:
                         # Fallback to Tier 2 (<= 2)
-                        tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2)
+                        tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2) & pit_mask
                         candidate_indices = cp.where(tier2_mask)[0]
                     candidate_indices_gpu = candidate_indices.astype(cp.int32, copy=False)
             
@@ -311,6 +323,8 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers=signal_tiers_gpu,
                 hold_max_tier=hold_max_tier,
                 strict_cash_rounding=strict_cash_rounding,
+                current_date=current_date,
+                signal_date=signal_date,
             )
         
             # --- 일일 포트폴리오 가치 업데이트 (기존과 동일) ---

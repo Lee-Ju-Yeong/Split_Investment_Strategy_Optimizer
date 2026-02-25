@@ -37,6 +37,7 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
+from .optimization.gpu.data_loading import preload_pit_universe_mask_to_tensor
 
 
 def _require_gpu_stack():
@@ -428,6 +429,13 @@ def main() -> None:
         min_liquidity_20d_avg_value=int(strategy_cfg.get("min_liquidity_20d_avg_value", 0) or 0),
         min_tier12_coverage_ratio=float(strategy_cfg.get("min_tier12_coverage_ratio", 0.0) or 0.0),
     )
+    pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
+        db_conn_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+    )
 
     param_gpu = cp.asarray([row.to_gpu_row() for row in rows], dtype=cp.float32)
     exec_params = copy.deepcopy(config["execution_params"])
@@ -447,6 +455,7 @@ def main() -> None:
         execution_params=exec_params,
         max_splits_limit=int(max(row.max_splits_limit for row in rows)),
         tier_tensor=tier_tensor,
+        pit_universe_mask_tensor=pit_universe_mask_tensor,
         debug_mode=False,
     )
     gpu_curves = daily_values_gpu.get()
