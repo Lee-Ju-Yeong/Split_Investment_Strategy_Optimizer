@@ -14,6 +14,13 @@ backtest_settings:
   save_full_trade_history: false
 
 strategy_params:
+  # Price basis for backtesting/simulation:
+  # - adjusted: use adj_close/adj_ratio derived OHLC (recommended)
+  # - raw: use original close/open/high/low
+  price_basis: "adjusted"
+  # In adjusted mode, start_date must be >= this date.
+  adjusted_price_gate_start_date: "2013-11-20"
+
   max_stocks: 20
   order_investment_ratio: 0.02
   additional_buy_drop_rate: 0.04

@@ -130,6 +130,8 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `data_pipeline.flags`: `use_gpu`, `update_company_info_db`, `process_hts_csv_files`, `load_filtered_stocks_csv`, `collect_ohlcv_data`, `force_recollect_ohlcv`, `calculate_indicators`
 
 **Strategy Parameters:**
+- `price_basis`: 가격 기준 (`adjusted` | `raw`)
+- `adjusted_price_gate_start_date`: 수정주가 모드 허용 시작일(기본 `2013-11-20`)
 - `max_stocks`: 최대 보유 종목 수
 - `order_investment_ratio`: 1회 주문당 투자 비율
 - `additional_buy_drop_rate`: 추가 매수 트리거 하락률

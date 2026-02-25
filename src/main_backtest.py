@@ -24,6 +24,7 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.execution import BasicExecutionHandler
 from .backtest.cpu.backtester import BacktestEngine
 from .config_loader import load_config
+from .price_policy import resolve_price_policy
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,19 @@ def run_backtest_from_config(config: dict) -> dict:
     end_date = backtest_settings['end_date']
     initial_cash = backtest_settings['initial_cash']
     
+    price_basis, adjusted_gate = resolve_price_policy(strategy_params_from_config)
+    logger.info(
+        "price policy | basis=%s | adjusted_gate_start=%s",
+        price_basis,
+        adjusted_gate,
+    )
+
     # DataHandler는 이제 종목명 조회를 위해 CompanyInfo DB를 내부적으로 로드합니다.
-    data_handler = DataHandler(db_config=db_params)
+    data_handler = DataHandler(
+        db_config=db_params,
+        price_basis=price_basis,
+        adjusted_price_gate_start_date=adjusted_gate,
+    )
     
     strategy_params = {**strategy_params_from_config, 'backtest_start_date': start_date, 'backtest_end_date': end_date}
     strategy = MagicSplitStrategy(**strategy_params)

@@ -1,11 +1,18 @@
 import unittest
+import inspect
 
 import pandas as pd
 
-from src.cpu_gpu_parity_topk import ParityParamRow, _compare_curves
+from src.cpu_gpu_parity_topk import ParityParamRow, _compare_curves, _load_all_data_to_gpu
 
 
 class TestCpuGpuParityTopk(unittest.TestCase):
+    def test_gpu_preload_query_includes_cheap_columns_and_tier_join(self):
+        src = inspect.getsource(_load_all_data_to_gpu)
+        self.assertIn("dst.cheap_score", src)
+        self.assertIn("dst.cheap_score_confidence", src)
+        self.assertIn("LEFT JOIN DailyStockTier dst", src)
+
     def test_param_row_priority_mapping(self):
         row0 = ParityParamRow.from_mapping(
             {
@@ -54,4 +61,3 @@ class TestCpuGpuParityTopk(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

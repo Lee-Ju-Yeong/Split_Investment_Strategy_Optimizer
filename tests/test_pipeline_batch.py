@@ -9,6 +9,25 @@ from src.pipeline import batch as pipeline_batch
 
 
 class TestPipelineBatch(unittest.TestCase):
+    @patch("src.pipeline.batch.run_daily_stock_tier_batch")
+    def test_run_pipeline_batch_default_financial_lag_days_is_1(self, mock_run_tier):
+        mock_run_tier.return_value = {"rows_saved": 0}
+        conn = MagicMock()
+
+        pipeline_batch.run_pipeline_batch(
+            conn=conn,
+            mode="daily",
+            end_date_str="20260207",
+            run_universe=False,
+            run_financial=False,
+            run_investor=False,
+            run_tier=True,
+        )
+
+        mock_run_tier.assert_called_once()
+        _, kwargs = mock_run_tier.call_args
+        self.assertEqual(kwargs["financial_lag_days"], 1)
+
     def test_backfill_requires_start_date(self):
         conn = MagicMock()
         with self.assertRaises(ValueError):
@@ -134,6 +153,11 @@ class TestPipelineBatch(unittest.TestCase):
         parser = pipeline_batch._build_arg_parser()
         args = parser.parse_args(["--allow-financial-legacy-fallback"])
         self.assertTrue(args.allow_financial_legacy_fallback)
+
+    def test_build_arg_parser_default_financial_lag_days_is_1(self):
+        parser = pipeline_batch._build_arg_parser()
+        args = parser.parse_args([])
+        self.assertEqual(args.financial_lag_days, 1)
 
 
 if __name__ == "__main__":
