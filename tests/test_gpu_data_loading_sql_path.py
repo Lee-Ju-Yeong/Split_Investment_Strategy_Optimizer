@@ -95,5 +95,85 @@ class TestGpuDataLoadingSqlPath(unittest.TestCase):
         mock_core_deps.assert_not_called()
 
 
+class TestGpuDataTypeNormalization(unittest.TestCase):
+    class _FakeSeries:
+        def __init__(self, dtype):
+            self.dtype = dtype
+            self.last_cast = None
+
+        def astype(self, dtype):
+            self.last_cast = dtype
+            self.dtype = dtype
+            return self
+
+    class _FakeGdf:
+        def __init__(self):
+            self._cols = {
+                "open_price": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "high_price": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "low_price": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "close_price": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "atr_14_ratio": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "cheap_score": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "cheap_score_confidence": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "market_cap": TestGpuDataTypeNormalization._FakeSeries("int64"),
+            }
+            self.columns = list(self._cols.keys())
+
+        def __getitem__(self, key):
+            return self._cols[key]
+
+        def __setitem__(self, key, value):
+            self._cols[key] = value
+
+    def test_normalize_loaded_types_cast_policy(self):
+        gdf = self._FakeGdf()
+        normalized = data_loading._normalize_loaded_types(gdf)
+
+        for col in data_loading._FLOAT32_COLUMNS:
+            self.assertEqual(normalized[col].dtype, "float32")
+        self.assertEqual(normalized["market_cap"].dtype, "float64")
+
+
+class _FakeSetIndexGdf(_FakeGdf):
+    @property
+    def shape(self):
+        return (0, 0)
+
+    def set_index(self, _columns):
+        return self
+
+
+class TestGpuDataLoadingQuery(unittest.TestCase):
+    def test_preload_query_omits_unused_volume_field(self):
+        captured_queries = []
+
+        def fake_read_sql_to_cudf(query, _engine, parse_dates=None):
+            captured_queries.append(query)
+            gdf = _FakeSetIndexGdf()
+            gdf._cols["ticker"] = _FakeSeries(dtype="str")
+            gdf._cols["date"] = _FakeSeries(dtype="datetime64[ns]")
+            return gdf
+
+        with patch(
+            "src.optimization.gpu.data_loading._get_sql_engine",
+            return_value="engine",
+        ), patch(
+            "src.optimization.gpu.data_loading._read_sql_to_cudf",
+            side_effect=fake_read_sql_to_cudf,
+        ), patch("src.optimization.gpu.data_loading._ensure_gpu_deps"):
+            data_loading.preload_all_data_to_gpu(
+                engine="mysql://dummy",
+                start_date="20140101",
+                end_date="20140131",
+                use_adjusted_prices=False,
+            )
+
+        self.assertEqual(len(captured_queries), 1)
+        query = captured_queries[0]
+        self.assertNotIn("CAST(dsp.volume AS SIGNED)", query)
+        self.assertIn("mcd.market_cap AS market_cap", query)
+
+
 if __name__ == "__main__":
     unittest.main()

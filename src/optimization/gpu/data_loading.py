@@ -45,6 +45,30 @@ def _read_sql_to_cudf(query, sql_engine, parse_dates=None):
 # -----------------------------------------------------------------------------
 # GPU Data Pre-loader
 # -----------------------------------------------------------------------------
+_FLOAT32_COLUMNS = (
+    "open_price",
+    "high_price",
+    "low_price",
+    "close_price",
+    "atr_14_ratio",
+    "cheap_score",
+    "cheap_score_confidence",
+)
+
+
+def _normalize_loaded_types(gdf):
+    """Cast only columns needed for GPU simulation to compact/consistent dtypes."""
+    for col in _FLOAT32_COLUMNS:
+        if col not in gdf.columns:
+            continue
+        if str(gdf[col].dtype) != "float32":
+            gdf[col] = gdf[col].astype("float32")
+    # Keep market_cap as float64 to preserve nullable behavior and large integer safety.
+    if "market_cap" in gdf.columns and str(gdf["market_cap"].dtype) != "float64":
+        gdf["market_cap"] = gdf["market_cap"].astype("float64")
+    return gdf
+
+
 def _build_price_select_sql(use_adjusted_prices: bool) -> str:
     if use_adjusted_prices:
         return """
@@ -93,9 +117,8 @@ def preload_all_data_to_gpu(
         dsp.stock_code AS ticker,
         dsp.date,
         {price_select_sql},
-        CAST(dsp.volume AS SIGNED) AS volume,
         CAST(ci.atr_14_ratio AS FLOAT) AS atr_14_ratio,
-        CAST(mcd.market_cap AS SIGNED) AS market_cap,
+        mcd.market_cap AS market_cap,
         CAST(dst.cheap_score AS FLOAT) AS cheap_score,
         CAST(dst.cheap_score_confidence AS FLOAT) AS cheap_score_confidence
     FROM
@@ -112,12 +135,7 @@ def preload_all_data_to_gpu(
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
-    for col in ("cheap_score", "cheap_score_confidence", "open_price", "high_price", "low_price", "close_price", "atr_14_ratio"):
-        if col in gdf.columns:
-            gdf[col] = gdf[col].astype("float32")
-    for col in ("volume", "market_cap"):
-        if col in gdf.columns:
-            gdf[col] = gdf[col].astype("int64")
+    gdf = _normalize_loaded_types(gdf)
     print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 
