@@ -2,6 +2,19 @@
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71`
 - 목적: pykrx에서 추가 수집 가능한 데이터를 Tier 고도화에 단계적으로 반영하기 위한 실행 로드맵 고정
 
+## 완료 상태 업데이트 (2026-02-25)
+- 상태: GitHub 이슈 닫힘 + `main` 병합 반영
+- 병합 커밋: `c411aeb` (feat pricing + tier v2 + cheap-score backfill 정합성 반영)
+- 운영 반영 내역:
+  - `price_basis` 정책 반영(backtest/parameter_simulation 공통), `adjusted` 사용 구간 가드 적용
+  - `DailyStockTier` 내 멀티팩터 저평가 점수(`cheap_score`, `cheap_score_version`, `cheap_score_confidence`) 저장/랭킹 반영
+  - `div_yield <= 0` 하드 필터로 Tier1 강등 + `sbv_ratio` 오버레이 반영
+  - T-1 기준 `ATR -> 시총 -> 티커` 우선순위 통일(CPU/GPU), 보유/쿨다운 사전 제외 및 empty_entry/day 지표 기록
+- 백필/검증:
+  - `python -m src.pipeline.batch --mode backfill --start-date 20131120 --end-date 20260224 --skip-financial --skip-investor`
+  - `rows_saved=13,847,092`, `rows_calculated=6,958,239`
+  - `main` 브랜치 반영 완료(`main -> origin/main`)
+
 ## 0. 진행 현황 (2026-02-14)
 - [x] Phase P0 테이블 DDL/인덱스 추가: `MarketCapDaily`, `ShortSellingDaily`
 - [x] 수집 워커 추가: `src/market_cap_collector.py`, `src/short_selling_collector.py`
