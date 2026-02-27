@@ -57,10 +57,36 @@ class DataHandler:
                                                                pool_size=10,
                                                                use_pure=True,
                                                                **self.db_config)
+            self.has_stored_adj_ohlc = self._detect_stored_adj_ohlc_columns()
             self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
             raise
+
+    def _detect_stored_adj_ohlc_columns(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'DailyStockPrice'
+                      AND COLUMN_NAME IN ('adj_open', 'adj_high', 'adj_low')
+                    """
+                )
+                row = cur.fetchone()
+            count = int((row[0] if row else 0) or 0)
+            return count == 3
+        except Exception as exc:
+            print(
+                "[DataHandler] warning: failed to detect stored adjusted OHLC columns "
+                f"({type(exc).__name__}). fallback=formula"
+            )
+            return False
+        finally:
+            conn.close()
 
     def _load_company_info_cache(self):
         """DB의 CompanyInfo 테이블에서 데이터를 읽어와 인메모리 캐시를 채웁니다."""
@@ -151,12 +177,38 @@ class DataHandler:
         extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
         
         if self.use_adjusted_prices:
-            price_select_sql = """
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
-                dsp.adj_close AS close_price
-            """
+            if self.has_stored_adj_ohlc:
+                price_select_sql = """
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_open IS NULL THEN dsp.open_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_open - (dsp.open_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.open_price * dsp.adj_ratio
+                        ELSE dsp.adj_open
+                    END AS open_price,
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_high IS NULL THEN dsp.high_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_high - (dsp.high_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.high_price * dsp.adj_ratio
+                        ELSE dsp.adj_high
+                    END AS high_price,
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_low IS NULL THEN dsp.low_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_low - (dsp.low_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.low_price * dsp.adj_ratio
+                        ELSE dsp.adj_low
+                    END AS low_price,
+                    dsp.adj_close AS close_price
+                """
+            else:
+                price_select_sql = """
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
+                    dsp.adj_close AS close_price
+                """
         else:
             price_select_sql = """
                 dsp.open_price,
