@@ -50,6 +50,16 @@ class BasicExecutionHandler:
 
         if ohlc_data is None:
             return
+        open_price = ohlc_data.get("open_price")
+        if open_price is None or not np.isfinite(open_price) or float(open_price) <= 0.0:
+            logger.debug(
+                "[CPU_ORDER_SKIP_UNTRADABLE] %s %s %s open_price=%s",
+                current_date.strftime("%Y-%m-%d"),
+                ticker,
+                order_type,
+                open_price,
+            )
+            return
 
         cash_before = portfolio.cash
         positions_before = portfolio.positions.get(ticker, [])
