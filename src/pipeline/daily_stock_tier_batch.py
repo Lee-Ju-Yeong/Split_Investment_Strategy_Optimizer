@@ -21,13 +21,16 @@ DEFAULT_INVESTOR_FLOW5_THRESHOLD = -500_000_000
 DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS = 5
 DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS = 3
 DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS = 7
-DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.45
-DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.35
+DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.25
+DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.55
 DEFAULT_CHEAP_SCORE_WEIGHT_DIV = 0.20
 DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS = 126
 DEFAULT_ENABLE_SBV_TIER_OVERLAY = True
 DEFAULT_SBV_TIER3_THRESHOLD = 0.0272
 DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD = 0.0139
+DEFAULT_SBV_VALID_COVERAGE_THRESHOLD = 0.90
+DEFAULT_TIER1_GROWTH_ROE_MIN = 10.0
+DEFAULT_TIER1_GROWTH_BPS_MIN = 0.0
 
 
 def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
@@ -403,6 +406,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     if financial_df is None or financial_df.empty:
         output = price_df.copy()
         output["financial_risk"] = False
+        output["roe"] = np.nan
+        output["bps"] = np.nan
         output["per"] = np.nan
         output["pbr"] = np.nan
         output["div_yield"] = np.nan
@@ -416,6 +421,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
 
     financial_base = financial_df.copy()
     for col in [
+        "roe",
+        "bps",
         "per",
         "pbr",
         "div_yield",
@@ -437,6 +444,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
         ].copy()
         if stock_financials.empty:
             stock_prices["financial_risk"] = False
+            stock_prices["roe"] = np.nan
+            stock_prices["bps"] = np.nan
             stock_prices["per"] = np.nan
             stock_prices["pbr"] = np.nan
             stock_prices["div_yield"] = np.nan
@@ -591,6 +600,9 @@ def build_daily_stock_tier_frame(
     enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
     sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
     sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
+    sbv_valid_coverage_threshold=DEFAULT_SBV_VALID_COVERAGE_THRESHOLD,
+    tier1_growth_roe_min=DEFAULT_TIER1_GROWTH_ROE_MIN,
+    tier1_growth_bps_min=DEFAULT_TIER1_GROWTH_BPS_MIN,
 ):
     if price_df is None or price_df.empty:
         return pd.DataFrame(
@@ -658,15 +670,26 @@ def build_daily_stock_tier_frame(
         lambda reason: _append_reason(reason, "financial_risk")
     )
     div_yield = pd.to_numeric(with_financial["div_yield"], errors="coerce")
-    div_non_positive_mask = (
-        (with_financial["tier"] == 1)
-        & div_yield.notna()
-        & (div_yield <= 0)
+    roe = pd.to_numeric(with_financial["roe"], errors="coerce")
+    bps = pd.to_numeric(with_financial["bps"], errors="coerce")
+    quality_pass_mask = (
+        (div_yield > 0)
+        & (roe >= float(tier1_growth_roe_min))
+        & (bps > float(tier1_growth_bps_min))
     )
-    with_financial.loc[div_non_positive_mask, "tier"] = 2
-    with_financial.loc[div_non_positive_mask, "reason"] = with_financial.loc[
-        div_non_positive_mask, "reason"
-    ].apply(lambda reason: _append_reason(reason, "div_zero_or_negative"))
+    tier1_quality_fail_mask = (
+        (with_financial["tier"] == 1)
+        & (~quality_pass_mask)
+    )
+    with_financial.loc[tier1_quality_fail_mask, "tier"] = 2
+    with_financial.loc[tier1_quality_fail_mask, "reason"] = with_financial.loc[
+        tier1_quality_fail_mask, "reason"
+    ].apply(
+        lambda reason: _append_reason(
+            _append_reason(reason, "div_zero_or_negative"),
+            "tier1_quality_gate_failed",
+        )
+    )
 
     if enable_investor_v1_write:
         with_financial = _apply_investor_flow_overlay(
@@ -676,14 +699,24 @@ def build_daily_stock_tier_frame(
         )
     if enable_sbv_tier_overlay:
         sbv_ratio = pd.to_numeric(with_financial["sbv_ratio"], errors="coerce")
-        sbv_tier3_mask = sbv_ratio.notna() & (sbv_ratio >= float(sbv_tier3_threshold))
+        sbv_coverage_by_date = sbv_ratio.notna().groupby(with_financial["date"]).mean()
+        sbv_valid_dates = sbv_coverage_by_date[
+            sbv_coverage_by_date >= float(sbv_valid_coverage_threshold)
+        ].index
+        sbv_valid_day_mask = with_financial["date"].isin(sbv_valid_dates)
+        sbv_tier3_mask = (
+            sbv_valid_day_mask
+            & sbv_ratio.notna()
+            & (sbv_ratio >= float(sbv_tier3_threshold))
+        )
         with_financial.loc[sbv_tier3_mask, "tier"] = 3
         with_financial.loc[sbv_tier3_mask, "reason"] = with_financial.loc[
             sbv_tier3_mask, "reason"
         ].apply(lambda reason: _append_reason(reason, "sbv_ratio_extreme"))
 
         sbv_tier1_demote_mask = (
-            (with_financial["tier"] == 1)
+            sbv_valid_day_mask
+            & (with_financial["tier"] == 1)
             & sbv_ratio.notna()
             & (sbv_ratio >= float(sbv_tier1_demote_threshold))
         )
@@ -830,6 +863,9 @@ def run_daily_stock_tier_batch(
     enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
     sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
     sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
+    sbv_valid_coverage_threshold=DEFAULT_SBV_VALID_COVERAGE_THRESHOLD,
+    tier1_growth_roe_min=DEFAULT_TIER1_GROWTH_ROE_MIN,
+    tier1_growth_bps_min=DEFAULT_TIER1_GROWTH_BPS_MIN,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -914,6 +950,9 @@ def run_daily_stock_tier_batch(
         enable_sbv_tier_overlay=enable_sbv_tier_overlay,
         sbv_tier3_threshold=sbv_tier3_threshold,
         sbv_tier1_demote_threshold=sbv_tier1_demote_threshold,
+        sbv_valid_coverage_threshold=sbv_valid_coverage_threshold,
+        tier1_growth_roe_min=tier1_growth_roe_min,
+        tier1_growth_bps_min=tier1_growth_bps_min,
     )
     if calculated.empty:
         return {
