@@ -29,6 +29,29 @@ from .price_policy import resolve_price_policy
 
 logger = logging.getLogger(__name__)
 
+_STRATEGY_PARAM_KEYS = {
+    "max_stocks",
+    "order_investment_ratio",
+    "additional_buy_drop_rate",
+    "sell_profit_rate",
+    "additional_buy_priority",
+    "cooldown_period_days",
+    "stop_loss_rate",
+    "max_splits_limit",
+    "max_inactivity_period",
+    "candidate_source_mode",
+    "use_weekly_alpha_gate",
+    "min_liquidity_20d_avg_value",
+    "min_tier12_coverage_ratio",
+    "tier_hysteresis_mode",
+}
+
+_EXECUTION_PARAM_KEYS = {
+    "buy_commission_rate",
+    "sell_commission_rate",
+    "sell_tax_rate",
+}
+
 def run_backtest_from_config(config: dict) -> dict:
     # When called from non-CLI entrypoints (e.g., Flask), logging may not be configured.
     # We only auto-configure if root has no handlers to avoid duplicating external setups.
@@ -66,11 +89,22 @@ def run_backtest_from_config(config: dict) -> dict:
         adjusted_price_gate_start_date=adjusted_gate,
     )
     
-    strategy_params = {**strategy_params_from_config, 'backtest_start_date': start_date, 'backtest_end_date': end_date}
+    strategy_params = {
+        k: v
+        for k, v in strategy_params_from_config.items()
+        if k in _STRATEGY_PARAM_KEYS
+    }
+    strategy_params.update({"backtest_start_date": start_date, "backtest_end_date": end_date})
     strategy = MagicSplitStrategy(**strategy_params)
     
     portfolio = Portfolio(initial_cash=initial_cash, start_date=start_date, end_date=end_date)
-    execution_handler = BasicExecutionHandler(**execution_params)
+    execution_handler = BasicExecutionHandler(
+        **{
+            k: v
+            for k, v in execution_params.items()
+            if k in _EXECUTION_PARAM_KEYS
+        }
+    )
 
     engine = BacktestEngine(
         start_date=start_date, end_date=end_date,

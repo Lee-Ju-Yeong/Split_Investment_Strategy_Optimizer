@@ -152,6 +152,7 @@ results/
 # Config
 config.ini
 config/config.yaml
+config/config_best_debug.yaml
 
 # Data
 data/

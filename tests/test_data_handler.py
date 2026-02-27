@@ -121,6 +121,23 @@ class TestDataHandler(unittest.TestCase):
         self.assertIn("dsp.adj_close AS close_price", query)
 
     @patch('pandas.read_sql')
+    def test_load_stock_data_adjusted_mode_ignores_pre_start_null_ohlc(self, mock_read_sql):
+        mock_read_sql.return_value = pd.DataFrame(
+            {
+                'date': pd.to_datetime(['2006-12-19', '2014-01-03']),
+                'open_price': [float('nan'), 12000.0],
+                'high_price': [float('nan'), 12100.0],
+                'low_price': [float('nan'), 11900.0],
+                'close_price': [float('nan'), 12050.0],
+            }
+        )
+
+        stock_data = self.data_handler.load_stock_data('000060', '2014-01-03', '2014-01-03')
+
+        self.assertEqual(list(stock_data.index), [pd.Timestamp('2014-01-03')])
+        self.assertFalse(stock_data.isna().any().any())
+
+    @patch('pandas.read_sql')
     def test_load_stock_data_cache_key_is_normalized(self, mock_read_sql):
         d = {
             'date': pd.to_datetime(['2022-01-03', '2022-01-04', '2022-01-05']),

@@ -42,9 +42,21 @@ class BacktestEngine:
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
         entry_stats = {
             "entry_opportunity_days": 0,
+            "candidate_eval_days": 0,
             "empty_entry_days": 0,
             "tier1_source_days": 0,
             "tier2_fallback_days": 0,
+            "tier2_blocked_days": 0,
+            "no_candidates_days": 0,
+            "no_signal_date_days": 0,
+            "lookup_error_days": 0,
+            "source_missing_days": 0,
+            "unknown_source_days": 0,
+            "metrics_cast_error_count": 0,
+            "raw_candidate_count_sum": 0,
+            "active_candidate_count_sum": 0,
+            "ranked_candidate_count_sum": 0,
+            "selected_signal_count_sum": 0,
         }
 
         debug_ticker = self.debug_ticker
@@ -90,14 +102,58 @@ class BacktestEngine:
             new_entry_signals = self.strategy.generate_new_entry_signals(current_date, self.portfolio, self.data_handler, trading_dates, i)
             entry_context = getattr(self.strategy, "last_entry_context", {}) or {}
             if available_slots_before_entry > 0:
+                def _safe_int(value):
+                    if value is None:
+                        return 0, False
+                    try:
+                        if pd.isna(value):
+                            return 0, False
+                    except Exception:
+                        pass
+                    try:
+                        return int(value), False
+                    except (TypeError, ValueError):
+                        return 0, True
+
                 entry_stats["entry_opportunity_days"] += 1
                 if not new_entry_signals:
                     entry_stats["empty_entry_days"] += 1
                 tier_source = str(entry_context.get("tier_source", ""))
                 if tier_source.startswith("TIER_1"):
                     entry_stats["tier1_source_days"] += 1
-                if tier_source.startswith("TIER_2_FALLBACK"):
+                    entry_stats["candidate_eval_days"] += 1
+                elif tier_source.startswith("TIER_2_FALLBACK"):
                     entry_stats["tier2_fallback_days"] += 1
+                    entry_stats["candidate_eval_days"] += 1
+                    if tier_source.endswith("BLOCKED_BY_HYSTERESIS"):
+                        entry_stats["tier2_blocked_days"] += 1
+                elif tier_source.startswith("NO_CANDIDATES"):
+                    entry_stats["no_candidates_days"] += 1
+                    entry_stats["candidate_eval_days"] += 1
+                elif tier_source.startswith("NO_SIGNAL_DATE"):
+                    entry_stats["no_signal_date_days"] += 1
+                elif tier_source.startswith("CANDIDATE_LOOKUP_ERROR"):
+                    entry_stats["lookup_error_days"] += 1
+                elif tier_source.startswith("CANDIDATE_SOURCE_MISSING"):
+                    entry_stats["source_missing_days"] += 1
+                elif tier_source.startswith("NO_AVAILABLE_SLOTS"):
+                    # available_slots_before_entry > 0 에서는 발생하지 않아야 하는 방어용 카운트
+                    entry_stats["unknown_source_days"] += 1
+                elif not tier_source:
+                    entry_stats["unknown_source_days"] += 1
+                else:
+                    entry_stats["unknown_source_days"] += 1
+                raw_count, raw_cast_error = _safe_int(entry_context.get("raw_candidate_count", 0))
+                active_count, active_cast_error = _safe_int(entry_context.get("active_candidate_count", 0))
+                ranked_count, ranked_cast_error = _safe_int(entry_context.get("ranked_candidate_count", 0))
+                selected_count, selected_cast_error = _safe_int(entry_context.get("selected_count", 0))
+                entry_stats["raw_candidate_count_sum"] += raw_count
+                entry_stats["active_candidate_count_sum"] += active_count
+                entry_stats["ranked_candidate_count_sum"] += ranked_count
+                entry_stats["selected_signal_count_sum"] += selected_count
+                entry_stats["metrics_cast_error_count"] += int(
+                    raw_cast_error or active_cast_error or ranked_cast_error or selected_cast_error
+                )
             if new_entry_signals:
                 for signal in new_entry_signals:
                     self.execution_handler.execute_order(signal, self.portfolio, self.data_handler, i)
@@ -171,12 +227,75 @@ class BacktestEngine:
             if opportunity_days > 0
             else 0.0
         )
+        tier2_blocked_rate = (
+            float(entry_stats["tier2_blocked_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        no_candidates_rate = (
+            float(entry_stats["no_candidates_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        no_signal_date_rate = (
+            float(entry_stats["no_signal_date_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        source_lookup_error_rate = (
+            float(entry_stats["lookup_error_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        source_missing_rate = (
+            float(entry_stats["source_missing_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        source_unknown_rate = (
+            float(entry_stats["unknown_source_days"]) / float(opportunity_days)
+            if opportunity_days > 0
+            else 0.0
+        )
+        candidate_eval_days = int(entry_stats["candidate_eval_days"])
+        avg_raw_candidates = (
+            float(entry_stats["raw_candidate_count_sum"]) / float(candidate_eval_days)
+            if candidate_eval_days > 0
+            else 0.0
+        )
+        avg_active_candidates = (
+            float(entry_stats["active_candidate_count_sum"]) / float(candidate_eval_days)
+            if candidate_eval_days > 0
+            else 0.0
+        )
+        avg_ranked_candidates = (
+            float(entry_stats["ranked_candidate_count_sum"]) / float(candidate_eval_days)
+            if candidate_eval_days > 0
+            else 0.0
+        )
+        avg_selected_signals = (
+            float(entry_stats["selected_signal_count_sum"]) / float(candidate_eval_days)
+            if candidate_eval_days > 0
+            else 0.0
+        )
         self.last_run_metrics = {
             "entry_opportunity_days": int(opportunity_days),
+            "candidate_eval_days": candidate_eval_days,
             "empty_entry_days": int(entry_stats["empty_entry_days"]),
             "empty_entry_day_rate": round(empty_entry_rate, 4),
             "tier1_coverage": round(tier1_coverage, 4),
             "tier2_fallback_rate": round(tier2_fallback_rate, 4),
+            "tier2_blocked_rate": round(tier2_blocked_rate, 4),
+            "no_candidates_rate": round(no_candidates_rate, 4),
+            "no_signal_date_rate": round(no_signal_date_rate, 4),
+            "source_lookup_error_rate": round(source_lookup_error_rate, 4),
+            "source_missing_rate": round(source_missing_rate, 4),
+            "source_unknown_rate": round(source_unknown_rate, 4),
+            "metrics_cast_error_count": int(entry_stats["metrics_cast_error_count"]),
+            "avg_raw_candidates": round(avg_raw_candidates, 2),
+            "avg_active_candidates": round(avg_active_candidates, 2),
+            "avg_ranked_candidates": round(avg_ranked_candidates, 2),
+            "avg_selected_signals": round(avg_selected_signals, 2),
         }
         setattr(self.portfolio, "run_metrics", self.last_run_metrics)
         self.logger.info("[EntryMetrics] %s", self.last_run_metrics)
