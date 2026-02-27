@@ -6,9 +6,12 @@ This module contains the functions for generating the signals for the Magic Spli
 
 from abc import ABC, abstractmethod
 import math
+import logging
 import pandas as pd
 import numpy as np
 import uuid
+
+logger = logging.getLogger(__name__)
 
 class Position:
     """ 포지션 정보를 저장하는 데이터 클래스 """
@@ -88,6 +91,15 @@ class MagicSplitStrategy(Strategy):
         self.investment_per_order = 0
         self.previous_month = -1
         self.cooldown_tracker = {}  # 매도된 종목 추적
+        self.last_entry_context = {
+            "signal_date": None,
+            "tier_source": "UNINITIALIZED",
+            "raw_candidate_count": 0,
+            "active_candidate_count": 0,
+            "ranked_candidate_count": 0,
+            "selected_count": 0,
+            "strategy_candidate_mode": self._resolve_candidate_mode(),
+        }
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -96,11 +108,32 @@ class MagicSplitStrategy(Strategy):
 
     def _resolve_candidate_mode(self):
         if self.candidate_source_mode != "tier":
-            print(
+            logger.warning(
                 f"[Warning] candidate_source_mode='{self.candidate_source_mode}' is deprecated. "
                 "Forcing 'tier' (A-path)."
             )
         return "tier"
+
+    @staticmethod
+    def _build_entry_context(
+        signal_date,
+        tier_source,
+        *,
+        strategy_candidate_mode,
+        raw_candidate_count=0,
+        active_candidate_count=0,
+        ranked_candidate_count=0,
+        selected_count=0,
+    ):
+        return {
+            "signal_date": signal_date,
+            "tier_source": str(tier_source),
+            "raw_candidate_count": int(raw_candidate_count),
+            "active_candidate_count": int(active_candidate_count),
+            "ranked_candidate_count": int(ranked_candidate_count),
+            "selected_count": int(selected_count),
+            "strategy_candidate_mode": strategy_candidate_mode,
+        }
 
     @staticmethod
     def _get_tick_size(price):
@@ -145,6 +178,12 @@ class MagicSplitStrategy(Strategy):
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)
+        resolved_mode = self._resolve_candidate_mode()
+        self.last_entry_context = self._build_entry_context(
+            signal_date,
+            "NO_SIGNAL_DATE" if signal_date is None else "UNSET",
+            strategy_candidate_mode=resolved_mode,
+        )
         if signal_date is None:
             return buy_signals
 
@@ -164,12 +203,13 @@ class MagicSplitStrategy(Strategy):
             candidate_codes = []
             
             # --- [Issue #67] Candidate Source Logic Start ---
-            _ = self._resolve_candidate_mode()
             get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
             get_tier_candidates_pit = getattr(data_handler, "get_candidates_with_tier_fallback_pit", None)
             if callable(get_tier_candidates_pit) or callable(get_tier_candidates):
                 try:
                     tier_result = None
+                    used_tier = ""
+                    raw_candidate_count = 0
                     if callable(get_tier_candidates_pit):
                         get_tier_candidates_pit_gated = getattr(
                             data_handler,
@@ -187,21 +227,45 @@ class MagicSplitStrategy(Strategy):
                     if not (isinstance(tier_result, tuple) and len(tier_result) == 2):
                         tier_result = get_tier_candidates(signal_date)
                     tier_codes, used_tier = tier_result
+                    raw_candidate_count = len(tier_codes)
                     candidate_codes = tier_codes
                     if self.strict_hysteresis_enabled and used_tier.startswith("TIER_2_FALLBACK"):
                         candidate_codes = []
+                        used_tier = f"{used_tier}_BLOCKED_BY_HYSTERESIS"
 
                     from tqdm import tqdm
                     if used_tier.startswith("TIER_2_FALLBACK"):
+                        blocked_suffix = (
+                            " [blocked by strict_hysteresis_v1]"
+                            if used_tier.endswith("BLOCKED_BY_HYSTERESIS")
+                            else ""
+                        )
                         tqdm.write(
-                            f"[Strategy] {current_date.date()} | Fallback: Tier 1 (0) -> Tier 2 ({len(candidate_codes)})"
+                            f"[Strategy] {current_date.date()} | "
+                            f"Fallback: Tier 1 (0) -> Tier 2 ({raw_candidate_count}){blocked_suffix}"
                         )
                 except Exception as exc:
-                    print(f"[Warning] Tier candidate lookup failed ({exc}). Returning empty candidate set.")
+                    logger.warning(
+                        "Tier candidate lookup failed (%s). Returning empty candidate set.",
+                        type(exc).__name__,
+                    )
                     candidate_codes = []
+                    raw_candidate_count = 0
+                    used_tier = "CANDIDATE_LOOKUP_ERROR"
+                self.last_entry_context = self._build_entry_context(
+                    signal_date,
+                    used_tier,
+                    strategy_candidate_mode=resolved_mode,
+                    raw_candidate_count=raw_candidate_count,
+                )
             else:
-                print("[Warning] get_candidates_with_tier_fallback missing. Returning empty candidate set.")
+                logger.warning("get_candidates_with_tier_fallback missing. Returning empty candidate set.")
                 candidate_codes = []
+                self.last_entry_context = self._build_entry_context(
+                    signal_date,
+                    "CANDIDATE_SOURCE_MISSING",
+                    strategy_candidate_mode=resolved_mode,
+                )
             # --- [Issue #67] Logic End ---
             
             active_candidates = []
@@ -215,6 +279,7 @@ class MagicSplitStrategy(Strategy):
                 if code in portfolio.positions or is_in_cooldown:
                     continue
                 active_candidates.append(code)
+            self.last_entry_context["active_candidate_count"] = len(active_candidates)
             
             ranked_candidates = []
             for ticker in active_candidates:
@@ -256,6 +321,7 @@ class MagicSplitStrategy(Strategy):
                         "atr_q": atr_q,
                     }
                 )
+            self.last_entry_context["ranked_candidate_count"] = len(ranked_candidates)
 
             # GPU와 동일한 후보 정렬 계약:
             # cheap_score_q desc -> atr_q desc -> market_cap_q desc -> ticker asc
@@ -319,6 +385,13 @@ class MagicSplitStrategy(Strategy):
                     )
                     temp_cash -= total_cost
                     num_new_entries += 1
+            self.last_entry_context["selected_count"] = len(buy_signals)
+        else:
+            self.last_entry_context = self._build_entry_context(
+                signal_date,
+                "NO_AVAILABLE_SLOTS",
+                strategy_candidate_mode=resolved_mode,
+            )
 
         # 신규 매수 신호 내에서의 정렬
         buy_signals.sort(key=lambda s: (s["priority_group"], s["sort_metric"], s["ticker"]))

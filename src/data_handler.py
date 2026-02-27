@@ -188,21 +188,29 @@ class DataHandler:
             if df.empty:
                 return df
 
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            start_dt = pd.to_datetime(start_date_str)
+            end_dt = pd.to_datetime(end_date_str)
+            df_filtered = df.loc[start_dt:end_dt].copy()
+            if df_filtered.empty:
+                return df_filtered
+
             if self.use_adjusted_prices:
-                missing_price_mask = df[["open_price", "high_price", "low_price", "close_price"]].isna().any(axis=1)
+                missing_price_mask = df_filtered[
+                    ["open_price", "high_price", "low_price", "close_price"]
+                ].isna().any(axis=1)
                 if missing_price_mask.any():
-                    first_missing_date = pd.to_datetime(df.loc[missing_price_mask, "date"].iloc[0]).date()
+                    first_missing_date = pd.to_datetime(
+                        df_filtered.loc[missing_price_mask, :].index[0]
+                    ).date()
                     raise ValueError(
                         "Adjusted price mode found NULL adjusted OHLC values "
                         f"for ticker={ticker} at date={first_missing_date}. "
                         f"Backtest window must satisfy date >= {self.adjusted_price_gate_start_date}."
                     )
 
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            
-            # 실제 백테스팅 기간 데이터만 필터링하여 반환
-            df_filtered = df.loc[start_date_str:end_date_str].copy()
             return df_filtered
         finally:
             conn.close()

@@ -163,6 +163,9 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         _, kwargs = mock_preload_all.call_args
         self.assertTrue(kwargs["use_adjusted_prices"])
         self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
+        run_call = mock_run_gpu.call_args
+        self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
+        self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
     @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
@@ -175,7 +178,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
     @patch("src.optimization.gpu.parameter_simulation._get_context")
-    def test_find_optimal_parameters_preloads_weekly_in_weekly_mode(
+    def test_find_optimal_parameters_coerces_weekly_mode_to_tier_path(
         self,
         mock_get_context,
         mock_gpu_deps,
@@ -193,6 +196,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_core_deps.return_value = self._fake_core_deps()
         mock_preload_all.return_value = self._fake_all_data_gpu()
         mock_preload_weekly.return_value = _FakeWeeklyFrame(mem_bytes=128)
+        mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
         mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
             (param_batch.shape[0], 2), dtype=np.float32
@@ -201,12 +205,15 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
 
-        mock_preload_weekly.assert_called_once()
-        mock_build_empty_weekly.assert_not_called()
+        mock_preload_weekly.assert_not_called()
+        mock_build_empty_weekly.assert_called_once()
         mock_preload_all.assert_called_once()
         _, kwargs = mock_preload_all.call_args
         self.assertTrue(kwargs["use_adjusted_prices"])
         self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
+        run_call = mock_run_gpu.call_args
+        self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
+        self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
 
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")

@@ -90,6 +90,17 @@ def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_ga
     )
 
 
+def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate):
+    requested_mode = str(candidate_source_mode).strip()
+    _ = _coerce_bool(use_weekly_alpha_gate)
+    if requested_mode != "tier":
+        print(
+            f"[Warning] candidate_source_mode='{requested_mode}' is deprecated. "
+            "Forcing 'tier' (A-path) for CPU/GPU parity."
+        )
+    return "tier", False
+
+
 # -----------------------------------------------------------------------------
 # Worker: find_optimal_parameters
 # -----------------------------------------------------------------------------
@@ -111,10 +122,12 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
-    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "tier")
-    execution_params["use_weekly_alpha_gate"] = _coerce_bool(
-        strategy_params.get("use_weekly_alpha_gate", False)
+    normalized_mode, normalized_weekly_gate = _normalize_candidate_source_mode(
+        strategy_params.get("candidate_source_mode", "tier"),
+        strategy_params.get("use_weekly_alpha_gate", False),
     )
+    execution_params["candidate_source_mode"] = normalized_mode
+    execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
     execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
     price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_params)
     validate_backtest_window_for_price_policy(
