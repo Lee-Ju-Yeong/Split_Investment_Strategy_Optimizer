@@ -84,13 +84,41 @@ class TestDailyStockTierBatch(unittest.TestCase):
             )
         return pd.DataFrame(rows)
 
+    def _build_quality_financial_df(self):
+        dates = pd.date_range("2024-01-01", periods=5, freq="D")
+        rows = []
+        for date_value in dates:
+            rows.append(
+                {
+                    "stock_code": "A0001",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "per": 10.0,
+                    "pbr": 1.0,
+                    "div_yield": 1.0,
+                }
+            )
+            rows.append(
+                {
+                    "stock_code": "A0002",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "per": 10.0,
+                    "pbr": 1.0,
+                    "div_yield": 1.0,
+                }
+            )
+        return pd.DataFrame(rows)
+
     def test_investor_overlay_disabled_keeps_tier2(self):
         output = build_daily_stock_tier_frame(
             price_df=self._build_price_df(),
-            financial_df=pd.DataFrame(),
+            financial_df=self._build_quality_financial_df(),
             investor_df=self._build_investor_df(),
             lookback_days=2,
-            financial_lag_days=45,
+            financial_lag_days=0,
             danger_liquidity=300_000_000,
             prime_liquidity=1_000_000_000,
             enable_investor_v1_write=False,
@@ -105,10 +133,10 @@ class TestDailyStockTierBatch(unittest.TestCase):
     def test_investor_overlay_applies_only_to_tier2(self):
         output = build_daily_stock_tier_frame(
             price_df=self._build_price_df(),
-            financial_df=pd.DataFrame(),
+            financial_df=self._build_quality_financial_df(),
             investor_df=self._build_investor_df(),
             lookback_days=2,
-            financial_lag_days=45,
+            financial_lag_days=0,
             danger_liquidity=300_000_000,
             prime_liquidity=1_000_000_000,
             enable_investor_v1_write=True,
@@ -208,9 +236,52 @@ class TestDailyStockTierBatch(unittest.TestCase):
             (output["stock_code"] == "A0010") & (output["date"] == "2024-01-05")
         ].iloc[0]
         self.assertEqual(latest["tier"], 2)
-        self.assertIn("div_zero_or_negative", str(latest["reason"]))
+        self.assertIn("tier1_quality_gate_failed", str(latest["reason"]))
         self.assertIn("cheap_score", output.columns)
         self.assertIn("cheap_score_confidence", output.columns)
+
+    def test_quality_gate_requires_dividend_and_roe_and_bps(self):
+        dates = pd.date_range("2024-01-01", periods=5, freq="D")
+        price_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0011",
+                    "date": date_value,
+                    "close_price": 100,
+                    "volume": 20_000_000,
+                }
+                for date_value in dates
+            ]
+        )
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0011",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "per": 10.0 + idx,
+                    "pbr": 1.0 + (idx * 0.1),
+                    "div_yield": 0.0,
+                }
+                for idx, date_value in enumerate(dates)
+            ]
+        )
+        output = build_daily_stock_tier_frame(
+            price_df=price_df,
+            financial_df=financial_df,
+            investor_df=pd.DataFrame(),
+            lookback_days=2,
+            financial_lag_days=0,
+            danger_liquidity=300_000_000,
+            prime_liquidity=1_000_000_000,
+            cheap_score_min_obs_days=2,
+        )
+        latest = output[
+            (output["stock_code"] == "A0011") & (output["date"] == "2024-01-05")
+        ].iloc[0]
+        self.assertEqual(latest["tier"], 2)
+        self.assertIn("tier1_quality_gate_failed", str(latest["reason"]))
 
     def test_sbv_ratio_elevated_demotes_tier1_to_tier2(self):
         dates = pd.date_range("2024-01-01", periods=5, freq="D")
@@ -221,6 +292,18 @@ class TestDailyStockTierBatch(unittest.TestCase):
                     "date": date_value,
                     "close_price": 100,
                     "volume": 20_000_000,
+                }
+                for date_value in dates
+            ]
+        )
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0020",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "div_yield": 1.0,
                 }
                 for date_value in dates
             ]
@@ -239,7 +322,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
 
         output = build_daily_stock_tier_frame(
             price_df=price_df,
-            financial_df=pd.DataFrame(),
+            financial_df=financial_df,
             investor_df=pd.DataFrame(),
             short_balance_df=short_balance_df,
             lookback_days=2,
@@ -267,6 +350,18 @@ class TestDailyStockTierBatch(unittest.TestCase):
                 for date_value in dates
             ]
         )
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0030",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "div_yield": 1.0,
+                }
+                for date_value in dates
+            ]
+        )
         short_balance_df = pd.DataFrame(
             [
                 {
@@ -281,7 +376,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
 
         output = build_daily_stock_tier_frame(
             price_df=price_df,
-            financial_df=pd.DataFrame(),
+            financial_df=financial_df,
             investor_df=pd.DataFrame(),
             short_balance_df=short_balance_df,
             lookback_days=2,
@@ -295,6 +390,77 @@ class TestDailyStockTierBatch(unittest.TestCase):
         self.assertEqual(latest["tier"], 3)
         self.assertIn("sbv_ratio_extreme", str(latest["reason"]))
         self.assertGreater(float(latest["sbv_ratio"]), 0.0272)
+
+    def test_sbv_overlay_skips_when_daily_coverage_is_low(self):
+        dates = pd.date_range("2024-01-01", periods=5, freq="D")
+        price_rows = []
+        for date_value in dates:
+            price_rows.append(
+                {
+                    "stock_code": "A0040",
+                    "date": date_value,
+                    "close_price": 100,
+                    "volume": 20_000_000,
+                }
+            )
+            price_rows.append(
+                {
+                    "stock_code": "A0041",
+                    "date": date_value,
+                    "close_price": 100,
+                    "volume": 20_000_000,
+                }
+            )
+        price_df = pd.DataFrame(price_rows)
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0040",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "div_yield": 1.0,
+                }
+                for date_value in dates
+            ]
+            + [
+                {
+                    "stock_code": "A0041",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "div_yield": 1.0,
+                }
+                for date_value in dates
+            ]
+        )
+        short_balance_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0040",
+                    "date": date_value,
+                    "short_balance_value": 30_000_000,
+                    "market_cap": 1_000_000_000,
+                }
+                for date_value in dates
+            ]
+        )
+        output = build_daily_stock_tier_frame(
+            price_df=price_df,
+            financial_df=financial_df,
+            investor_df=pd.DataFrame(),
+            short_balance_df=short_balance_df,
+            lookback_days=2,
+            financial_lag_days=0,
+            danger_liquidity=300_000_000,
+            prime_liquidity=1_000_000_000,
+            sbv_valid_coverage_threshold=0.9,
+        )
+        latest = output[
+            (output["stock_code"] == "A0040") & (output["date"] == "2024-01-05")
+        ].iloc[0]
+        self.assertEqual(latest["tier"], 1)
+        self.assertNotIn("sbv_ratio_extreme", str(latest["reason"]))
 
     def test_upsert_daily_stock_tier_uses_chunked_batches(self):
         conn = self._FakeConn()
