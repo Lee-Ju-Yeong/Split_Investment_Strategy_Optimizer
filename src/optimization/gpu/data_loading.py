@@ -69,8 +69,93 @@ def _normalize_loaded_types(gdf):
     return gdf
 
 
-def _build_price_select_sql(use_adjusted_prices: bool) -> str:
+def _validate_adjusted_ohlc_not_null(gdf, adjusted_gate_start_date: str):
+    null_counts = {}
+    for col in ("open_price", "high_price", "low_price", "close_price"):
+        if col not in gdf.columns:
+            continue
+        null_counts[col] = int(gdf[col].isna().sum())
+    if any(count > 0 for count in null_counts.values()):
+        first_ticker = "unknown"
+        first_date = "unknown"
+        try:
+            _, pd = _ensure_core_deps()
+            missing_mask = gdf[["open_price", "high_price", "low_price", "close_price"]].isna().any(axis=1)
+            missing_rows = gdf[missing_mask].head(1)
+            if hasattr(missing_rows, "to_pandas"):
+                first_row_df = missing_rows.reset_index().to_pandas()
+            else:
+                first_row_df = missing_rows.reset_index()
+            if not first_row_df.empty:
+                first_ticker = str(first_row_df.iloc[0].get("ticker", "unknown"))
+                date_value = first_row_df.iloc[0].get("date")
+                if pd.notna(date_value):
+                    first_date = str(pd.to_datetime(date_value).date())
+        except Exception:
+            pass
+        raise ValueError(
+            "Adjusted price mode found NULL adjusted OHLC values in GPU preload. "
+            f"ticker={first_ticker}, date={first_date}. "
+            f"Backtest window must satisfy date >= {adjusted_gate_start_date}. "
+            f"null_counts={null_counts}"
+        )
+
+
+@lru_cache(maxsize=4)
+def _has_stored_adj_ohlc_columns(engine_url: str) -> bool:
+    _, pd = _ensure_core_deps()
+    sql_engine = _get_sql_engine(engine_url)
+    try:
+        df = pd.read_sql(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'DailyStockPrice'
+              AND COLUMN_NAME IN ('adj_open', 'adj_high', 'adj_low')
+            """,
+            sql_engine,
+        )
+        if df.empty:
+            return False
+        return int(df.iloc[0]["cnt"]) == 3
+    except Exception:
+        return False
+
+
+def _build_price_select_sql(use_adjusted_prices: bool, *, use_stored_adj_ohlc: bool = False) -> str:
     if use_adjusted_prices:
+        if use_stored_adj_ohlc:
+            return """
+                CAST(
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_open IS NULL THEN dsp.open_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_open - (dsp.open_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.open_price * dsp.adj_ratio
+                        ELSE dsp.adj_open
+                    END AS FLOAT
+                ) AS open_price,
+                CAST(
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_high IS NULL THEN dsp.high_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_high - (dsp.high_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.high_price * dsp.adj_ratio
+                        ELSE dsp.adj_high
+                    END AS FLOAT
+                ) AS high_price,
+                CAST(
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_low IS NULL THEN dsp.low_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_low - (dsp.low_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.low_price * dsp.adj_ratio
+                        ELSE dsp.adj_low
+                    END AS FLOAT
+                ) AS low_price,
+                CAST(dsp.adj_close AS FLOAT) AS close_price
+            """
         return """
             CAST(
                 CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END
@@ -103,12 +188,23 @@ def preload_all_data_to_gpu(
     adjusted_price_gate_start_date="2013-11-20",
 ):
     _ensure_gpu_deps()
+    _, pd = _ensure_core_deps()
 
     print("⏳ Loading all stock data into GPU memory...")
     start_time = time.time()
-    price_select_sql = _build_price_select_sql(bool(use_adjusted_prices))
+    start_date_sql = pd.to_datetime(start_date).strftime("%Y-%m-%d")
+    end_date_sql = pd.to_datetime(end_date).strftime("%Y-%m-%d")
+    adjusted_gate_sql = pd.to_datetime(adjusted_price_gate_start_date).strftime("%Y-%m-%d")
+
+    has_stored_adj_ohlc = (
+        _has_stored_adj_ohlc_columns(str(engine)) if use_adjusted_prices else False
+    )
+    price_select_sql = _build_price_select_sql(
+        bool(use_adjusted_prices),
+        use_stored_adj_ohlc=has_stored_adj_ohlc,
+    )
     adjusted_gate_clause = (
-        f" AND dsp.date >= '{adjusted_price_gate_start_date}'"
+        f" AND dsp.date >= '{adjusted_gate_sql}'"
         if use_adjusted_prices
         else ""
     )
@@ -130,12 +226,14 @@ def preload_all_data_to_gpu(
     LEFT JOIN
         DailyStockTier AS dst ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
     WHERE
-        dsp.date BETWEEN '{start_date}' AND '{end_date}'
+        dsp.date BETWEEN '{start_date_sql}' AND '{end_date_sql}'
         {adjusted_gate_clause}
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
     gdf = _normalize_loaded_types(gdf)
+    if use_adjusted_prices:
+        _validate_adjusted_ohlc_not_null(gdf, adjusted_gate_sql)
     print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
     return gdf
 

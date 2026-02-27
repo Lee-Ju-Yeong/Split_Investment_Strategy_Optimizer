@@ -121,6 +121,31 @@ class TestDataHandler(unittest.TestCase):
         self.assertIn("dsp.adj_close AS close_price", query)
 
     @patch('pandas.read_sql')
+    def test_load_stock_data_adjusted_query_uses_stored_adj_ohlc_with_stale_guard(self, mock_read_sql):
+        mock_read_sql.return_value = pd.DataFrame(
+            {
+                'date': pd.to_datetime(['2022-01-03']),
+                'open_price': [100.0],
+                'high_price': [101.0],
+                'low_price': [99.0],
+                'close_price': [100.0],
+            }
+        )
+        self.data_handler.has_stored_adj_ohlc = True
+        self.data_handler.clear_load_stock_data_cache()
+
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+
+        query = mock_read_sql.call_args.args[0]
+        self.assertIn("CASE", query)
+        self.assertIn("ABS(dsp.adj_open - (dsp.open_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("ABS(dsp.adj_high - (dsp.high_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("ABS(dsp.adj_low - (dsp.low_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("dsp.adj_open", query)
+        self.assertIn("dsp.adj_high", query)
+        self.assertIn("dsp.adj_low", query)
+
+    @patch('pandas.read_sql')
     def test_load_stock_data_adjusted_mode_ignores_pre_start_null_ohlc(self, mock_read_sql):
         mock_read_sql.return_value = pd.DataFrame(
             {

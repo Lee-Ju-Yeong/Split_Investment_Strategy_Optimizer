@@ -118,12 +118,18 @@ def create_tables(conn):
         close_price DECIMAL(20, 5),
         adj_close DECIMAL(20, 5) NULL,
         adj_ratio DECIMAL(20, 10) NULL,
+        adj_open DECIMAL(20, 5) NULL,
+        adj_high DECIMAL(20, 5) NULL,
+        adj_low DECIMAL(20, 5) NULL,
         volume BIGINT,
         PRIMARY KEY (stock_code, date)
     )
     ''')
     ensure_column('DailyStockPrice', 'adj_close', 'DECIMAL(20, 5) NULL')
     ensure_column('DailyStockPrice', 'adj_ratio', 'DECIMAL(20, 10) NULL')
+    ensure_column('DailyStockPrice', 'adj_open', 'DECIMAL(20, 5) NULL')
+    ensure_column('DailyStockPrice', 'adj_high', 'DECIMAL(20, 5) NULL')
+    ensure_column('DailyStockPrice', 'adj_low', 'DECIMAL(20, 5) NULL')
     cur.execute('''
     CREATE TABLE IF NOT EXISTS CalculatedIndicators (
         stock_code VARCHAR(6),

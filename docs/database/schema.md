@@ -37,6 +37,9 @@
 | `close_price` | `DECIMAL(20,5)` |  | 종가 |
 | `adj_close` | `DECIMAL(20,5)` | `NULL` | 수정종가 (파생/보정용) |
 | `adj_ratio` | `DECIMAL(20,10)` | `NULL` | 원종가 대비 수정비율 |
+| `adj_open` | `DECIMAL(20,5)` | `NULL` | 수정시가 (원시가 × 수정비율) |
+| `adj_high` | `DECIMAL(20,5)` | `NULL` | 수정고가 (원고가 × 수정비율) |
+| `adj_low` | `DECIMAL(20,5)` | `NULL` | 수정저가 (원저가 × 수정비율) |
 | `volume` | `BIGINT` |  | 거래량 |
 
 ### 1-4. `CalculatedIndicators`
