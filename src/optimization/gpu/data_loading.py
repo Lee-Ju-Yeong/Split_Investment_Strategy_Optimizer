@@ -8,6 +8,17 @@ import time
 from datetime import timedelta
 from functools import lru_cache
 
+try:
+    from ...universe_policy import (
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+    )
+except ImportError:  # pragma: no cover
+    from universe_policy import (  # type: ignore
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+    )
+
 from .context import _ensure_core_deps, _ensure_gpu_deps
 
 
@@ -202,6 +213,130 @@ def _build_price_select_sql(use_adjusted_prices: bool, *, use_stored_adj_ohlc: b
     """
 
 
+def _build_universe_filter_clause(universe_mode: str, table_alias: str) -> str:
+    normalized = normalize_universe_mode(universe_mode)
+    if not is_survivor_optimistic_mode(normalized):
+        return ""
+    return (
+        " AND NOT EXISTS ("
+        "SELECT 1 FROM TickerUniverseHistory tuh "
+        f"WHERE tuh.stock_code = {table_alias}.stock_code "
+        "AND tuh.delisted_date IS NOT NULL)"
+    )
+
+
+def _build_universe_mask_frame(
+    sql_engine,
+    start_date_sql: str,
+    end_date_sql: str,
+    all_tickers,
+    trading_dates_pd,
+    universe_mode: str,
+):
+    """
+    Build date x ticker PIT universe mask at data-loading stage.
+    strict_pit:
+      - baseline: History active interval (listed<=d<delisted)
+      - override: latest Snapshot(as-of d) when snapshot exists
+    optimistic_survivor:
+      - all True (actual delisted exclusion is already pushed down in SQL filters)
+    """
+    _, pd = _ensure_core_deps()
+    mode = normalize_universe_mode(universe_mode)
+
+    trading_index = pd.DatetimeIndex(trading_dates_pd)
+    ticker_columns = [str(t) for t in all_tickers]
+    mask = pd.DataFrame(False, index=trading_index, columns=ticker_columns, dtype=bool)
+    if mask.empty:
+        return mask
+
+    if is_survivor_optimistic_mode(mode):
+        mask.loc[:, :] = True
+        return mask
+
+    history_query = """
+        SELECT stock_code AS ticker, listed_date, delisted_date
+        FROM TickerUniverseHistory
+        WHERE listed_date <= %s
+          AND (delisted_date IS NULL OR delisted_date > %s)
+    """
+    history_df = pd.read_sql(
+        history_query,
+        sql_engine,
+        params=[end_date_sql, start_date_sql],
+        parse_dates=["listed_date", "delisted_date"],
+    )
+    if not history_df.empty:
+        history_df["ticker"] = history_df["ticker"].astype(str)
+        history_df = history_df[history_df["ticker"].isin(mask.columns)]
+        if not history_df.empty:
+            first_day = trading_index[0]
+            last_day = trading_index[-1]
+            for row in history_df.itertuples(index=False):
+                listed_date = pd.to_datetime(row.listed_date)
+                delisted_date = (
+                    pd.to_datetime(row.delisted_date)
+                    if pd.notna(row.delisted_date)
+                    else last_day + pd.Timedelta(days=1)
+                )
+                start = max(first_day, listed_date)
+                end = min(last_day, delisted_date - pd.Timedelta(days=1))
+                if start > end:
+                    continue
+                day_mask = (mask.index >= start) & (mask.index <= end)
+                mask.loc[day_mask, row.ticker] = True
+
+    snapshot_query = """
+        SELECT snapshot_date AS date, stock_code AS ticker
+        FROM TickerUniverseSnapshot
+        WHERE snapshot_date <= %s
+          AND snapshot_date >= (
+              SELECT COALESCE(MAX(snapshot_date), '1900-01-01')
+              FROM TickerUniverseSnapshot
+              WHERE snapshot_date <= %s
+          )
+        ORDER BY snapshot_date, stock_code
+    """
+    snapshot_df = pd.read_sql(
+        snapshot_query,
+        sql_engine,
+        params=[end_date_sql, start_date_sql],
+        parse_dates=["date"],
+    )
+    if snapshot_df.empty:
+        return mask
+
+    snapshot_df["ticker"] = snapshot_df["ticker"].astype(str)
+    snapshot_df = snapshot_df[snapshot_df["ticker"].isin(mask.columns)]
+    if snapshot_df.empty:
+        return mask
+
+    snapshot_dates = pd.DataFrame(
+        {"snapshot_date": pd.DatetimeIndex(snapshot_df["date"].drop_duplicates().sort_values())}
+    )
+    trade_dates = pd.DataFrame({"trade_date": trading_index})
+    trade_to_snapshot = pd.merge_asof(
+        trade_dates.sort_values("trade_date"),
+        snapshot_dates.sort_values("snapshot_date"),
+        left_on="trade_date",
+        right_on="snapshot_date",
+        direction="backward",
+    )
+    grouped_snapshot = (
+        snapshot_df.groupby("date")["ticker"]
+        .apply(list)
+        .to_dict()
+    )
+    for row in trade_to_snapshot.itertuples(index=False):
+        if pd.isna(row.snapshot_date):
+            continue
+        allowed = grouped_snapshot.get(row.snapshot_date, [])
+        mask.loc[row.trade_date, :] = False
+        if allowed:
+            mask.loc[row.trade_date, allowed] = True
+    return mask
+
+
 def preload_all_data_to_gpu(
     engine,
     start_date,
@@ -209,6 +344,7 @@ def preload_all_data_to_gpu(
     *,
     use_adjusted_prices=False,
     adjusted_price_gate_start_date="2013-11-20",
+    universe_mode="strict_pit",
 ):
     _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
@@ -232,6 +368,7 @@ def preload_all_data_to_gpu(
         if has_tier_flow5_mcap
         else "CAST(NULL AS FLOAT) AS flow5_mcap"
     )
+    universe_filter_clause = _build_universe_filter_clause(universe_mode, "dsp")
     adjusted_gate_clause = (
         f" AND dsp.date >= '{adjusted_gate_sql}'"
         if use_adjusted_prices
@@ -258,6 +395,7 @@ def preload_all_data_to_gpu(
     WHERE
         dsp.date BETWEEN '{start_date_sql}' AND '{end_date_sql}'
         {adjusted_gate_clause}
+        {universe_filter_clause}
     """
     sql_engine = _get_sql_engine(str(engine))
     gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"]).set_index(["ticker", "date"])
@@ -297,7 +435,15 @@ def build_empty_weekly_filtered_gpu():
     return empty_df.set_index("date")
 
 
-def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
+def preload_tier_data_to_tensor(
+    engine,
+    start_date,
+    end_date,
+    all_tickers,
+    trading_dates_pd,
+    *,
+    universe_mode="strict_pit",
+):
     """
     Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.
     Performs forward-fill to ensure PIT compliance (latest <= date).
@@ -310,10 +456,12 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
 
     start_date_str = pd.to_datetime(start_date).strftime("%Y-%m-%d")
     end_date_str = pd.to_datetime(end_date).strftime("%Y-%m-%d")
+    universe_filter_t = _build_universe_filter_clause(universe_mode, "t")
     query = f"""
-        SELECT date, stock_code as ticker, tier
-        FROM DailyStockTier
-        WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
+        SELECT t.date, t.stock_code as ticker, t.tier
+        FROM DailyStockTier t
+        WHERE t.date BETWEEN '{start_date_str}' AND '{end_date_str}'
+          {universe_filter_t}
         UNION ALL
         SELECT t.date, t.stock_code as ticker, t.tier
         FROM DailyStockTier t
@@ -323,6 +471,8 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
             WHERE date < '{start_date_str}'
             GROUP BY stock_code
         ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
+        WHERE 1=1
+          {universe_filter_t}
     """
     sql_engine = _get_sql_engine(str(engine))
     df_pd = pd.read_sql(query, sql_engine, parse_dates=["date"])
@@ -332,6 +482,16 @@ def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, tradi
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
     df_reindexed = _build_tier_frame(df_pd, trading_dates_pd, all_tickers)
+    universe_mask = _build_universe_mask_frame(
+        sql_engine=sql_engine,
+        start_date_sql=start_date_str,
+        end_date_sql=end_date_str,
+        all_tickers=all_tickers,
+        trading_dates_pd=trading_dates_pd,
+        universe_mode=universe_mode,
+    )
+    if not universe_mask.empty:
+        df_reindexed = df_reindexed.where(universe_mask, 0)
     tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
 
     print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")

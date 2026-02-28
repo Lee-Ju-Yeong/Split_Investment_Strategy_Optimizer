@@ -12,6 +12,11 @@ try:
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from .universe_policy import (
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+        resolve_universe_mode,
+    )
 except ImportError:  # pragma: no cover
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
@@ -19,6 +24,11 @@ except ImportError:  # pragma: no cover
         normalize_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
+    )
+    from universe_policy import (  # type: ignore
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+        resolve_universe_mode,
     )
 
 # CompanyInfo 캐시를 직접 관리
@@ -36,6 +46,7 @@ class DataHandler:
         *,
         price_basis=None,
         adjusted_price_gate_start_date=None,
+        universe_mode=None,
         strategy_params=None,
     ):
         self.db_config = db_config
@@ -49,9 +60,15 @@ class DataHandler:
                 adjusted_price_gate_start_date,
                 field_name="adjusted_price_gate_start_date",
             )
+        resolved_universe_mode = resolve_universe_mode(
+            strategy_params=strategy_params,
+            universe_mode=universe_mode,
+        )
         self.price_basis = resolved_price_basis
         self.adjusted_price_gate_start_date = resolved_gate_start_date
         self.use_adjusted_prices = is_adjusted_price_basis(self.price_basis)
+        self.universe_mode = normalize_universe_mode(resolved_universe_mode)
+        self._eventual_delisted_codes_cache = None
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
@@ -193,10 +210,15 @@ class DataHandler:
         ticker_key = str(ticker)
         start_date_str = self._normalize_date_key(start_date)
         end_date_str = self._normalize_date_key(end_date)
-        return self._load_stock_data_cached(ticker_key, start_date_str, end_date_str)
+        return self._load_stock_data_cached(
+            ticker_key,
+            start_date_str,
+            end_date_str,
+            self.universe_mode,
+        )
 
     @lru_cache(maxsize=200)
-    def _load_stock_data_cached(self, ticker, start_date_str, end_date_str):
+    def _load_stock_data_cached(self, ticker, start_date_str, end_date_str, _universe_mode):
         conn = self.get_connection()
         # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
         extended_start_date = pd.to_datetime(start_date_str) - timedelta(days=252*10 + 50)
@@ -449,6 +471,41 @@ class DataHandler:
             return []
         return [code for code in candidate_codes if code in tier_map]
 
+    def _get_eventual_delisted_codes(self):
+        if self._eventual_delisted_codes_cache is not None:
+            return self._eventual_delisted_codes_cache
+
+        conn = self.get_connection()
+        try:
+            query = """
+                SELECT DISTINCT stock_code
+                FROM TickerUniverseHistory
+                WHERE delisted_date IS NOT NULL
+            """
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn)
+            if df.empty:
+                self._eventual_delisted_codes_cache = set()
+                return self._eventual_delisted_codes_cache
+
+            codes = set(df["stock_code"].dropna().astype(str).tolist())
+            self._eventual_delisted_codes_cache = codes
+            return self._eventual_delisted_codes_cache
+        finally:
+            conn.close()
+
+    def _apply_universe_mode_filter(self, codes):
+        if not codes:
+            return []
+        if not is_survivor_optimistic_mode(self.universe_mode):
+            return list(codes)
+
+        eventual_delisted = self._get_eventual_delisted_codes()
+        if not eventual_delisted:
+            return list(codes)
+        return [code for code in codes if str(code) not in eventual_delisted]
+
     def get_pit_universe_codes_as_of(self, as_of_date):
         """
         Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
@@ -475,7 +532,11 @@ class DataHandler:
                 warnings.simplefilter("ignore", UserWarning)
                 snapshot_df = pd.read_sql(snapshot_query, conn, params=[as_of_date_str])
             if not snapshot_df.empty:
-                return snapshot_df["stock_code"].tolist(), "SNAPSHOT_ASOF"
+                codes = self._apply_universe_mode_filter(snapshot_df["stock_code"].tolist())
+                source = "SNAPSHOT_ASOF"
+                if is_survivor_optimistic_mode(self.universe_mode):
+                    source = f"{source}_SURVIVOR_ONLY"
+                return codes, source
 
             history_query = """
                 SELECT stock_code
@@ -488,7 +549,11 @@ class DataHandler:
                 warnings.simplefilter("ignore", UserWarning)
                 history_df = pd.read_sql(history_query, conn, params=[as_of_date_str, as_of_date_str])
             if not history_df.empty:
-                return history_df["stock_code"].tolist(), "HISTORY_ACTIVE_ASOF"
+                codes = self._apply_universe_mode_filter(history_df["stock_code"].tolist())
+                source = "HISTORY_ACTIVE_ASOF"
+                if is_survivor_optimistic_mode(self.universe_mode):
+                    source = f"{source}_SURVIVOR_ONLY"
+                return codes, source
             return [], "NO_UNIVERSE"
         finally:
             conn.close()
@@ -523,10 +588,12 @@ class DataHandler:
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
         try:
             tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
+            tier1_codes = self._apply_universe_mode_filter(tier1_codes)
             if tier1_codes:
                 return tier1_codes, "TIER_1"
 
             tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
+            tier12_codes = self._apply_universe_mode_filter(tier12_codes)
             if tier12_codes:
                 return tier12_codes, "TIER_2_FALLBACK"
 
