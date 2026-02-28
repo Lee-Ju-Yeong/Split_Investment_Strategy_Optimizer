@@ -118,6 +118,7 @@ class TestGpuDataTypeNormalization(unittest.TestCase):
                 "atr_14_ratio": TestGpuDataTypeNormalization._FakeSeries("float64"),
                 "cheap_score": TestGpuDataTypeNormalization._FakeSeries("float64"),
                 "cheap_score_confidence": TestGpuDataTypeNormalization._FakeSeries("float64"),
+                "flow5_mcap": TestGpuDataTypeNormalization._FakeSeries("float64"),
                 "market_cap": TestGpuDataTypeNormalization._FakeSeries("int64"),
             }
             self.columns = list(self._cols.keys())

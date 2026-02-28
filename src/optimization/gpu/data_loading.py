@@ -53,6 +53,7 @@ _FLOAT32_COLUMNS = (
     "atr_14_ratio",
     "cheap_score",
     "cheap_score_confidence",
+    "flow5_mcap",
 )
 
 
@@ -119,6 +120,28 @@ def _has_stored_adj_ohlc_columns(engine_url: str) -> bool:
         if df.empty:
             return False
         return int(df.iloc[0]["cnt"]) == 3
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=4)
+def _has_tier_flow5_mcap_column(engine_url: str) -> bool:
+    _, pd = _ensure_core_deps()
+    sql_engine = _get_sql_engine(engine_url)
+    try:
+        df = pd.read_sql(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'DailyStockTier'
+              AND COLUMN_NAME = 'flow5_mcap'
+            """,
+            sql_engine,
+        )
+        if df.empty:
+            return False
+        return int(df.iloc[0]["cnt"]) == 1
     except Exception:
         return False
 
@@ -199,9 +222,15 @@ def preload_all_data_to_gpu(
     has_stored_adj_ohlc = (
         _has_stored_adj_ohlc_columns(str(engine)) if use_adjusted_prices else False
     )
+    has_tier_flow5_mcap = _has_tier_flow5_mcap_column(str(engine))
     price_select_sql = _build_price_select_sql(
         bool(use_adjusted_prices),
         use_stored_adj_ohlc=has_stored_adj_ohlc,
+    )
+    flow5_mcap_sql = (
+        "CAST(dst.flow5_mcap AS FLOAT) AS flow5_mcap"
+        if has_tier_flow5_mcap
+        else "CAST(NULL AS FLOAT) AS flow5_mcap"
     )
     adjusted_gate_clause = (
         f" AND dsp.date >= '{adjusted_gate_sql}'"
@@ -216,7 +245,8 @@ def preload_all_data_to_gpu(
         CAST(ci.atr_14_ratio AS FLOAT) AS atr_14_ratio,
         mcd.market_cap AS market_cap,
         CAST(dst.cheap_score AS FLOAT) AS cheap_score,
-        CAST(dst.cheap_score_confidence AS FLOAT) AS cheap_score_confidence
+        CAST(dst.cheap_score_confidence AS FLOAT) AS cheap_score_confidence,
+        {flow5_mcap_sql}
     FROM
         DailyStockPrice AS dsp
     LEFT JOIN

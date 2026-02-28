@@ -473,6 +473,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
                     "normal_liquidity",
                     1000,
                     0.002,
+                    0.000123,
                     0.5,
                     0.5,
                     0.5,
@@ -489,6 +490,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
                 "reason",
                 "liquidity_20d_avg_value",
                 "sbv_ratio",
+                "flow5_mcap",
                 "pbr_discount",
                 "per_discount",
                 "div_premium",
@@ -515,6 +517,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
                     "normal_liquidity",
                     1000,
                     np.nan,
+                    np.nan,
                     np.inf,
                     -np.inf,
                     np.nan,
@@ -530,6 +533,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
                 "reason",
                 "liquidity_20d_avg_value",
                 "sbv_ratio",
+                "flow5_mcap",
                 "pbr_discount",
                 "per_discount",
                 "div_premium",
@@ -544,12 +548,13 @@ class TestDailyStockTierBatch(unittest.TestCase):
         self.assertEqual(affected, 1)
         written = conn.cursor_obj.chunk_rows[0][0]
         self.assertIsNone(written[5])   # sbv_ratio
-        self.assertIsNone(written[6])   # pbr_discount
-        self.assertIsNone(written[7])   # per_discount
-        self.assertIsNone(written[8])   # div_premium
-        self.assertIsNone(written[9])   # cheap_score
-        self.assertEqual(written[10], "cheap_v1")  # cheap_score_version
-        self.assertIsNone(written[11])  # cheap_score_confidence
+        self.assertIsNone(written[6])   # flow5_mcap
+        self.assertIsNone(written[7])   # pbr_discount
+        self.assertIsNone(written[8])   # per_discount
+        self.assertIsNone(written[9])   # div_premium
+        self.assertIsNone(written[10])  # cheap_score
+        self.assertEqual(written[11], "cheap_v1")  # cheap_score_version
+        self.assertIsNone(written[12])  # cheap_score_confidence
 
 
 if __name__ == "__main__":

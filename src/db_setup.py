@@ -214,6 +214,7 @@ def create_tables(conn):
         reason VARCHAR(255),
         liquidity_20d_avg_value BIGINT NULL,
         sbv_ratio FLOAT NULL,
+        flow5_mcap FLOAT NULL,
         pbr_discount FLOAT NULL,
         per_discount FLOAT NULL,
         div_premium FLOAT NULL,
@@ -225,6 +226,7 @@ def create_tables(conn):
     )
     ''')
     ensure_column('DailyStockTier', 'sbv_ratio', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'flow5_mcap', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'pbr_discount', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'per_discount', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'div_premium', 'FLOAT NULL')

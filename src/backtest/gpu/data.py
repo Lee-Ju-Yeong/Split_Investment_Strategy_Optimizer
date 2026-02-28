@@ -9,18 +9,22 @@ import cupy as cp
 import pandas as pd
 
 
-CHEAP_SCORE_COLUMNS = ("cheap_score", "cheap_score_confidence")
+RANKING_OPTIONAL_COLUMNS = {
+    "cheap_score": 0.0,
+    "cheap_score_confidence": 0.0,
+    "flow5_mcap": 0.0,
+}
 
 
 def ensure_cheap_score_columns(metrics_df):
     """
-    Ensure cheap-score columns exist exactly once on the input frame.
+    Ensure ranking columns exist exactly once on the input frame.
     Returns list of missing columns that were created with zero defaults.
     """
     missing_columns = []
-    for col in CHEAP_SCORE_COLUMNS:
+    for col, default_value in RANKING_OPTIONAL_COLUMNS.items():
         if col not in metrics_df.columns:
-            metrics_df[col] = 0.0
+            metrics_df[col] = default_value
             missing_columns.append(col)
     return missing_columns
 
@@ -105,6 +109,7 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_ind
             "market_cap",
             "cheap_score",
             "cheap_score_confidence",
+            "flow5_mcap",
         ]
     ]
     if candidate_rows.empty:
@@ -119,6 +124,7 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_ind
             "market_cap",
             "cheap_score",
             "cheap_score_confidence",
+            "flow5_mcap",
         ]
     ]
 
@@ -136,6 +142,7 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
             "market_cap",
             "cheap_score",
             "cheap_score_confidence",
+            "flow5_mcap",
         ]
     ]
     metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
@@ -156,14 +163,32 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
         cheap_score_series.clip(lower=0.0, upper=1.0)
         * cheap_conf_series.clip(lower=0.0, upper=1.0)
     )
-    metrics_rows["cheap_score_q"] = (
-        metrics_rows["cheap_score_effective"] * 10000.0
+    flow_rank = (
+        metrics_rows["flow5_mcap"]
+        .astype("float64")
+        .rank(method="average", pct=True, ascending=True)
+        .fillna(0.0)
+    )
+    atr_rank = (
+        metrics_rows["atr_14_ratio"]
+        .astype("float64")
+        .rank(method="average", pct=True, ascending=True)
+        .fillna(0.0)
+    )
+    metrics_rows["flow_score_q"] = (flow_rank * 10000.0).round().astype("int64")
+    metrics_rows["atr_score_q"] = (atr_rank * 10000.0).round().astype("int64")
+    metrics_rows["entry_composite_score"] = (
+        (0.50 * metrics_rows["cheap_score_effective"])
+        + (0.30 * flow_rank)
+        + (0.20 * atr_rank)
+    )
+    metrics_rows["entry_composite_score_q"] = (
+        metrics_rows["entry_composite_score"].fillna(0.0) * 10000.0
     ).round().astype("int64")
-    metrics_rows["atr_q"] = (metrics_rows["atr_14_ratio"].astype("float64") * 10000.0).round().astype("int64")
 
     ranked_rows = metrics_rows.sort_values(
-        by=["cheap_score_q", "atr_q", "market_cap_q", "ticker"],
-        ascending=[False, False, False, True],
+        by=["entry_composite_score_q", "market_cap_q", "ticker"],
+        ascending=[False, False, True],
     )
     candidate_indices_final = cp.asarray(ranked_rows["ticker_idx"].astype("int32"))
     valid_atrs_final = cp.asarray(ranked_rows["atr_14_ratio"].astype("float32"))
@@ -173,8 +198,9 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
         ranked_records = list(
             zip(
                 ranked_rows["ticker"].to_arrow().to_pylist(),
-                ranked_rows["cheap_score_q"].to_arrow().to_pylist(),
-                ranked_rows["atr_q"].to_arrow().to_pylist(),
+                ranked_rows["entry_composite_score_q"].to_arrow().to_pylist(),
+                ranked_rows["flow_score_q"].to_arrow().to_pylist(),
+                ranked_rows["atr_score_q"].to_arrow().to_pylist(),
                 ranked_rows["market_cap_q"].to_arrow().to_pylist(),
                 ranked_rows["atr_14_ratio"].astype("float32").to_arrow().to_pylist(),
             )

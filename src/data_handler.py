@@ -58,6 +58,7 @@ class DataHandler:
                                                                use_pure=True,
                                                                **self.db_config)
             self.has_stored_adj_ohlc = self._detect_stored_adj_ohlc_columns()
+            self.has_tier_flow5_mcap = self._detect_tier_flow5_mcap_column()
             self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
@@ -83,6 +84,31 @@ class DataHandler:
             print(
                 "[DataHandler] warning: failed to detect stored adjusted OHLC columns "
                 f"({type(exc).__name__}). fallback=formula"
+            )
+            return False
+        finally:
+            conn.close()
+
+    def _detect_tier_flow5_mcap_column(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'DailyStockTier'
+                      AND COLUMN_NAME = 'flow5_mcap'
+                    """
+                )
+                row = cur.fetchone()
+            count = int((row[0] if row else 0) or 0)
+            return count == 1
+        except Exception as exc:
+            print(
+                "[DataHandler] warning: failed to detect DailyStockTier.flow5_mcap column "
+                f"({type(exc).__name__}). fallback=NULL"
             )
             return False
         finally:
@@ -225,7 +251,8 @@ class DataHandler:
                 ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value,
                 mcd.market_cap,
                 dst.cheap_score,
-                dst.cheap_score_confidence
+                dst.cheap_score_confidence,
+                {"dst.flow5_mcap" if self.has_tier_flow5_mcap else "NULL AS flow5_mcap"}
             FROM DailyStockPrice dsp
             LEFT JOIN CalculatedIndicators ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
             LEFT JOIN MarketCapDaily mcd ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
