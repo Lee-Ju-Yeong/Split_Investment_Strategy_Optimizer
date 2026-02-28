@@ -310,30 +310,51 @@ class MagicSplitStrategy(Strategy):
                 cheap_conf = float(cheap_conf_raw) if pd.notna(cheap_conf_raw) else 0.0
                 cheap_effective = max(min(cheap_score, 1.0), 0.0) * max(min(cheap_conf, 1.0), 0.0)
                 cheap_score_q = int(round(cheap_effective * 10000.0))
+                flow5_mcap_raw = signal_row.get("flow5_mcap")
+                flow5_mcap = float(flow5_mcap_raw) if pd.notna(flow5_mcap_raw) else np.nan
 
                 atr_q = int(round(atr_float * 10000))
                 ranked_candidates.append(
                     {
                         "ticker": ticker,
                         "signal_close_price": float(signal_close),
+                        "cheap_effective": cheap_effective,
                         "cheap_score_q": cheap_score_q,
+                        "flow5_mcap": flow5_mcap,
                         "market_cap_q": market_cap_q,
+                        "atr_14_ratio": atr_float,
                         "atr_q": atr_q,
                     }
                 )
             self.last_entry_context["ranked_candidate_count"] = len(ranked_candidates)
 
-            # GPU와 동일한 후보 정렬 계약:
-            # cheap_score_q desc -> atr_q desc -> market_cap_q desc -> ticker asc
-            sorted_candidates = sorted(
-                ranked_candidates,
-                key=lambda x: (
-                    -x["cheap_score_q"],
-                    -x["atr_q"],
-                    -x["market_cap_q"],
-                    x["ticker"],
-                ),
-            )
+            sorted_candidates = []
+            if ranked_candidates:
+                ranked_df = pd.DataFrame(ranked_candidates)
+                ranked_df["flow_score"] = (
+                    pd.to_numeric(ranked_df["flow5_mcap"], errors="coerce")
+                    .rank(method="average", pct=True, ascending=True)
+                    .fillna(0.0)
+                )
+                ranked_df["atr_score"] = (
+                    pd.to_numeric(ranked_df["atr_14_ratio"], errors="coerce")
+                    .rank(method="average", pct=True, ascending=True)
+                    .fillna(0.0)
+                )
+                ranked_df["entry_composite_score"] = (
+                    (0.50 * ranked_df["cheap_effective"])
+                    + (0.30 * ranked_df["flow_score"])
+                    + (0.20 * ranked_df["atr_score"])
+                )
+                ranked_df["entry_composite_score_q"] = (
+                    ranked_df["entry_composite_score"].fillna(0.0) * 10000.0
+                ).round().astype(int)
+                ranked_df.sort_values(
+                    by=["entry_composite_score_q", "market_cap_q", "ticker"],
+                    ascending=[False, False, True],
+                    inplace=True,
+                )
+                sorted_candidates = ranked_df.to_dict("records")
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
             temp_cash = float(portfolio.cash)
@@ -375,8 +396,7 @@ class MagicSplitStrategy(Strategy):
                             new_pos,
                             1,
                             (
-                                -candidate["cheap_score_q"],
-                                -candidate["atr_q"],
+                                -candidate["entry_composite_score_q"],
                                 -candidate["market_cap_q"],
                             ),
                             "신규 진입",

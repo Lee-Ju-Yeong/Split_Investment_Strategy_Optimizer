@@ -237,7 +237,8 @@ def run_magic_split_strategy_on_gpu(
             if final_candidate_indices.size > 1:
                 final_candidate_indices = cp.unique(final_candidate_indices)
 
-            # (D) Valid Data Check + deterministic ranking metrics (Cheap -> ATR -> MarketCap -> Ticker)
+            # (D) Valid Data Check + deterministic ranking metrics
+            # (CompositeScore -> MarketCap -> Ticker)
             if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,

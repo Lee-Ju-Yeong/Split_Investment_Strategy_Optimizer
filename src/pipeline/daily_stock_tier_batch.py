@@ -256,6 +256,23 @@ def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
         return pd.read_sql(query, conn, params=params)
 
 
+def fetch_market_cap_history(conn, start_date, end_date, ticker_codes=None):
+    params = [start_date, end_date]
+    query = """
+        SELECT stock_code, date, market_cap
+        FROM MarketCapDaily
+        WHERE date BETWEEN %s AND %s
+    """
+    if ticker_codes:
+        in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+        query += in_sql
+        params.extend(in_params)
+    query += " ORDER BY stock_code, date"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return pd.read_sql(query, conn, params=params)
+
+
 def fetch_short_balance_ratio_inputs(conn, start_date, end_date, ticker_codes=None):
     params = [start_date, end_date]
     query = """
@@ -531,27 +548,44 @@ def _apply_short_balance_ratio(base_df, short_balance_df):
         np.nan,
     )
     merged["sbv_ratio"] = pd.to_numeric(merged["sbv_ratio"], errors="coerce")
+    return merged.drop(columns=["short_balance_value", "market_cap"], errors="ignore")
+
+
+def _attach_market_cap(base_df, market_cap_df):
+    output = base_df.copy()
+    if market_cap_df is None or market_cap_df.empty:
+        output["market_cap"] = np.nan
+        return output
+
+    market_cap = market_cap_df.copy()
+    market_cap["date"] = pd.to_datetime(market_cap["date"], errors="coerce")
+    market_cap["market_cap"] = pd.to_numeric(market_cap["market_cap"], errors="coerce")
+    market_cap = market_cap.dropna(subset=["date"])
+    merged = output.merge(
+        market_cap[["stock_code", "date", "market_cap"]],
+        on=["stock_code", "date"],
+        how="left",
+    )
+    merged["market_cap"] = pd.to_numeric(merged["market_cap"], errors="coerce")
     return merged
 
 
-def _append_reason(base_reason, suffix):
-    if suffix in str(base_reason):
-        return str(base_reason)
-    return f"{base_reason}+{suffix}"
-
-
-def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_threshold):
+def _attach_investor_flow_features(base_df, investor_df):
+    output = base_df.copy()
     if investor_df is None or investor_df.empty:
-        return with_financial
+        output["flow5"] = np.nan
+        output["flow5_mcap"] = np.nan
+        return output
 
     investor = investor_df.copy()
-    investor["date"] = pd.to_datetime(investor["date"])
+    investor["date"] = pd.to_datetime(investor["date"], errors="coerce")
     investor["foreigner_net_buy"] = pd.to_numeric(
         investor["foreigner_net_buy"], errors="coerce"
     ).fillna(0)
     investor["institution_net_buy"] = pd.to_numeric(
         investor["institution_net_buy"], errors="coerce"
     ).fillna(0)
+    investor = investor.dropna(subset=["date"])
     investor.sort_values(["stock_code", "date"], inplace=True)
     investor["flow"] = investor["foreigner_net_buy"] + investor["institution_net_buy"]
     investor["flow5"] = (
@@ -561,11 +595,31 @@ def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_thr
         .reset_index(level=0, drop=True)
     )
 
-    merged = with_financial.merge(
+    merged = output.merge(
         investor[["stock_code", "date", "flow5"]],
         on=["stock_code", "date"],
         how="left",
     )
+    flow5 = pd.to_numeric(merged["flow5"], errors="coerce")
+    market_cap = pd.to_numeric(merged["market_cap"], errors="coerce")
+    valid_mask = flow5.notna() & (market_cap > 0)
+    merged["flow5_mcap"] = np.where(valid_mask, flow5 / market_cap, np.nan)
+    return merged
+
+
+def _append_reason(base_reason, suffix):
+    if suffix in str(base_reason):
+        return str(base_reason)
+    return f"{base_reason}+{suffix}"
+
+
+def _apply_investor_flow_overlay(with_financial, investor_flow5_threshold):
+    if with_financial is None or with_financial.empty:
+        return with_financial
+    if "flow5" not in with_financial.columns:
+        return with_financial
+
+    merged = with_financial.copy()
     flow5 = pd.to_numeric(merged["flow5"], errors="coerce")
     flow_mask = (
         (merged["tier"] == 2)
@@ -576,13 +630,14 @@ def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_thr
     merged.loc[flow_mask, "reason"] = merged.loc[flow_mask, "reason"].apply(
         lambda reason: _append_reason(reason, "investor_flow5")
     )
-    return merged.drop(columns=["flow5"], errors="ignore")
+    return merged
 
 
 def build_daily_stock_tier_frame(
     price_df,
     financial_df=None,
     investor_df=None,
+    market_cap_df=None,
     short_balance_df=None,
     lookback_days=DEFAULT_LOOKBACK_DAYS,
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
@@ -613,6 +668,7 @@ def build_daily_stock_tier_frame(
                 "reason",
                 "liquidity_20d_avg_value",
                 "sbv_ratio",
+                "flow5_mcap",
                 "pbr_discount",
                 "per_discount",
                 "div_premium",
@@ -635,6 +691,7 @@ def build_daily_stock_tier_frame(
         .reset_index(level=0, drop=True)
     )
     base = _apply_short_balance_ratio(base, short_balance_df)
+    base = _attach_market_cap(base, market_cap_df)
 
     financial_with_factors = _augment_financial_factors(
         financial_df=financial_df,
@@ -651,6 +708,7 @@ def build_daily_stock_tier_frame(
         financial_with_factors,
         financial_lag_days,
     )
+    with_financial = _attach_investor_flow_features(with_financial, investor_df)
     avg_value = pd.to_numeric(with_financial["liquidity_20d_avg_value"], errors="coerce")
 
     with_financial["tier"] = np.where(
@@ -694,7 +752,6 @@ def build_daily_stock_tier_frame(
     if enable_investor_v1_write:
         with_financial = _apply_investor_flow_overlay(
             with_financial=with_financial,
-            investor_df=investor_df,
             investor_flow5_threshold=investor_flow5_threshold,
         )
     if enable_sbv_tier_overlay:
@@ -733,6 +790,7 @@ def build_daily_stock_tier_frame(
             "reason",
             "liquidity_20d_avg_value",
             "sbv_ratio",
+            "flow5_mcap",
             "pbr_discount",
             "per_discount",
             "div_premium",
@@ -752,6 +810,7 @@ def build_daily_stock_tier_frame(
         pd.to_numeric(output["sbv_ratio"], errors="coerce")
         .clip(lower=0.0)
     )
+    output["flow5_mcap"] = pd.to_numeric(output["flow5_mcap"], errors="coerce")
     for col in ["pbr_discount", "per_discount", "div_premium", "cheap_score"]:
         output[col] = (
             pd.to_numeric(output[col], errors="coerce")
@@ -778,6 +837,7 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             reason,
             liquidity_20d_avg_value,
             sbv_ratio,
+            flow5_mcap,
             pbr_discount,
             per_discount,
             div_premium,
@@ -785,12 +845,13 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             cheap_score_version,
             cheap_score_confidence
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             tier = VALUES(tier),
             reason = VALUES(reason),
             liquidity_20d_avg_value = VALUES(liquidity_20d_avg_value),
             sbv_ratio = VALUES(sbv_ratio),
+            flow5_mcap = VALUES(flow5_mcap),
             pbr_discount = VALUES(pbr_discount),
             per_discount = VALUES(per_discount),
             div_premium = VALUES(div_premium),
@@ -921,18 +982,23 @@ def run_daily_stock_tier_batch(
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
-    investor_df = None
-    if enable_investor_v1_write:
-        investor_df = fetch_investor_history(
-            conn=conn,
-            start_date=query_start.strftime("%Y-%m-%d"),
-            end_date=end_date.strftime("%Y-%m-%d"),
-            ticker_codes=ticker_codes,
-        )
+    investor_df = fetch_investor_history(
+        conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+        ticker_codes=ticker_codes,
+    )
+    market_cap_df = fetch_market_cap_history(
+        conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+        ticker_codes=ticker_codes,
+    )
     calculated = build_daily_stock_tier_frame(
         price_df=price_df,
         financial_df=financial_df,
         investor_df=investor_df,
+        market_cap_df=market_cap_df,
         short_balance_df=short_balance_df,
         lookback_days=lookback_days,
         financial_lag_days=financial_lag_days,
@@ -974,6 +1040,7 @@ def run_daily_stock_tier_batch(
             "reason",
             "liquidity_20d_avg_value",
             "sbv_ratio",
+            "flow5_mcap",
             "pbr_discount",
             "per_discount",
             "div_premium",

@@ -9,7 +9,9 @@
   - `price_basis` 정책 반영(backtest/parameter_simulation 공통), `adjusted` 사용 구간 가드 적용
   - `DailyStockTier` 내 멀티팩터 저평가 점수(`cheap_score`, `cheap_score_version`, `cheap_score_confidence`) 저장/랭킹 반영
   - `div_yield <= 0` 하드 필터로 Tier1 강등 + `sbv_ratio` 오버레이 반영
-  - T-1 기준 `ATR -> 시총 -> 티커` 우선순위 통일(CPU/GPU), 보유/쿨다운 사전 제외 및 empty_entry/day 지표 기록
+  - T-1 기준 엔트리 랭킹을 합산 점수(`cheap_effective`, `flow5_mcap_rank`, `atr_rank`)로 통일(CPU/GPU)
+  - 동점 규칙: `market_cap` 큰 종목 우선, 최종 `ticker` 오름차순
+  - 보유/쿨다운 사전 제외 및 empty_entry/day 지표 기록
 - 백필/검증:
   - `python -m src.pipeline.batch --mode backfill --start-date 20131120 --end-date 20260224 --skip-financial --skip-investor`
   - `rows_saved=13,847,092`, `rows_calculated=6,958,239`
@@ -239,8 +241,9 @@ END AS tier
 
 ### 9-1. 신규 진입 우선순위 및 필터링
 - [x] `src/backtest/cpu/strategy.py`에서 Tier 후보 중 보유 종목/쿨다운 종목을 제외한 뒤 정렬하도록 유지/명시
-- [x] `src/backtest/cpu/strategy.py` 신규 진입 정렬 기준을 `ATR -> market_cap -> ticker` 순으로 변경
-- [x] `src/backtest/gpu/engine.py`, `src/backtest/gpu/utils.py` 정렬 기준을 CPU와 동일하게 `ATR -> market_cap -> ticker`로 통일
+- [x] `src/backtest/cpu/strategy.py` 신규 진입 정렬 기준을 합산 점수 기반(`cheap_effective + flow5_mcap_rank + atr_rank`)으로 변경
+- [x] `src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py` 정렬 기준을 CPU와 동일하게 합산 점수로 통일
+- [x] 동점 시 `market_cap -> ticker` tie-break 고정
 - [x] `src/data_handler.py` `load_stock_data` 쿼리에 `MarketCapDaily.market_cap` 조인을 추가해 CPU 랭킹 분모 확보
 
 ### 9-2. 운영 모니터링 지표
@@ -258,6 +261,7 @@ END AS tier
   `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`,
   `cheap_score_confidence` 계산/저장 경로 추가
 - [x] `src/pipeline/daily_stock_tier_batch.py` Tier 규칙에 `div_yield <= 0`이면 Tier1 강등(`div_zero_or_negative`) 반영
+- [x] `src/pipeline/daily_stock_tier_batch.py`에 `flow5_mcap`(5일 외국인+기관 순매수/시총) 계산 및 `DailyStockTier` 저장 경로 추가
 - [x] `tests/test_daily_stock_tier_batch.py`, `tests/test_db_setup.py`에 신규 컬럼/강등 규칙 회귀 테스트 추가
 - [x] `docs/database/schema.md` 스키마 문서 동기화
 
@@ -279,3 +283,52 @@ END AS tier
   - `DailyStockTier`: `min_date=2013-11-20`, `max_date=2026-02-06`, `rows_total=6,960,502`, `tickers=3,319`
   - 채움률: `cheap_score_not_null=6,419,761`, `sbv_ratio_not_null=6,939,898`
   - 주의: `max_date`는 원천 데이터 최대일(현재 `2026-02-06`) 기준으로 제한됨
+
+## 10. 논의사항 정리 (2026-02-28, Multi-agent + Gemini)
+
+### 10-1. 논의 결론 요약
+- Tier는 Safety gate, Ranking은 Alpha score로 역할 분리.
+- 무거운 파생변수는 런타임 계산 대신 `DailyStockTier` 배치 선계산 원칙 유지.
+- 상폐 예방은 사후 라벨(`delisted_date`) 직접 사용이 아니라 선행 위험신호 기반으로 구현.
+- 결측(특히 Investor/SBV)은 0으로 채우지 않는다.
+  - `missing_flag=1`로 결측 자체를 기록하고
+  - `confidence`를 낮춰 점수 영향만 줄이며
+  - `coverage gate` 미달일 때는 해당 신호를 비활성화하는 방식이 안전하다.
+
+### 10-2. 사용자 결정 필요 항목 (승인 게이트)
+- [x] Tier 체계: `3-tier` 유지 (2026-02-28)
+- [x] Tier 강제청산: 기본 비활성 (2026-02-28)
+- [x] 빠른 탐색 모드: `survivor-only` 허용 (단, 최종 채택 전 PIT 검증 필수)
+- [x] Tier1 `flow20_mcap` 하드게이트: `flow20_mcap >= 0` (coverage gate 통과일)
+- [x] Tier3 조합: `roe<0 OR eps<0 OR flow20_mcap < -0.010` (flow는 coverage gate 통과일만)
+- [x] 기본 Ranking 축: `cheap_effective -> flow5_mcap -> atr_14_ratio -> market_cap -> ticker`
+- [x] 지표 기준: `CalculatedIndicators`는 우선 raw 유지(adjusted 전환은 별도 Phase)
+
+### 10-3. 후속 작업 (결정 후 실행)
+- [ ] 백테스트 모드 2트랙 문서/설정 반영:
+  - `research_survivor_only`
+  - `pit_no_forced_tier_liquidation`
+- [ ] MVP 파생변수 8~10개를 `DailyStockTier`에 저장
+- [ ] Tier 행동 규칙 반영:
+  - Tier1=신규진입
+  - Tier2=추가매수 가능
+  - Tier3=추가매수 유보(`max_inactivity_period` 연동)
+- [ ] 결측 처리 공통 규칙(`safe_div`, `missing_flag`, `confidence`, coverage gate) 코드화
+- [ ] CPU/GPU 공통 조회/랭킹 경로에 신규 변수 연결
+- [ ] parity + PIT + 커버리지 회귀 테스트 확장
+- [ ] 백필/검증 리포트 저장 후 shadow -> gated -> default 전환
+
+### 10-4. 의사결정 브리프
+- 문서: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`
+- Gemini 패키지: `docs/operations/gemini_derived_features_review_package.md`
+
+### 10-5. 파생변수 적용 원칙 (합의안 요약)
+- Tier(하드 게이트):
+  - `bps<=0`, `저유동성(liquidity_20d)`, `sbv_ratio` 과열, Tier1 품질게이트(`div/roe/bps`)는 강제 규칙으로 사용
+  - `turnover_20d`, `drawdown_20d`, `atr_spike_20`, `flow20_mcap`은 Tier1 제한/Watch 강등에 우선 사용
+- Ranking(소프트 스코어):
+  - `cheap_effective` 중심 + `flow5_mcap` + 추세 + 변동성 패널티 + size tie-break
+  - 예시: `0.45*cheap_effective + 0.20*flow5_mcap + 0.15*trend + 0.10*volatility + 0.10*size`
+- 공통:
+  - 결측은 0 대체 금지, `missing_flag + confidence + coverage gate`로 처리
+  - 런타임 재조인 최소화, `DailyStockTier` 배치 선계산 원칙 유지

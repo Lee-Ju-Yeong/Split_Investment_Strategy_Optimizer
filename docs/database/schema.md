@@ -154,6 +154,7 @@
 | `reason` | `VARCHAR(255)` |  | 등급 사유 |
 | `liquidity_20d_avg_value` | `BIGINT` | `NULL` | 20일 평균 거래대금 |
 | `sbv_ratio` | `FLOAT` | `NULL` | 공매도 잔고가치/시총 비율 (`short_balance_value / market_cap`) |
+| `flow5_mcap` | `FLOAT` | `NULL` | 최근 5일 외국인+기관 순매수(`flow5`)를 시총으로 정규화한 비율 |
 | `pbr_discount` | `FLOAT` | `NULL` | 종목별 과거 대비 PBR 할인 점수(0~1) |
 | `per_discount` | `FLOAT` | `NULL` | 종목별 과거 대비 PER 할인 점수(0~1) |
 | `div_premium` | `FLOAT` | `NULL` | 종목별 과거 대비 배당 프리미엄 점수(0~1) |
