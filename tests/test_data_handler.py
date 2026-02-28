@@ -199,7 +199,7 @@ class TestDataHandler(unittest.TestCase):
         self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
         self.assertEqual(mock_read_sql.call_count, 1)
 
-        self.data_handler.universe_mode = "optimistic_survivor"
+        self.data_handler.universe_mode = "strict_pit"
         self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
         self.assertEqual(
             mock_read_sql.call_count,
@@ -245,8 +245,8 @@ class TestDataHandler(unittest.TestCase):
         self.assertIn("SELECT stock_code FROM WeeklyFilteredStocks", args[0])
         self.assertEqual(kwargs['params'], [date_str])
 
-    def test_default_universe_mode_is_strict_pit(self):
-        self.assertEqual(self.data_handler.universe_mode, "strict_pit")
+    def test_default_universe_mode_is_optimistic_survivor(self):
+        self.assertEqual(self.data_handler.universe_mode, "optimistic_survivor")
 
     @patch('pandas.read_sql')
     def test_get_pit_universe_codes_survivor_mode_filters_eventual_delisted(self, mock_read_sql):

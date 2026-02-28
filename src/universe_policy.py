@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-DEFAULT_UNIVERSE_MODE = "strict_pit"
+DEFAULT_UNIVERSE_MODE = "optimistic_survivor"
 SUPPORTED_UNIVERSE_MODES = {"strict_pit", "optimistic_survivor"}
 
 _UNIVERSE_MODE_ALIASES = {

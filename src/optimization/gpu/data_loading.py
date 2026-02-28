@@ -344,7 +344,7 @@ def preload_all_data_to_gpu(
     *,
     use_adjusted_prices=False,
     adjusted_price_gate_start_date="2013-11-20",
-    universe_mode="strict_pit",
+    universe_mode="optimistic_survivor",
 ):
     _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
@@ -442,7 +442,7 @@ def preload_tier_data_to_tensor(
     all_tickers,
     trading_dates_pd,
     *,
-    universe_mode="strict_pit",
+    universe_mode="optimistic_survivor",
 ):
     """
     Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.

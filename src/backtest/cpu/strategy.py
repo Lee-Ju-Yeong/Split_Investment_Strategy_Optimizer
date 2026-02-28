@@ -62,6 +62,7 @@ class MagicSplitStrategy(Strategy):
         min_liquidity_20d_avg_value=0,
         min_tier12_coverage_ratio=0.0,
         tier_hysteresis_mode="legacy",
+        candidate_lookup_error_policy="raise",
         buy_commission_rate=0.00015,
     ):
         self.max_stocks = max_stocks
@@ -82,6 +83,12 @@ class MagicSplitStrategy(Strategy):
         self.min_liquidity_20d_avg_value = min_liquidity_20d_avg_value
         self.min_tier12_coverage_ratio = min_tier12_coverage_ratio
         self.tier_hysteresis_mode = str(tier_hysteresis_mode).strip().lower()
+        self.candidate_lookup_error_policy = str(candidate_lookup_error_policy).strip().lower()
+        if self.candidate_lookup_error_policy not in {"raise", "skip"}:
+            raise ValueError(
+                "Unsupported candidate_lookup_error_policy="
+                f"{candidate_lookup_error_policy!r}. supported=[raise, skip]"
+            )
         self.buy_commission_rate = float(buy_commission_rate)
         self.strict_hysteresis_enabled = (
             self.tier_hysteresis_mode == "strict_hysteresis_v1"
@@ -100,6 +107,8 @@ class MagicSplitStrategy(Strategy):
             "selected_count": 0,
             "strategy_candidate_mode": self._resolve_candidate_mode(),
         }
+        self.candidate_lookup_error_count = 0
+        self.first_candidate_lookup_error = None
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -259,8 +268,28 @@ class MagicSplitStrategy(Strategy):
                             f"Fallback: Tier 1 (0) -> Tier 2 ({raw_candidate_count}){blocked_suffix}"
                         )
                 except Exception as exc:
+                    if self.candidate_lookup_error_policy == "raise":
+                        logger.exception(
+                            "Tier candidate lookup failed (%s). "
+                            "Aborting run by candidate_lookup_error_policy=raise.",
+                            type(exc).__name__,
+                        )
+                        raise
+                    self.candidate_lookup_error_count += 1
+                    if self.first_candidate_lookup_error is None:
+                        self.first_candidate_lookup_error = {
+                            "trade_date": str(pd.to_datetime(current_date).date()),
+                            "signal_date": (
+                                str(pd.to_datetime(signal_date).date())
+                                if signal_date is not None
+                                else None
+                            ),
+                            "exception_type": type(exc).__name__,
+                            "message": str(exc)[:240],
+                        }
                     logger.warning(
-                        "Tier candidate lookup failed (%s). Returning empty candidate set.",
+                        "Tier candidate lookup failed (%s). "
+                        "Returning empty candidate set by candidate_lookup_error_policy=skip.",
                         type(exc).__name__,
                     )
                     candidate_codes = []
@@ -502,6 +531,13 @@ class MagicSplitStrategy(Strategy):
 
     def _create_sell_signal(self, date, ticker, position, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "SELL", "quantity": position.quantity, "position": position, "reason_for_trade": reason, "trigger_price": trigger_price}
+
+    def get_candidate_lookup_error_summary(self):
+        return {
+            "error_count": int(self.candidate_lookup_error_count),
+            "first_error": self.first_candidate_lookup_error,
+            "policy": self.candidate_lookup_error_policy,
+        }
 
     def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
