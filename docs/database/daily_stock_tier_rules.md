@@ -13,6 +13,12 @@ Source of Truth (code): `src/pipeline/daily_stock_tier_batch.py`
 
 핵심은 런타임에서 복잡 계산을 반복하지 않고, 배치에서 미리 계산한 Tier를 CPU/GPU가 공통으로 쓰는 것입니다.
 
+### 문서 읽는 법 (구현 상태 구분)
+
+- `§1 ~ §7`: 현재 코드에 반영된 운영 규칙(implementation scope)
+- `§8 ~ §11`: 확장 백로그/검토 항목(미구현 또는 조건부 롤아웃)
+- 따라서 `미구현`, `백로그`, `검토중` 표기는 의도된 상태 표시입니다.
+
 ### 1-1) 운영 정책 업데이트 (2026-02-28)
 
 - Tier 기반 **강제청산은 기본 비활성**으로 운영한다.
@@ -209,7 +215,7 @@ Tier1 후보는 아래 조건을 모두 만족해야 Tier1 유지:
 
 직관: 최근 수급이 매우 나쁜 종목은 중립(Tier2)에서 위험(Tier3)으로 한 단계 더 낮춥니다.
 
-### Step D-2. (구현 예정) Tier1 `flow20_mcap` 게이트
+### Step D-2. (미구현 백로그, 코드 반영 X) Tier1 `flow20_mcap` 게이트
 
 - 규칙: `flow20_mcap >= 0`인 종목만 Tier1 유지
 - 적용 조건: Investor coverage gate 통과일
@@ -278,9 +284,9 @@ conda run -n rapids-env python -m src.pipeline.batch \
 - `DailyStockTier`의 최대 계산일은 원천 테이블(`DailyStockPrice`, `FinancialData`, `MarketCapDaily`, `ShortSellingDaily`) 최신일에 의해 제한됩니다.
 - `financial_lag_days=1`이면 날짜 `D`의 Tier는 재무 데이터를 `D-1`까지 사용합니다.
 
-## 8) 변경 계획 (구현 전)
+## 8) 확장 백로그 (미구현/검토중)
 
-아래는 코드 반영 전 계획안입니다.
+아래는 현재 코드에 아직 반영되지 않았거나, 운영 반영 전 추가 검증이 필요한 확장 항목입니다.
 
 ### 8-1. 설계 원칙
 
@@ -298,13 +304,13 @@ conda run -n rapids-env python -m src.pipeline.batch \
 - `Data reliability penalty`: 결측/신뢰도 저하 페널티
 - `Quarantine/Hysteresis`: 위험 이벤트 후 N일 재진입 제한
 
-## 9) CPU/GPU 정합성 계획 (구현 전)
+## 9) CPU/GPU 정합성 체크리스트
 
 - `open<=0` 체결 불가(No Fill) 정책 유지
 - 쿨다운 갱신은 "신호 발생"이 아니라 "실제 체결 성공" 기준으로 정합화 검토
 - 유니버스 상폐 경계(`>=` vs `>`) 조건식 일관화 검토
 
-## 10) 테스트/롤아웃 계획 (구현 전)
+## 10) 테스트/롤아웃 체크리스트
 
 - 테스트:
   - NaN 처리 일관성
@@ -319,11 +325,14 @@ conda run -n rapids-env python -m src.pipeline.batch \
 
 ## 11) 백테스트 모드 정책 (2026-02-28)
 
-- `survivor_only` (연구용):
+- 실행 키:
+  - `strategy_params.universe_mode`
+  - 환경변수 override: `MAGICSPLIT_UNIVERSE_MODE`
+- `optimistic_survivor` (연구용):
   - 목적: 빠른 파라미터 탐색
   - 특징: 상폐 미발생 종목만 사용
   - 한계: 결과 낙관편향(생존자 편향)
-- `pit_no_forced_tier_liquidation` (검증용):
+- `strict_pit` (검증용, 기본값):
   - 목적: 운영 반영 전 현실 검증
   - 특징: PIT 유니버스(상폐 포함) + Tier 강제청산 비활성
   - 채택 기준: 최종 승격 판단은 이 모드 결과를 우선

@@ -227,6 +227,36 @@ class TestGpuDataLoadingQuery(unittest.TestCase):
         self.assertIn("dsp.adj_high", query)
         self.assertIn("dsp.adj_low", query)
 
+    def test_preload_query_applies_survivor_only_filter(self):
+        captured_queries = []
+
+        def fake_read_sql_to_cudf(query, _engine, parse_dates=None):
+            captured_queries.append(query)
+            gdf = _FakeSetIndexGdf()
+            gdf._cols["ticker"] = _FakeSeries(dtype="str")
+            gdf._cols["date"] = _FakeSeries(dtype="datetime64[ns]")
+            return gdf
+
+        with patch(
+            "src.optimization.gpu.data_loading._get_sql_engine",
+            return_value="engine",
+        ), patch(
+            "src.optimization.gpu.data_loading._read_sql_to_cudf",
+            side_effect=fake_read_sql_to_cudf,
+        ), patch("src.optimization.gpu.data_loading._ensure_gpu_deps"):
+            data_loading.preload_all_data_to_gpu(
+                engine="mysql://dummy",
+                start_date="20140101",
+                end_date="20140131",
+                use_adjusted_prices=False,
+                universe_mode="optimistic_survivor",
+            )
+
+        self.assertEqual(len(captured_queries), 1)
+        query = captured_queries[0]
+        self.assertIn("NOT EXISTS", query)
+        self.assertIn("TickerUniverseHistory", query)
+
 
 class TestGpuAdjustedValidation(unittest.TestCase):
     def test_validate_adjusted_ohlc_not_null_raises(self):

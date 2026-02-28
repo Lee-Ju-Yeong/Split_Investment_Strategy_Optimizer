@@ -163,9 +163,13 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         _, kwargs = mock_preload_all.call_args
         self.assertTrue(kwargs["use_adjusted_prices"])
         self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
+        self.assertEqual(kwargs["universe_mode"], "strict_pit")
+        _, tier_kwargs = mock_preload_tier.call_args
+        self.assertEqual(tier_kwargs["universe_mode"], "strict_pit")
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
+        self.assertEqual(run_call.args[7]["universe_mode"], "strict_pit")
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
     @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
@@ -211,9 +215,13 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         _, kwargs = mock_preload_all.call_args
         self.assertTrue(kwargs["use_adjusted_prices"])
         self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
+        self.assertEqual(kwargs["universe_mode"], "strict_pit")
+        _, tier_kwargs = mock_preload_tier.call_args
+        self.assertEqual(tier_kwargs["universe_mode"], "strict_pit")
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
+        self.assertEqual(run_call.args[7]["universe_mode"], "strict_pit")
 
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")

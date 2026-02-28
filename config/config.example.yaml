@@ -20,6 +20,10 @@ strategy_params:
   price_basis: "adjusted"
   # In adjusted mode, start_date must be >= this date.
   adjusted_price_gate_start_date: "2013-11-20"
+  # Backtest universe mode:
+  # - strict_pit: 시점기준(PIT) 유니버스 (기본, 검증용)
+  # - optimistic_survivor: 상폐 미발생 종목만 사용 (연구용)
+  universe_mode: "strict_pit"
 
   max_stocks: 20
   order_investment_ratio: 0.02

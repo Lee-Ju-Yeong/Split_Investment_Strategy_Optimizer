@@ -183,6 +183,30 @@ class TestDataHandler(unittest.TestCase):
         self.assertEqual(mock_read_sql.call_count, 1)
         self.assertTrue(stock_data_str.equals(stock_data_ts))
 
+    @patch('pandas.read_sql')
+    def test_load_stock_data_cache_key_includes_universe_mode(self, mock_read_sql):
+        def _make_df():
+            return pd.DataFrame(
+                {
+                    'date': pd.to_datetime(['2022-01-03']),
+                    'open_price': [101],
+                    'high_price': [103],
+                    'low_price': [100],
+                    'close_price': [102],
+                }
+            )
+        mock_read_sql.side_effect = [_make_df(), _make_df()]
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+        self.assertEqual(mock_read_sql.call_count, 1)
+
+        self.data_handler.universe_mode = "optimistic_survivor"
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+        self.assertEqual(
+            mock_read_sql.call_count,
+            2,
+            msg="cache key must include universe_mode to avoid cross-mode cache reuse",
+        )
+
     def test_get_latest_price(self):
         """특정 날짜의 최근 가격을 올바르게 가져오는지 테스트"""
         # load_stock_data가 반환할 모의 DataFrame 생성
@@ -220,6 +244,23 @@ class TestDataHandler(unittest.TestCase):
         args, kwargs = mock_read_sql.call_args
         self.assertIn("SELECT stock_code FROM WeeklyFilteredStocks", args[0])
         self.assertEqual(kwargs['params'], [date_str])
+
+    def test_default_universe_mode_is_strict_pit(self):
+        self.assertEqual(self.data_handler.universe_mode, "strict_pit")
+
+    @patch('pandas.read_sql')
+    def test_get_pit_universe_codes_survivor_mode_filters_eventual_delisted(self, mock_read_sql):
+        survivor_handler = DataHandler(self.db_config, universe_mode="optimistic_survivor")
+        survivor_handler.clear_load_stock_data_cache()
+        mock_read_sql.side_effect = [
+            pd.DataFrame({"stock_code": ["000001", "000002", "000003"]}),
+            pd.DataFrame({"stock_code": ["000002"]}),
+        ]
+
+        codes, source = survivor_handler.get_pit_universe_codes_as_of("2024-01-02")
+
+        self.assertEqual(codes, ["000001", "000003"])
+        self.assertEqual(source, "SNAPSHOT_ASOF_SURVIVOR_ONLY")
 
 if __name__ == '__main__':
     unittest.main()

@@ -25,6 +25,7 @@ from .backtest.cpu.execution import BasicExecutionHandler
 from .backtest.cpu.backtester import BacktestEngine
 from .config_loader import load_config
 from .price_policy import resolve_price_policy
+from .universe_policy import resolve_universe_mode
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,10 @@ def run_backtest_from_config(config: dict) -> dict:
     start_date = backtest_settings['start_date']
     end_date = backtest_settings['end_date']
     initial_cash = backtest_settings['initial_cash']
+    universe_mode = resolve_universe_mode(
+        strategy_params_from_config,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
     
     price_basis, adjusted_gate = resolve_price_policy(strategy_params_from_config)
     logger.info(
@@ -81,12 +86,15 @@ def run_backtest_from_config(config: dict) -> dict:
         price_basis,
         adjusted_gate,
     )
+    logger.info("universe policy | mode=%s", universe_mode)
 
     # DataHandler는 이제 종목명 조회를 위해 CompanyInfo DB를 내부적으로 로드합니다.
     data_handler = DataHandler(
         db_config=db_params,
         price_basis=price_basis,
         adjusted_price_gate_start_date=adjusted_gate,
+        universe_mode=universe_mode,
+        strategy_params=strategy_params_from_config,
     )
     
     strategy_params = {
@@ -168,6 +176,7 @@ def run_backtest_from_config(config: dict) -> dict:
         response = {
             "success": True,
             "metrics": raw_metrics,
+            "universe_mode": universe_mode,
             "plot_file_path": os.path.join(result_dir, plot_filename).replace('\\', '/'),
             "trade_file_path": trade_filepath_for_response,
             "daily_values": daily_values_for_response.reset_index().rename(columns={'date': 'x', 'total_value': 'y'}).to_dict('records'),
