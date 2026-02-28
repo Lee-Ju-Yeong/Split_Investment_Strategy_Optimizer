@@ -114,8 +114,9 @@ Source of Truth (code): `src/pipeline/daily_stock_tier_batch.py`
 | 밸류 | `pbr_discount`, `per_discount`, `div_premium` | 과거 분포 내 pct-rank 기반 | cheap_score 구성요소 |
 | 밸류 | `cheap_score` | 가중합(`pbr`,`per`,`div`) | 랭킹 우선순위 |
 | 밸류 | `cheap_effective` | `cheap_score * confidence` | 결측 보정 점수 |
-| 품질 | `financial_risk_flag` | `bps<=0 OR roe<0` | Tier3 override |
-| 품질 | `tier1_quality_pass` | `div_yield>0 AND roe>=10 AND bps>0` | Tier1 품질 게이트 |
+| 품질 | `financial_risk_flag` | `bps<=0 OR roe<0` | Tier3 즉시 강등 |
+| 품질 | `financial_distress_2y` | `2Y(roe<=0 OR bps<=0)` | Tier3 장기 부진 강등 |
+| 품질 | `tier1_quality_pass` | `2Y(div_yield>=0 AND roe>=5 AND bps>=0) AND effective_price_vs_5y<=0.33` | Tier1 품질 게이트 |
 | 가격행동 | `gap_down_pct` | `(open - prev_close)/prev_close` | distress 보조 |
 | 가격행동 | `drawdown_20d` | 최근 20일 고점 대비 하락률 | 위험구간 식별 |
 | 가격행동 | `atr_spike` | `atr_14_ratio`의 rolling z-score | 변동성 급등 탐지 |
@@ -131,14 +132,23 @@ Source of Truth (code): `src/pipeline/daily_stock_tier_batch.py`
 | `danger_liquidity` | Tier3 저유동 임계 | `300,000,000` |
 | `prime_liquidity` | Tier1 유동성 임계 | `1,000,000,000` |
 | `financial_lag_days` | 재무 데이터 시차(lag) | `1` |
-| `tier1_growth_roe_min` | Tier1 최소 ROE | `10.0` |
+| `tier1_growth_roe_min` | Tier1 최소 ROE | `5.0` |
 | `tier1_growth_bps_min` | Tier1 최소 BPS 하한 | `0.0` |
+| `tier1_quality_lookback_days` | Tier1 연속성 확인(거래일) | `504` |
+| `tier1_position_gate_max_pct` | 5Y 저점 위치 상한(비율) | `0.33` |
+| `tier1_position_gate_start_date` | 5Y 위치 계산 원천을 RAW→Adjusted로 전환하는 날짜 | `2014-11-20` |
+| `tier1_position_lookback_days` | 5Y 위치 계산 롤링 윈도우 | `1260` |
+| `tier1_position_min_periods_days` | 5Y 위치 계산 최소 관측치 | `252` |
 | `enable_investor_v1_write` | 수급 오버레이 사용 여부 | `False`(기본) |
 | `investor_flow5_threshold` | Tier2->3 수급 강등 임계 | `-500,000,000` |
 | `enable_sbv_tier_overlay` | SBV 오버레이 사용 여부 | `True` |
 | `sbv_tier1_demote_threshold` | Tier1->2 SBV 강등 임계 | `0.0139` |
 | `sbv_tier3_threshold` | Tier3 SBV 강등 임계 | `0.0272` |
 | `sbv_valid_coverage_threshold` | SBV 적용 최소 커버리지 | `0.90` |
+| `sbv_tier3_consecutive_days` | SBV Tier3 강등 연속일 | `3` |
+| `tier3_flow20_quantile` | flow20_mcap 하위 꼬리 분위수 | `0.10` |
+| `tier3_flow20_valid_coverage_threshold` | flow20_mcap 적용 최소 커버리지 | `0.70` |
+| `tier3_flow20_consecutive_days` | flow20_mcap Tier3 강등 연속일 | `5` |
 
 ### 3-4) 빠른 실무 가이드: 무엇부터 Tier/Ranking에 넣을까?
 
@@ -169,16 +179,24 @@ Source of Truth (code): `src/pipeline/daily_stock_tier_batch.py`
 ### Step B. 재무 리스크 강등 (Tier3 override)
 
 - `bps <= 0` 또는 `roe < 0`이면 `tier=3`
+- 추가로 `2Y(roe<=0 OR bps<=0)`이면 `tier=3` (`financial_distress_2y`)
 
 직관: 유동성이 좋아도 재무가 매우 나쁘면 최종적으로 위험군으로 강등합니다.
 
 ### Step C. Tier1 품질 게이트
 
-Tier1 후보는 아래 3개를 모두 만족해야 Tier1 유지:
+Tier1 후보는 아래 조건을 모두 만족해야 Tier1 유지:
 
-- `div_yield > 0`
-- `roe >= 10`
-- `bps > 0`
+- 최근 `tier1_quality_lookback_days`(기본 504거래일) 동안:
+  - `div_yield >= 0`
+  - `roe >= 5`
+  - `bps >= 0`
+- 당일 위치 게이트:
+  - 하드게이트는 전 기간 유지: `effective_price_vs_5y <= 0.33`(33%)
+  - `effective_price_vs_5y` 산식/원천:
+    - `2014-11-19`까지: `CalculatedIndicators.price_vs_5y_low_pct` (RAW OHLC 기반)
+    - `2014-11-20`부터: `DailyStockPrice.adj_close/adj_low/adj_high`로 배치 시 재계산
+      (252거래일부터 시작해 최대 1260거래일까지 증분 롤링)
 
 미충족 시 `tier=2`로 강등.
 
@@ -197,10 +215,12 @@ Tier1 후보는 아래 3개를 모두 만족해야 Tier1 유지:
 - 적용 조건: Investor coverage gate 통과일
 - coverage 미통과일: 이 게이트는 비활성
 
-### Step D-3. (구현 예정) Tier3 추가 강등 조합
+### Step D-3. Tier3 수급 꼬리 강등 (flow20_mcap)
 
-- 규칙: `roe < 0 OR eps < 0 OR flow20_mcap < -0.010`
-- 적용 조건: `flow20_mcap` 항목은 coverage gate 통과일에만 사용
+- 날짜별 `flow20_mcap` 커버리지 계산
+- `coverage >= tier3_flow20_valid_coverage_threshold`인 날짜만 적용
+- 적용일에서 날짜별 하위 `tier3_flow20_quantile` 꼬리 구간을 계산
+- 해당 꼬리 구간이 `tier3_flow20_consecutive_days` 연속이면 `tier=3` (`flow20_mcap_tail`)
 
 ### Step E. SBV overlay (유효일에만 적용)
 
@@ -211,7 +231,7 @@ Tier1 후보는 아래 3개를 모두 만족해야 Tier1 유지:
 
 유효일에서:
 
-- `sbv_ratio >= sbv_tier3_threshold` -> `tier=3`
+- `sbv_ratio >= sbv_tier3_threshold`가 `sbv_tier3_consecutive_days` 연속이면 `tier=3`
 - `tier=1`이면서 `sbv_ratio >= sbv_tier1_demote_threshold` -> `tier=2`
 
 직관: 공매도 잔고가 과열된 종목은 보수적으로 강등합니다.
@@ -220,6 +240,8 @@ Tier1 후보는 아래 3개를 모두 만족해야 Tier1 유지:
 
 - 저유동성: `liquidity_20d_avg_value < 300,000,000`
 - 재무위험: `bps <= 0` 또는 `roe < 0`
+- 재무 장기부진: `2Y(roe<=0 OR bps<=0)`
+- 수급 꼬리: `flow20_mcap` 하위 꼬리 구간 연속 진입
 - (옵션) 수급위험: Tier2 + `flow5` 임계치 하회
 - (SBV 유효일) 공매도 과열: `sbv_ratio >= 0.0272`
 - 운영 해석: 기본 정책에서 Tier3는 "신규/추매 금지 우선"이며 자동 강제청산 트리거로 사용하지 않는다.
@@ -232,8 +254,9 @@ Tier1 후보는 아래 3개를 모두 만족해야 Tier1 유지:
 | `normal_liquidity` | 유동성 기준 Tier2 |
 | `low_liquidity` | 유동성 기준 Tier3 |
 | `financial_risk` | 재무 리스크로 Tier3 강등 |
-| `div_zero_or_negative` | 배당수익률 조건 미충족 |
+| `financial_distress_2y` | 재무 장기 부진(2년 연속)으로 Tier3 강등 |
 | `tier1_quality_gate_failed` | Tier1 품질 게이트 실패 |
+| `flow20_mcap_tail` | flow20_mcap 하위 꼬리 연속 진입으로 Tier3 강등 |
 | `investor_flow5` | 수급(5일 누적) 악화로 강등 |
 | `sbv_ratio_elevated` | SBV가 높아 Tier1에서 Tier2로 강등 |
 | `sbv_ratio_extreme` | SBV가 매우 높아 Tier3로 강등 |

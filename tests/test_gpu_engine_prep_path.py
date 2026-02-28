@@ -23,7 +23,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         }
 
     @staticmethod
-    def _execution_params(mode, use_weekly_alpha_gate=False):
+    def _execution_params(mode, use_weekly_alpha_gate=False, tier_hysteresis_mode="legacy"):
         return {
             "buy_commission_rate": 0.00015,
             "sell_commission_rate": 0.00015,
@@ -31,6 +31,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             "candidate_source_mode": mode,
             "use_weekly_alpha_gate": use_weekly_alpha_gate,
             "parity_mode": "strict",
+            "tier_hysteresis_mode": tier_hysteresis_mode,
         }
 
     @staticmethod
@@ -57,7 +58,8 @@ class TestGpuEnginePrepPath(unittest.TestCase):
 
     @staticmethod
     def _run_with_mode(mode, all_data_gpu, weekly_filtered_gpu):
-        tier_tensor = cp.zeros((0, 1), dtype=cp.int8) if mode in {"tier", "hybrid_transition"} else None
+        # candidate_source_mode는 강제로 tier 경로를 사용하므로 tier_tensor는 항상 제공한다.
+        tier_tensor = cp.zeros((0, 1), dtype=cp.int8)
         return gpu_engine.run_magic_split_strategy_on_gpu(
             initial_cash=10_000_000.0,
             param_combinations=TestGpuEnginePrepPath._param_combinations(),
@@ -101,7 +103,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         weekly_filtered_gpu.reset_index.assert_not_called()
 
     @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
-    def test_keeps_weekly_reset_for_weekly_mode(self, mock_create_tensors):
+    def test_forces_tier_path_for_weekly_mode(self, mock_create_tensors):
         all_data_gpu = MagicMock()
         all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
         weekly_filtered_gpu = MagicMock()
@@ -111,7 +113,77 @@ class TestGpuEnginePrepPath(unittest.TestCase):
 
         self._run_with_mode("weekly", all_data_gpu, weekly_filtered_gpu)
 
-        weekly_filtered_gpu.reset_index.assert_called_once_with()
+        weekly_filtered_gpu.reset_index.assert_not_called()
+
+    @patch("src.backtest.gpu.engine._process_additional_buy_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_new_entry_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_sell_signals_gpu")
+    @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
+    def test_additional_buy_receives_signal_tiers_in_legacy_mode(
+        self,
+        mock_create_tensors,
+        mock_process_sell,
+        mock_process_new_entry,
+        mock_process_additional_buy,
+    ):
+        all_data_gpu = MagicMock()
+        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
+        weekly_filtered_gpu = MagicMock()
+
+        mock_create_tensors.return_value = {
+            "open": cp.array([[100000.0]], dtype=cp.float32),
+            "close": cp.array([[100000.0]], dtype=cp.float32),
+            "high": cp.array([[100000.0]], dtype=cp.float32),
+            "low": cp.array([[100000.0]], dtype=cp.float32),
+        }
+
+        def _sell_stub(*args, **_kwargs):
+            return (
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                cp.zeros((1, 1), dtype=cp.bool_),
+            )
+
+        def _entry_stub(*args, **_kwargs):
+            return (
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        def _add_stub(*args, **_kwargs):
+            return (
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        mock_process_sell.side_effect = _sell_stub
+        mock_process_new_entry.side_effect = _entry_stub
+        mock_process_additional_buy.side_effect = _add_stub
+
+        gpu_engine.run_magic_split_strategy_on_gpu(
+            initial_cash=10_000_000.0,
+            param_combinations=self._param_combinations(),
+            all_data_gpu=all_data_gpu,
+            weekly_filtered_gpu=weekly_filtered_gpu,
+            trading_date_indices=cp.asarray([0], dtype=cp.int32),
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2026-01-06"]),
+            all_tickers=["005930"],
+            execution_params=self._execution_params(
+                mode="tier",
+                tier_hysteresis_mode="legacy",
+            ),
+            tier_tensor=cp.zeros((1, 1), dtype=cp.int8),
+            debug_mode=False,
+        )
+
+        self.assertTrue(mock_process_additional_buy.called)
+        signal_tiers_arg = mock_process_additional_buy.call_args.kwargs["signal_tiers"]
+        self.assertIsNotNone(signal_tiers_arg)
+        self.assertEqual(signal_tiers_arg.shape, (1,))
 
 
 if __name__ == "__main__":
