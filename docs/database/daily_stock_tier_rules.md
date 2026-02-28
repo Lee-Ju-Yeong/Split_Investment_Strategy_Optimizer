@@ -322,17 +322,51 @@ conda run -n rapids-env python -m src.pipeline.batch \
 - 핵심 모니터링:
   - `tier1_coverage`, `tier2_fallback_rate`, `empty_entry_day_rate`, `tier_churn_rate`
   - `liquidation_unfillable_count`, `factor_missing_ratio`, `pit_violation_count`
+  - `source_lookup_error_days`, `source_lookup_error_rate`, `source_missing_days`, `source_unknown_days`
 
 ## 11) 백테스트 모드 정책 (2026-02-28)
 
 - 실행 키:
   - `strategy_params.universe_mode`
   - 환경변수 override: `MAGICSPLIT_UNIVERSE_MODE`
-- `optimistic_survivor` (연구용):
+- `optimistic_survivor` (연구용, 기본값):
   - 목적: 빠른 파라미터 탐색
   - 특징: 상폐 미발생 종목만 사용
   - 한계: 결과 낙관편향(생존자 편향)
-- `strict_pit` (검증용, 기본값):
+- `strict_pit` (검증용):
   - 목적: 운영 반영 전 현실 검증
   - 특징: PIT 유니버스(상폐 포함) + Tier 강제청산 비활성
   - 채택 기준: 최종 승격 판단은 이 모드 결과를 우선
+
+### 11-1) 후보 조회 예외 정책 (fail-closed)
+
+- 실행 키:
+  - `strategy_params.candidate_lookup_error_policy`
+- 허용값:
+  - `raise` (기본, 권장): 후보 조회 예외 발생 시 즉시 중단
+  - `skip` (연구용): 해당일 신규진입만 스킵하고 계속 진행
+- 운영 원칙:
+  - 운영/검증/승격 판단에서는 `raise` 고정
+  - `skip`은 연구용 degraded 실행으로만 허용
+
+### 11-2) Degraded Run / 승격 차단 규칙
+
+- 아래 중 하나라도 참이면 `degraded_run=true` 및 `promotion_blocked=true`:
+  - `candidate_lookup_error_policy=skip`
+  - `universe_mode != strict_pit`
+  - 후보 조회 오류 발생(`candidate_lookup_errors > 0`)
+- 결과 payload에 노출:
+  - `degraded_run`, `promotion_blocked`, `promotion_block_reasons`
+  - `candidate_lookup_summary` (`error_count`, `first_error`, `policy`)
+  - `run_metrics` (entry/source 지표 포함)
+
+### 11-3) 실행 메타데이터(run_manifest.json)
+
+- 저장 경로:
+  - `results/run_*/run_manifest.json`
+- 필수 기록 필드:
+  - `universe_policy.resolved_mode`, `universe_policy.config_mode`
+  - `universe_policy.env_override_value`, `universe_policy.env_override_applied`
+  - `env_overrides.MAGICSPLIT_UNIVERSE_MODE`, `env_overrides.MAGICSPLIT_CONFIG_PATH`
+  - `config.candidate_lookup_error_policy`
+  - `run_metrics`, `candidate_lookup`, `safety_guard`

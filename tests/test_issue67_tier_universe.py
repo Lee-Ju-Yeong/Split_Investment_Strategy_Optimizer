@@ -184,7 +184,11 @@ class TestIssue67StrategyModes(unittest.TestCase):
         self.data_handler.get_filtered_stock_codes.assert_not_called()
 
     def test_strategy_mode_tier_returns_empty_on_tier_exception(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
+        strategy = MagicSplitStrategy(
+            **self.base_config,
+            candidate_source_mode="tier",
+            candidate_lookup_error_policy="skip",
+        )
         self.data_handler.get_candidates_with_tier_fallback_pit_gated.side_effect = RuntimeError("tier query error")
         self.data_handler.get_stock_row_as_of.return_value = None
 
@@ -198,6 +202,20 @@ class TestIssue67StrategyModes(unittest.TestCase):
 
         self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
         self.assertEqual(signals, [])
+
+    def test_strategy_mode_tier_raises_on_tier_exception_by_default(self):
+        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.side_effect = RuntimeError("tier query error")
+        self.data_handler.get_stock_row_as_of.return_value = None
+
+        with self.assertRaises(RuntimeError):
+            strategy.generate_new_entry_signals(
+                pd.Timestamp("2024-01-02"),
+                self.portfolio,
+                self.data_handler,
+                self.trading_dates,
+                1,
+            )
 
     def test_strategy_mode_invalid_falls_back_to_weekly(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="invalid_mode")

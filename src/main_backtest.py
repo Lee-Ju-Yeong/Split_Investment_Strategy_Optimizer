@@ -7,6 +7,7 @@ warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 import logging
 import pandas as pd
 import os
+import json
 from datetime import datetime
 
 import sys
@@ -45,6 +46,7 @@ _STRATEGY_PARAM_KEYS = {
     "min_liquidity_20d_avg_value",
     "min_tier12_coverage_ratio",
     "tier_hysteresis_mode",
+    "candidate_lookup_error_policy",
 }
 
 _EXECUTION_PARAM_KEYS = {
@@ -52,6 +54,93 @@ _EXECUTION_PARAM_KEYS = {
     "sell_commission_rate",
     "sell_tax_rate",
 }
+
+
+def _write_run_manifest(
+    *,
+    result_dir: str,
+    strategy_params: dict,
+    backtest_settings: dict,
+    universe_mode: str,
+    price_basis: str,
+    adjusted_gate: str,
+    run_metrics: dict | None = None,
+    candidate_lookup_summary: dict | None = None,
+    safety_guard: dict | None = None,
+) -> str:
+    env_universe_mode = os.environ.get("MAGICSPLIT_UNIVERSE_MODE")
+    env_config_path = os.environ.get("MAGICSPLIT_CONFIG_PATH")
+    manifest = {
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "run_type": "cpu_backtest",
+        "backtest_window": {
+            "start_date": str(backtest_settings.get("start_date")),
+            "end_date": str(backtest_settings.get("end_date")),
+        },
+        "price_policy": {
+            "basis": str(price_basis),
+            "adjusted_price_gate_start_date": str(adjusted_gate),
+        },
+        "universe_policy": {
+            "resolved_mode": str(universe_mode),
+            "config_mode": strategy_params.get("universe_mode"),
+            "env_override_value": env_universe_mode,
+            "env_override_applied": bool(env_universe_mode and str(env_universe_mode).strip()),
+        },
+        "config": {
+            "config_path": env_config_path or "config/config.yaml",
+            "candidate_source_mode": strategy_params.get("candidate_source_mode"),
+            "tier_hysteresis_mode": strategy_params.get("tier_hysteresis_mode"),
+            "candidate_lookup_error_policy": strategy_params.get("candidate_lookup_error_policy"),
+        },
+        "env_overrides": {
+            "MAGICSPLIT_UNIVERSE_MODE": env_universe_mode,
+            "MAGICSPLIT_CONFIG_PATH": env_config_path,
+        },
+        "run_metrics": run_metrics or {},
+        "candidate_lookup": candidate_lookup_summary or {},
+        "safety_guard": safety_guard or {},
+    }
+    manifest_path = os.path.join(result_dir, "run_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return manifest_path
+
+
+def _build_safety_guard(
+    *,
+    universe_mode: str,
+    strategy_params: dict,
+    run_metrics: dict | None,
+    candidate_lookup_summary: dict | None,
+) -> dict:
+    reasons = []
+    policy = str(strategy_params.get("candidate_lookup_error_policy", "raise")).strip().lower()
+    if policy == "skip":
+        reasons.append("candidate_lookup_error_policy=skip")
+    if str(universe_mode).strip().lower() != "strict_pit":
+        reasons.append(f"universe_mode={universe_mode}")
+
+    lookup_errors = 0
+    if candidate_lookup_summary:
+        try:
+            lookup_errors = int(candidate_lookup_summary.get("error_count", 0) or 0)
+        except (TypeError, ValueError):
+            lookup_errors = 0
+    if lookup_errors <= 0:
+        try:
+            lookup_errors = int((run_metrics or {}).get("source_lookup_error_days", 0) or 0)
+        except (TypeError, ValueError):
+            lookup_errors = 0
+    if lookup_errors > 0:
+        reasons.append(f"candidate_lookup_errors={lookup_errors}")
+
+    blocked = bool(reasons)
+    return {
+        "degraded_run": blocked,
+        "promotion_blocked": blocked,
+        "reasons": reasons,
+    }
 
 def run_backtest_from_config(config: dict) -> dict:
     # When called from non-CLI entrypoints (e.g., Flask), logging may not be configured.
@@ -140,10 +229,40 @@ def run_backtest_from_config(config: dict) -> dict:
         # PerformanceAnalyzer는 이제 전체 history_df를 받습니다.
         analyzer = PerformanceAnalyzer(history_df)
         raw_metrics = analyzer.get_metrics(formatted=False)
+        run_metrics = getattr(final_portfolio, "run_metrics", {}) or {}
+        candidate_lookup_summary_getter = getattr(strategy, "get_candidate_lookup_error_summary", None)
+        candidate_lookup_summary = (
+            candidate_lookup_summary_getter()
+            if callable(candidate_lookup_summary_getter)
+            else {}
+        )
+        safety_guard = _build_safety_guard(
+            universe_mode=universe_mode,
+            strategy_params=strategy_params_from_config,
+            run_metrics=run_metrics,
+            candidate_lookup_summary=candidate_lookup_summary,
+        )
+        if safety_guard.get("promotion_blocked"):
+            logger.warning(
+                "승격 차단: degraded run detected (%s)",
+                ", ".join(safety_guard.get("reasons", [])) or "unknown reason",
+            )
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
         os.makedirs(result_dir, exist_ok=True)
+        run_manifest_path = _write_run_manifest(
+            result_dir=result_dir,
+            strategy_params=strategy_params_from_config,
+            backtest_settings=backtest_settings,
+            universe_mode=universe_mode,
+            price_basis=price_basis,
+            adjusted_gate=adjusted_gate,
+            run_metrics=run_metrics,
+            candidate_lookup_summary=candidate_lookup_summary,
+            safety_guard=safety_guard,
+        )
+        logger.info("실행 메타데이터가 '%s'에 저장되었습니다.", run_manifest_path.replace('\\', '/'))
         
         plot_filename = "performance_report.png" # 파일 이름 변경
         
@@ -176,7 +295,13 @@ def run_backtest_from_config(config: dict) -> dict:
         response = {
             "success": True,
             "metrics": raw_metrics,
+            "run_metrics": run_metrics,
             "universe_mode": universe_mode,
+            "degraded_run": bool(safety_guard.get("degraded_run", False)),
+            "promotion_blocked": bool(safety_guard.get("promotion_blocked", False)),
+            "promotion_block_reasons": list(safety_guard.get("reasons", [])),
+            "candidate_lookup_summary": candidate_lookup_summary,
+            "run_manifest_path": run_manifest_path.replace('\\', '/'),
             "plot_file_path": os.path.join(result_dir, plot_filename).replace('\\', '/'),
             "trade_file_path": trade_filepath_for_response,
             "daily_values": daily_values_for_response.reset_index().rename(columns={'date': 'x', 'total_value': 'y'}).to_dict('records'),

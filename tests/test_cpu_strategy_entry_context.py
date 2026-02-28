@@ -54,10 +54,15 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
         self.assertEqual(self.strategy.last_entry_context["tier_source"], "NO_SIGNAL_DATE")
 
     def test_sets_lookup_error_context(self):
+        strategy = MagicSplitStrategy(
+            **self.base_config,
+            candidate_source_mode="tier",
+            candidate_lookup_error_policy="skip",
+        )
         self.handler.get_previous_trading_date.return_value = pd.Timestamp("2024-01-01")
         self.handler.get_candidates_with_tier_fallback_pit_gated.side_effect = RuntimeError("query failed")
 
-        signals = self.strategy.generate_new_entry_signals(
+        signals = strategy.generate_new_entry_signals(
             pd.Timestamp("2024-01-02"),
             self.portfolio,
             self.handler,
@@ -66,8 +71,21 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
         )
 
         self.assertEqual(signals, [])
-        self.assertEqual(self.strategy.last_entry_context["tier_source"], "CANDIDATE_LOOKUP_ERROR")
-        self.assertEqual(self.strategy.last_entry_context["raw_candidate_count"], 0)
+        self.assertEqual(strategy.last_entry_context["tier_source"], "CANDIDATE_LOOKUP_ERROR")
+        self.assertEqual(strategy.last_entry_context["raw_candidate_count"], 0)
+
+    def test_raises_on_lookup_error_when_policy_raise(self):
+        self.handler.get_previous_trading_date.return_value = pd.Timestamp("2024-01-01")
+        self.handler.get_candidates_with_tier_fallback_pit_gated.side_effect = RuntimeError("query failed")
+
+        with self.assertRaises(RuntimeError):
+            self.strategy.generate_new_entry_signals(
+                pd.Timestamp("2024-01-02"),
+                self.portfolio,
+                self.handler,
+                self.trading_dates,
+                1,
+            )
 
     def test_sets_source_missing_context(self):
         handler = _HandlerWithoutTierCandidateApi()
