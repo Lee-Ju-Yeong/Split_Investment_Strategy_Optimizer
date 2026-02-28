@@ -91,8 +91,8 @@ def run_magic_split_strategy_on_gpu(
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
     strict_hysteresis_enabled = tier_hysteresis_mode == "strict_hysteresis_v1"
     entry_tier1_only = strict_hysteresis_enabled
-    hold_max_tier = 2 if strict_hysteresis_enabled else 0
-    force_liquidate_tier3 = strict_hysteresis_enabled
+    hold_max_tier = 2 if candidate_source_mode in {"tier", "hybrid_transition"} else 0
+    force_liquidate_tier3 = False
     if candidate_source_mode == "tier" and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
 
@@ -308,7 +308,7 @@ def run_magic_split_strategy_on_gpu(
                 current_opens_gpu, signal_closes_gpu, signal_lows_gpu, signal_day_idx,
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
                 all_tickers=all_tickers,
-                signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
+                signal_tiers=signal_tiers_gpu,
                 hold_max_tier=hold_max_tier,
                 strict_cash_rounding=strict_cash_rounding,
             )

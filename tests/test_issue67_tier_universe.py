@@ -375,6 +375,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         )
         self.data_handler = MagicMock()
         self.data_handler.get_previous_trading_date.return_value = pd.Timestamp("2024-01-01")
+        self.data_handler.get_stock_tier_as_of.return_value = {"tier": 2}
         self.trading_dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")]
         self.current_date = self.trading_dates[1]
         self.portfolio = _SimplePortfolio()
@@ -436,7 +437,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         pos = Position(100.0, 10, 1, strategy.additional_buy_drop_rate, strategy.sell_profit_rate)
         pos.open_date = self.trading_dates[0]
         self.portfolio.positions.setdefault("TICK", []).append(pos)
-        self.data_handler.get_tiers_as_of.return_value = {"TICK": {"tier": 3}}
+        self.data_handler.get_stock_tier_as_of.return_value = {"tier": 3}
         self.data_handler.get_stock_row_as_of.return_value = pd.Series({"close_price": 96.0, "low_price": 94.0})
 
         signals = strategy.generate_additional_buy_signals(
@@ -448,9 +449,9 @@ class TestIssue67Hysteresis(unittest.TestCase):
         )
 
         self.assertEqual(signals, [])
-        self.data_handler.get_tiers_as_of.assert_called_once_with(
-            as_of_date=pd.Timestamp("2024-01-01"),
-            tickers=["TICK"],
+        self.data_handler.get_stock_tier_as_of.assert_called_once_with(
+            "TICK",
+            pd.Timestamp("2024-01-01"),
         )
         self.data_handler.get_stock_row_as_of.assert_not_called()
 
@@ -469,7 +470,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         pos = Position(100.0, 10, 1, strategy.additional_buy_drop_rate, strategy.sell_profit_rate)
         pos.open_date = self.trading_dates[0]
         self.portfolio.positions.setdefault("TICK", []).append(pos)
-        self.data_handler.get_tiers_as_of.return_value = {"TICK": {"tier": 0}}
+        self.data_handler.get_stock_tier_as_of.return_value = {"tier": 0}
         self.data_handler.get_stock_row_as_of.return_value = pd.Series({"close_price": 96.0, "low_price": 94.0})
 
         signals = strategy.generate_additional_buy_signals(
@@ -483,7 +484,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         self.assertEqual(signals, [])
         self.data_handler.get_stock_row_as_of.assert_not_called()
 
-    def test_strict_hysteresis_sell_forces_tier3_liquidation(self):
+    def test_strict_hysteresis_sell_does_not_force_tier3_liquidation(self):
         strategy = MagicSplitStrategy(
             max_stocks=5,
             order_investment_ratio=0.1,
@@ -498,7 +499,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         pos = Position(100.0, 10, 1, strategy.additional_buy_drop_rate, strategy.sell_profit_rate)
         pos.open_date = self.trading_dates[0]
         self.portfolio.positions.setdefault("TICK", []).append(pos)
-        self.data_handler.get_tiers_as_of.return_value = {"TICK": {"tier": 3}}
+        self.data_handler.get_stock_tier_as_of.return_value = {"tier": 3}
         self.data_handler.get_stock_row_as_of.return_value = pd.Series({"close_price": 95.0, "high_price": 96.0})
 
         signals = strategy.generate_sell_signals(
@@ -509,14 +510,10 @@ class TestIssue67Hysteresis(unittest.TestCase):
             1,
         )
 
-        self.assertEqual(len(signals), 1)
-        self.assertEqual(signals[0]["reason_for_trade"], "Tier3 강제 청산")
-        self.data_handler.get_tiers_as_of.assert_called_once_with(
-            as_of_date=pd.Timestamp("2024-01-01"),
-            tickers=["TICK"],
-        )
+        self.assertEqual(len(signals), 0)
+        self.data_handler.get_stock_tier_as_of.assert_not_called()
 
-    def test_strict_hysteresis_sell_forces_tier4_liquidation(self):
+    def test_strict_hysteresis_sell_does_not_force_tier4_liquidation(self):
         strategy = MagicSplitStrategy(
             max_stocks=5,
             order_investment_ratio=0.1,
@@ -531,7 +528,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
         pos = Position(100.0, 10, 1, strategy.additional_buy_drop_rate, strategy.sell_profit_rate)
         pos.open_date = self.trading_dates[0]
         self.portfolio.positions.setdefault("TICK", []).append(pos)
-        self.data_handler.get_tiers_as_of.return_value = {"TICK": {"tier": 4}}
+        self.data_handler.get_stock_tier_as_of.return_value = {"tier": 4}
         self.data_handler.get_stock_row_as_of.return_value = pd.Series({"close_price": 95.0, "high_price": 96.0})
 
         signals = strategy.generate_sell_signals(
@@ -542,8 +539,7 @@ class TestIssue67Hysteresis(unittest.TestCase):
             1,
         )
 
-        self.assertEqual(len(signals), 1)
-        self.assertEqual(signals[0]["reason_for_trade"], "Tier3 강제 청산")
+        self.assertEqual(len(signals), 0)
 
 if __name__ == "__main__":
     unittest.main()

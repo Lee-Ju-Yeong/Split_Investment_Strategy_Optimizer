@@ -136,6 +136,20 @@ class MagicSplitStrategy(Strategy):
         }
 
     @staticmethod
+    def _coerce_tier_value(tier_info):
+        if tier_info is None:
+            return 0
+        raw_tier = tier_info.get("tier") if isinstance(tier_info, dict) else None
+        if raw_tier is None:
+            return 0
+        try:
+            if pd.isna(raw_tier):
+                return 0
+            return int(raw_tier)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
     def _get_tick_size(price):
         if price < 2000:
             return 1
@@ -436,11 +450,10 @@ class MagicSplitStrategy(Strategy):
             # 당일 매도된 종목은 추가 매수 안 함
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
-            if self.strict_hysteresis_enabled:
-                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
-                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
-                if tier_value <= 0 or tier_value > 2:
-                    continue
+            tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+            tier_value = self._coerce_tier_value(tier_info)
+            if tier_value <= 0 or tier_value > 2:
+                continue
             
             positions = portfolio.positions[ticker]
             # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
@@ -517,13 +530,6 @@ class MagicSplitStrategy(Strategy):
             liquidate = False
             reason = ""
             trigger_price = current_price
-            if self.strict_hysteresis_enabled:
-                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
-                tier_value = int(tier_info["tier"]) if tier_info is not None else 0
-                if tier_value >= 3:
-                    liquidate = True
-                    reason = "Tier3 강제 청산"
-                    trigger_price = current_price
 
             if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
                 liquidate = True

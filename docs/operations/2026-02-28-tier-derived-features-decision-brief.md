@@ -13,7 +13,15 @@ Related: `#71`, `#101`
 
 - Tier 계산 최신일은 원천 데이터 기준 `2026-02-06`.
 - 현재 `Tier1` 품질 게이트:
-  - `div_yield > 0 AND roe >= 10 AND bps > 0`
+  - `2Y(div_yield>=0 AND roe>=5 AND bps>=0) AND effective_price_vs_5y<=0.33`
+- 현재 `Tier3` 강등 핵심:
+  - `bps <= 0 OR roe < 0` (즉시)
+  - `2Y(roe<=0 OR bps<=0)` (`financial_distress_2y`)
+  - `flow20_mcap` 하위 꼬리 연속 진입 (`flow20_mcap_tail`)
+  - `sbv_ratio >= 0.0272` 연속일 조건 (`sbv_ratio_extreme`)
+- 추가매수/청산 정책:
+  - 추가매수는 `tier<=2`만 허용
+  - Tier 기반 강제청산은 비활성(손절/비활성기간으로만 청산)
 - 데이터 커버리지(2013-11-20~2026-02-06):
   - `InvestorTradingTrend` row coverage vs `DailyStockPrice`: `94.69%`
   - `MarketCapDaily` row coverage vs `DailyStockPrice`: `99.99%`
@@ -44,22 +52,17 @@ Related: `#71`, `#101`
    - 빠른 탐색은 `survivor-only`를 우선 허용
    - 단, 최종 승격 전에는 PIT 검증 모드 재평가를 필수로 둠
 
-### 4-2. 추가 결정 필요
+### 4-2. 적용 상태 (코드 반영)
 
-아래 4개는 2026-02-28 기준 잠금값으로 확정한다.
-
-1. Tier1 `flow20_mcap` 하드게이트:
-   - `flow20_mcap >= 0`
-   - 단, flow coverage gate 통과일에만 적용
-2. Tier3 규칙 조합:
-   - `roe < 0 OR eps < 0 OR flow20_mcap < -0.010`
-   - flow coverage gate 미통과일에는 `roe/eps`만 사용
-3. Ranking 기본축(동점 포함):
-   - `entry_score = 0.50*cheap_effective + 0.30*flow5_mcap_rank + 0.20*atr_rank`
+1. Ranking 기본축(동점 포함):
+   - `entry_score = 0.50*cheap_effective + 0.30*flow_score + 0.20*atr_score`
    - 정렬: `entry_score desc -> market_cap desc -> ticker asc`
-4. 지표 기준(raw/adjusted):
-   - 당장은 `CalculatedIndicators` raw 기준 유지
-   - adjusted 재정렬은 별도 Phase로 분리(성능/패리티 검증 후)
+2. Tier3 수급 강등:
+   - `flow20_mcap` 하위 꼬리 구간 연속 진입 시 `tier=3`
+3. 지표 기준(raw/adjusted):
+   - `effective_price_vs_5y`는 `2014-11-19`까지 raw 지표, `2014-11-20`부터 adjusted 재계산값을 사용
+4. 세부 기준 Source of Truth:
+   - `docs/database/daily_stock_tier_rules.md`
 
 ## 5) 파생변수 활용안 (Tier vs Ranking)
 
@@ -74,7 +77,7 @@ Related: `#71`, `#101`
    - 사용: 저유동성 차단 (`<50M~100M`은 위험 강등, `<300M`은 Watch)
 3. `sbv_ratio`
    - 사용: 공매도 과열 강등 (`>=0.0272` 위험, Tier1에서 `>=0.0139`면 Tier2 강등)
-4. `tier1_quality_pass` (`div_yield>0 AND roe>=10 AND bps>0`)
+4. `tier1_quality_pass` (`2Y(div_yield>=0 AND roe>=5 AND bps>=0) AND effective_price_vs_5y<=0.33`)
    - 사용: Tier1 진입 필수 조건
 5. `turnover_20d` (도입 권장)
    - 사용: 거래 가능성 보강 게이트(결측/극저 값은 Tier1 제외)
