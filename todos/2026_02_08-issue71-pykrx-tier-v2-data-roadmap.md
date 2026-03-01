@@ -21,7 +21,11 @@
 - [x] Phase P0 테이블 DDL/인덱스 추가: `MarketCapDaily`, `ShortSellingDaily`
 - [x] 수집 워커 추가: `src/market_cap_collector.py`, `src/short_selling_collector.py`
 - [x] 배치 엔트리 확장: `src/pipeline_batch.py`에 `--run-marketcap`, `--run-shortsell` 옵션 추가
-- [ ] pykrx source health-check preflight 유틸/가드(전량 empty 패턴 fail-fast) 공통화
+- [x] pykrx source health-check preflight 유틸/가드(전량 empty 패턴 fail-fast) 공통화 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+
+## 0-1. 이슈71 범위 외 미완료 항목 이관 (2026-03-01)
+- 이슈71 close 이후에도 문서에 남아 있던 미완료 항목 중, 범위 외/후속 과제는 별도 문서로 이관했다.
+- 이관 문서: `todos/2026_03_01-issue71-carryover-non71-backlog.md`
 
 ## 1. 배경
 - 현재 운영 축은 `DailyStockPrice` / `FinancialData` / `InvestorTradingTrend` / `DailyStockTier`
@@ -147,30 +151,30 @@
 - 실행 재현성 확인: 동일 trial 재실행 hash 불일치 시 즉시 중단/무효화
 
 ## 6. 체크리스트
-- [ ] P0 테이블 DDL/인덱스 확정
-- [ ] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월)
-- [ ] Tier v2 read-only 실험 스크립트 추가
-- [ ] PIT/왜곡 방지 검증 항목 테스트화
-- [ ] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast)
+- [x] P0 테이블 DDL/인덱스 확정 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] 수집 배치 엔트리(`pipeline_batch`) 확장(일/주/월) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Tier v2 read-only 실험 스크립트 추가 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] PIT/왜곡 방지 검증 항목 테스트화 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] pykrx source health-check 유틸/가드 추가(전량 empty 패턴 fail-fast) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
 - [x] `DailyStockTier` 멀티팩터 저평가 점수 저장 경로 추가(2026-02-24)
   - 스키마: `pbr_discount`, `per_discount`, `div_premium`, `cheap_score`, `cheap_score_version`, `cheap_score_confidence`
   - 규칙: `div_yield <= 0`은 Tier1 제외(강등)
 - [x] 공매도 보수 반영(2026-02-24)
   - `sbv_ratio = short_balance_value / market_cap`를 Tier batch에서 계산/저장
   - `sbv_ratio >= 0.0272(p99)`는 Tier3 강등, `Tier1 & sbv_ratio >= 0.0139(p95)`는 Tier2 강등
-- [ ] 공매도 랭킹 반영은 보류(후속)
+- [x] 공매도 랭킹 반영은 보류(후속) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
   - 런타임 재조인 금지 원칙 유지, Tier 저장값 기반 `shadow -> gated -> default` 방식으로 별도 진행
-- [ ] `MarketCapDaily` 적재 단계에서 `Common Stock`만 포함되도록 종목 마스터/유니버스와 조인해 제외 규칙 고정(ETF/ETN/ELW/SPAC 등)
-- [ ] 거래정지/비정상 거래일 파생 플래그(halt/zero-volume) 정책 정의(매수 제한/리스크 대응용)
-- [ ] (선택) `get_market_fundamental(date)` 기반 `FundamentalDaily` 병행 수집 여부 결정(일별 trailing PER/PBR 등)
-- [ ] `SectorClassificationHistory` 스냅샷 수집 + SCD Type2 적재 워커 추가
-- [ ] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정)
-- [ ] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가
-- [ ] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`)
-- [ ] Optuna invalid trial 기준 명문화(`INVALID_REPRO`, `INVALID_PARITY`, `INVALID_DATA`)
-- [ ] Optuna run manifest 저장(`config hash`, `data hash`, `env fingerprint`, `git sha`)
-- [ ] mode 전환(`hybrid_transition` -> `tier`) 시 study 분리 강제(혼합 비교 금지)
-- [ ] `docs/database/schema.md` 및 `TODO.md` 동기화
+- [x] `MarketCapDaily` 적재 단계에서 `Common Stock`만 포함되도록 종목 마스터/유니버스와 조인해 제외 규칙 고정(ETF/ETN/ELW/SPAC 등) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] 거래정지/비정상 거래일 파생 플래그(halt/zero-volume) 정책 정의(매수 제한/리스크 대응용) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] (선택) `get_market_fundamental(date)` 기반 `FundamentalDaily` 병행 수집 여부 결정(일별 trailing PER/PBR 등) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] `SectorClassificationHistory` 스냅샷 수집 + SCD Type2 적재 워커 추가 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Optuna 실험 스크립트/설정 추가(`robust_score` objective, seed 고정) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Optuna 전제조건 체크(후보군 모드/Parity/데이터 커버리지) 자동 가드 추가 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Optuna 산출물 저장 규격 정의(`trial params`, `score`, `gate pass/fail`, `metadata`) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Optuna invalid trial 기준 명문화(`INVALID_REPRO`, `INVALID_PARITY`, `INVALID_DATA`) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Optuna run manifest 저장(`config hash`, `data hash`, `env fingerprint`, `git sha`) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] mode 전환(`hybrid_transition` -> `tier`) 시 study 분리 강제(혼합 비교 금지) → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] `docs/database/schema.md` 및 `TODO.md` 동기화 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
 
 ## 7. 완료 기준
 - P0 적재 일배치 1주 무장애
@@ -233,9 +237,9 @@ END AS tier
 ```
 
 ### 8-4. 후속 액션
-- [ ] `DailyStockTier` 계산 경로에 위 Balanced 규칙을 `read-only shadow`로 추가
-- [ ] shadow 결과(`tier 분포`, `기존 대비 이동률`, `최근 20영업일 안정성`) 검증 후 default 전환 여부 결정
-- [ ] `short_volume/short_value/short_balance` 수집 정상화 및 컬럼 매핑 drift 방지 가드 추가
+- [x] `DailyStockTier` 계산 경로에 위 Balanced 규칙을 `read-only shadow`로 추가 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] shadow 결과(`tier 분포`, `기존 대비 이동률`, `최근 20영업일 안정성`) 검증 후 default 전환 여부 결정 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] `short_volume/short_value/short_balance` 수집 정상화 및 컬럼 매핑 drift 방지 가드 추가 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
 
 ## 9. 코드 수정 요약 (2026-02-22)
 
@@ -305,18 +309,18 @@ END AS tier
 - [x] 지표 기준: `CalculatedIndicators`는 우선 raw 유지(adjusted 전환은 별도 Phase)
 
 ### 10-3. 후속 작업 (결정 후 실행)
-- [ ] 백테스트 모드 2트랙 문서/설정 반영:
+- [x] 백테스트 모드 2트랙 문서/설정 반영 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`):
   - `research_survivor_only`
   - `pit_no_forced_tier_liquidation`
-- [ ] MVP 파생변수 8~10개를 `DailyStockTier`에 저장
-- [ ] Tier 행동 규칙 반영:
+- [x] MVP 파생변수 8~10개를 `DailyStockTier`에 저장 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] Tier 행동 규칙 반영 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`):
   - Tier1=신규진입
   - Tier2=추가매수 가능
   - Tier3=추가매수 유보(`max_inactivity_period` 연동)
-- [ ] 결측 처리 공통 규칙(`safe_div`, `missing_flag`, `confidence`, coverage gate) 코드화
-- [ ] CPU/GPU 공통 조회/랭킹 경로에 신규 변수 연결
-- [ ] parity + PIT + 커버리지 회귀 테스트 확장
-- [ ] 백필/검증 리포트 저장 후 shadow -> gated -> default 전환
+- [x] 결측 처리 공통 규칙(`safe_div`, `missing_flag`, `confidence`, coverage gate) 코드화 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] CPU/GPU 공통 조회/랭킹 경로에 신규 변수 연결 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] parity + PIT + 커버리지 회귀 테스트 확장 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
+- [x] 백필/검증 리포트 저장 후 shadow -> gated -> default 전환 → 이슈71 범위 외로 이관 (`todos/2026_03_01-issue71-carryover-non71-backlog.md`)
 
 ### 10-4. 의사결정 브리프
 - 문서: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`
