@@ -14,7 +14,7 @@
 - [x] 이슈 #61 임포트 스타일 통일: `todos/done_2026_02_15-issue61-import-style-standardization.md`
 - [x] 이슈 #69 `src` 패키지 구조 재편/브레이크다운: `todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md`
 - [x] 이슈 #93 Wrapper deprecation/removal 계획: `todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md`
-- [x] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md` (2026-02-25 close: 결정론 편향 완화/파라미터 정합성 작업 반영, 가격정책+SBV/cheap-score 운영 반영 완료)
+- [x] 이슈 #71 pykrx 확장 데이터셋 + Tier v2 로드맵: `todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md` (2026-02-25 close: 결정론 편향 완화/파라미터 정합성 작업 반영, 가격정책+SBV/cheap-score 운영 반영 완료)
   - [x] 2026-02-28 1차 의사결정: `3-tier 유지`, Tier 강제청산 기본 비활성, `survivor-only` 연구모드 허용
   - [x] 2026-02-28 2차 의사결정: `flow20_mcap` 임계치, Tier3 조합 규칙, 랭킹축, raw/adjusted 지표 기준 확정
   - [ ] 브리프 참고: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`

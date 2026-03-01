@@ -1,5 +1,5 @@
 # chore(planning): issue71 범위 외 미완료 항목 이관 백로그
-- source: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
+- source: `todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 - 목적: 이슈 #71(close) 문서에 남아 있던 미완료 항목 중 범위 외/후속 과제를 분리 추적
 - 분리 원칙:
   - 이슈 #71 완료 범위를 넘는 확장 과제는 본 문서로 이관

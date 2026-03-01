@@ -137,4 +137,4 @@ Related: `#71`, `#101`
 
 - `docs/database/daily_stock_tier_rules.md`
 - `docs/operations/gemini_derived_features_review_package.md`
-- `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
+- `todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
