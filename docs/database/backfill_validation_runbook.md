@@ -232,10 +232,12 @@ PY
   - 영향: 값을 높이면 Prime이 줄고, 낮추면 Prime이 늘어남
 
 - 현재 Tier 산정 규칙
-  - `avg_20d_value >= prime_liquidity` → `tier=1`
-  - `avg_20d_value < danger_liquidity` → `tier=3`
-  - 그 외 → `tier=2`
-  - 추가로 `bps <= 0` 또는 `roe < 0`이면 `tier=3`으로 override
+  - 운영 단일 소스: `docs/database/daily_stock_tier_rules.md`
+  - 핵심:
+    - 기본 유동성 분류(`tier=1/2/3`)
+    - 재무 리스크(`bps<=0 or roe<0`)는 `tier=3` override
+    - Tier1 품질 게이트: `div_yield>0 and roe>=10 and bps>0`
+    - SBV는 `coverage >= 0.90`인 유효일에만 overlay 적용
 
 ### 8-2) 임계값 후보(A/B/C)
 

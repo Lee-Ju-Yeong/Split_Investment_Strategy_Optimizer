@@ -102,6 +102,7 @@ python -m src.app
 - 사전 계산 Tier: `DailyStockTier`
 
 스키마 상세: `docs/database/schema.md`
+Tier 규칙 상세(운영 기준): `docs/database/daily_stock_tier_rules.md`
 
 ## 테스트
 ```bash

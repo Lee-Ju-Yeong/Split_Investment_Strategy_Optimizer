@@ -11,6 +11,7 @@ class TestCpuGpuParityTopk(unittest.TestCase):
         src = inspect.getsource(_load_all_data_to_gpu)
         self.assertIn("dst.cheap_score", src)
         self.assertIn("dst.cheap_score_confidence", src)
+        self.assertIn("dst.flow5_mcap", src)
         self.assertIn("LEFT JOIN DailyStockTier dst", src)
 
     def test_param_row_priority_mapping(self):

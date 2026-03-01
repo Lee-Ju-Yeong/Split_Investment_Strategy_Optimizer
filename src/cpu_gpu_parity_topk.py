@@ -90,7 +90,8 @@ def _load_all_data_to_gpu(sql_engine, start_date: str, end_date: str):
             ci.atr_14_ratio,
             mcd.market_cap,
             dst.cheap_score,
-            dst.cheap_score_confidence
+            dst.cheap_score_confidence,
+            dst.flow5_mcap
         FROM DailyStockPrice dsp
         LEFT JOIN CalculatedIndicators ci
           ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date

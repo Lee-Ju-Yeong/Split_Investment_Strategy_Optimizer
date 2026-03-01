@@ -118,12 +118,18 @@ def create_tables(conn):
         close_price DECIMAL(20, 5),
         adj_close DECIMAL(20, 5) NULL,
         adj_ratio DECIMAL(20, 10) NULL,
+        adj_open DECIMAL(20, 5) NULL,
+        adj_high DECIMAL(20, 5) NULL,
+        adj_low DECIMAL(20, 5) NULL,
         volume BIGINT,
         PRIMARY KEY (stock_code, date)
     )
     ''')
     ensure_column('DailyStockPrice', 'adj_close', 'DECIMAL(20, 5) NULL')
     ensure_column('DailyStockPrice', 'adj_ratio', 'DECIMAL(20, 10) NULL')
+    ensure_column('DailyStockPrice', 'adj_open', 'DECIMAL(20, 5) NULL')
+    ensure_column('DailyStockPrice', 'adj_high', 'DECIMAL(20, 5) NULL')
+    ensure_column('DailyStockPrice', 'adj_low', 'DECIMAL(20, 5) NULL')
     cur.execute('''
     CREATE TABLE IF NOT EXISTS CalculatedIndicators (
         stock_code VARCHAR(6),
@@ -208,6 +214,7 @@ def create_tables(conn):
         reason VARCHAR(255),
         liquidity_20d_avg_value BIGINT NULL,
         sbv_ratio FLOAT NULL,
+        flow5_mcap FLOAT NULL,
         pbr_discount FLOAT NULL,
         per_discount FLOAT NULL,
         div_premium FLOAT NULL,
@@ -219,6 +226,7 @@ def create_tables(conn):
     )
     ''')
     ensure_column('DailyStockTier', 'sbv_ratio', 'FLOAT NULL')
+    ensure_column('DailyStockTier', 'flow5_mcap', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'pbr_discount', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'per_discount', 'FLOAT NULL')
     ensure_column('DailyStockTier', 'div_premium', 'FLOAT NULL')

@@ -19,33 +19,37 @@
 
 ## II. 종목 선정 원칙 (Universe Selection)
 
-### 1. 주간 후보군 필터링
+### 1. Tier 후보군 필터링
 
--   **원칙:** 매주 `weekly_stock_filter_parser.py`를 통해 생성된 필터링 조건(시가총액, 거래대금 등)을 만족하는 종목군을 해당 주의 투자 유니버스로 설정합니다.
--   **적용:** 백테스터는 특정 거래일에 가장 최신의 주간 필터링 결과를 가져와 사용합니다.
+-   **원칙:** 신규 진입 후보군은 `DailyStockTier` 기반으로 구성합니다.
+-   **적용:** 신호일(T-1) 기준 `Tier1`을 우선 사용하고, strict 모드가 아니며 `Tier1`이 비어 있을 때만 `Tier2` fallback을 허용합니다.
+-   **비고:** `candidate_source_mode='weekly'`는 운영 경로에서 더 이상 1차 후보군으로 사용하지 않습니다.
 
 ### 2. 신규 진입 후보 선정 (New Entry)
 
--   **대상:** 해당 주의 투자 유니버스에 속한 종목 중, 현재 포트폴리오에 보유하고 있지 않으며 '쿨다운' 상태가 아닌 종목.
--   **우선순위:**
-    1.  **1순위:** `ATR(14) 비율`이 높은 순서 (변동성이 큰 종목 우선).
-    2.  **2순위 (동점 시):** 티커(종목코드) 오름차순.
--   **선정 개수:** `max_stocks` 파라미터로 설정된 최대 보유 가능 종목 수에서 현재 보유 종목 수를 뺀 만큼의 슬롯(`available_slots`)까지 우선순위 순서대로 선정합니다.
+-   **대상:** Tier 후보군 중 미보유 + 쿨다운이 아닌 종목.
+-   **우선순위:** `entry_composite_score` 내림차순
+    1. `0.50 * cheap_effective`
+    2. `0.30 * flow_score` (`flow5_mcap` 단면 백분위)
+    3. `0.20 * atr_score` (`atr_14_ratio` 단면 백분위)
+    4. 동점 시 `market_cap` 내림차순
+    5. 최종 동점 시 `ticker` 오름차순
+-   **선정 개수:** `available_slots`까지 상위 후보를 채웁니다.
 
 > #### **CPU vs. GPU 구현 차이**
 >
-> -   **CPU:** `strategy.py`에서 후보군을 순회하며 ATR 값을 가져와 Python의 `sorted` 함수로 2단계 정렬을 수행합니다.
-> -   **GPU:** `_process_new_entry_signals_gpu` 함수에서 후보군 전체의 ATR 값을 벡터로 가져온 뒤, `cp.argsort`를 사용하여 모든 시뮬레이션에 대해 동시에 정렬을 수행합니다.
-> -   **결과는 동일:** 두 방식 모두 동일한 정렬 기준을 따릅니다.
+> -   **CPU:** `strategy.py`에서 후보별 점수를 계산한 뒤 복합 정렬을 수행합니다.
+> -   **GPU:** 동일 정렬 키(복합 점수 -> 시총 -> 티커)를 벡터화 경로에 적용합니다.
+> -   **결과 목표:** 동일 입력/설정에서 결정 경로 parity를 유지합니다.
 
 ### 3. Entry/Hold 히스테리시스
 
 -   **정책 모드:** `strategy_params.tier_hysteresis_mode`로 제어합니다.
-    - `legacy`(기본): Entry는 `tier=1 -> empty면 tier<=2 fallback`, Hold/Add는 별도 Tier 재평가 없이 동작
-    - `strict_hysteresis_v1`: Entry는 Tier1 only(비면 skip), Hold/Add는 Tier<=2만 허용, Tier3는 강제 청산
+    - `legacy`(기본): Entry는 `tier=1 -> empty면 tier<=2 fallback`
+    - `strict_hysteresis_v1`: Entry는 Tier1 only(비면 skip), Tier2 fallback 차단
 -   **Entry 경로:** `candidate_source_mode`가 `tier`/`hybrid_transition`일 때 Tier 후보군을 사용합니다. strict 모드에서는 `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
--   **Hold/Add 경로:** `generate_additional_buy_signals`는 T+0 진입 제외(T+1부터 허용), `cooldown_tracker`, `max_splits_limit`, `additional_buy_drop_rate`를 적용합니다. strict 모드에서는 T-1 Tier 조회에서 `tier<=2`인 보유 종목에만 추가 매수를 허용합니다.
--   **Tier3 리스크 경로:** strict 모드에서는 `generate_sell_signals`/GPU sell 커널에서 T-1 Tier가 `3`인 보유 종목을 강제 청산합니다.
+-   **Hold/Add 경로:** `generate_additional_buy_signals`는 T+0 진입 제외(T+1부터 허용), `cooldown_tracker`, `max_splits_limit`, `additional_buy_drop_rate`를 적용합니다. 모드와 무관하게 T-1 Tier가 `1~2`인 보유 종목에만 추가 매수를 허용합니다.
+-   **Tier3 리스크 경로:** Tier 기반 강제청산은 비활성입니다. 청산은 손절/비활성기간(`max_inactivity_period`) 규칙으로만 수행합니다.
 
 ## III. 매수 원칙 (Buy Principles)
 

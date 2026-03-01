@@ -4,17 +4,26 @@ It is used to test the GPU single run with the parameters from the config.yaml f
 """
 import time
 import argparse
-import cudf
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
-from datetime import timedelta, datetime # datetime 추가
 import os
 import urllib.parse
 
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
 from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+from src.price_policy import (
+    is_adjusted_price_basis,
+    resolve_price_policy,
+    validate_backtest_window_for_price_policy,
+)
+from src.universe_policy import resolve_universe_mode
+from src.optimization.gpu.data_loading import (
+    preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
+    preload_tier_data_to_tensor as preload_tier_data_to_tensor_shared,
+    preload_weekly_filtered_stocks_to_gpu as preload_weekly_filtered_stocks_to_gpu_shared,
+)
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
 from src.performance_analyzer import PerformanceAnalyzer
 
@@ -78,132 +87,44 @@ print(f"✅ Total parameter combinations generated for GPU: {num_combinations}")
 # 2. GPU Data Pre-loader
 # -----------------------------------------------------------------------------
 
-def preload_all_data_to_gpu(engine, start_date, end_date):
-    """
-    Loads all necessary stock data for the entire backtest period into a
-    single cuDF DataFrame.
-    """
-    print("⏳ Loading all stock data into GPU memory...")
-    start_time = time.time()
-    
-    query = f"""
-    SELECT 
-        dsp.stock_code AS ticker, 
-        dsp.date, 
-        dsp.open_price, 
-        dsp.high_price, 
-        dsp.low_price, 
-        dsp.close_price, 
-        dsp.volume,
-        ci.atr_14_ratio
-    FROM 
-        DailyStockPrice AS dsp
-    LEFT JOIN 
-        CalculatedIndicators AS ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
-    WHERE 
-        dsp.date BETWEEN '{start_date}' AND '{end_date}'
-    """
-    sql_engine = create_engine(engine)
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
-    gdf = cudf.from_pandas(df_pd)
-    gdf = gdf.set_index(['ticker', 'date'])
-    
-    end_time = time.time()
-    print(f"✅ Data loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s")
-    return gdf
-
-def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    """
-    Loads all weekly filtered stock codes for the backtest period.
-    """
-    print("⏳ Loading weekly filtered stocks data to GPU memory...")
-    start_time = time.time()
-    
-    extended_start_date = pd.to_datetime(start_date) - timedelta(days=14)
-    extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
-    
-    query =  f"""
-    SELECT `filter_date` as date, `stock_code` as ticker
-    FROM WeeklyFilteredStocks
-    WHERE `filter_date` BETWEEN '{extended_start_date_str}' AND '{end_date}'
-    """
-    sql_engine = create_engine(engine)
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
-    gdf = cudf.from_pandas(df_pd)
-    gdf = gdf.set_index('date')
-    
-    end_time = time.time()
-    print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {end_time - start_time:.2f}s")
-    return gdf
-
-def preload_tier_data_to_tensor(engine, start_date, end_date, all_tickers, trading_dates_pd):
-    """
-    Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.
-    Performs forward-fill to ensure PIT compliance (latest <= date).
-    """
-    print("⏳ Loading DailyStockTier data to GPU tensor...")
-    start_time = time.time()
-    
-    start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-    end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
-    query = f"""
-        SELECT date, stock_code as ticker, tier, liquidity_20d_avg_value
-        FROM DailyStockTier
-        WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'
-        UNION ALL
-        SELECT t.date, t.stock_code as ticker, t.tier, t.liquidity_20d_avg_value
-        FROM DailyStockTier t
-        JOIN (
-            SELECT stock_code, MAX(date) AS max_date
-            FROM DailyStockTier
-            WHERE date < '{start_date_str}'
-            GROUP BY stock_code
-        ) latest ON t.stock_code = latest.stock_code AND t.date = latest.max_date
-    """
-    sql_engine = create_engine(engine)
-    df_pd = pd.read_sql(query, sql_engine, parse_dates=['date'])
-    
-    if df_pd.empty:
-        print("⚠️ No Tier data found. Returning empty tensor.")
-        return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
-
-    min_liq = int(strategy_params.get("min_liquidity_20d_avg_value", 0) or 0)
-
-    # index=date, columns=ticker
-    tier_wide = df_pd.pivot_table(index='date', columns='ticker', values='tier')
-    liq_wide = df_pd.pivot_table(index='date', columns='ticker', values='liquidity_20d_avg_value')
-    
-    tier_asof = tier_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill().fillna(0).astype(int)
-    liq_asof = liq_wide.reindex(index=trading_dates_pd, columns=all_tickers).ffill()
-
-    if min_liq > 0:
-        liq_mask = liq_asof.fillna(-1) >= min_liq
-        tier_asof = tier_asof.where(liq_mask, 0)
-
-    tier1_count = (tier_asof == 1).sum(axis=1).astype(int)
-    tier12_count = ((tier_asof > 0) & (tier_asof <= 2)).sum(axis=1).astype(int)
-    universe_count = len(all_tickers)
-    print(
-        f"[TierCoverage][GPU] min_tier1={int(tier1_count.min())} "
-        f"min_tier12={int(tier12_count.min())} universe={universe_count}"
+def preload_all_data_to_gpu(
+    engine,
+    start_date,
+    end_date,
+    *,
+    use_adjusted_prices=False,
+    adjusted_price_gate_start_date="2013-11-20",
+    universe_mode="optimistic_survivor",
+):
+    return preload_all_data_to_gpu_shared(
+        engine,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_price_gate_start_date,
+        universe_mode=universe_mode,
     )
 
-    min_ratio = float(strategy_params.get("min_tier12_coverage_ratio", 0.0) or 0.0)
-    if min_ratio > 0 and universe_count > 0:
-        ratio = tier12_count / float(universe_count)
-        failed = ratio[ratio < min_ratio]
-        if not failed.empty:
-            fail_date = failed.index[0]
-            raise ValueError(
-                f"Tier coverage gate failed on {pd.to_datetime(fail_date).date()}: "
-                f"tier12_ratio={float(failed.iloc[0]):.4f} < threshold={min_ratio:.4f}"
-            )
+def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
+    return preload_weekly_filtered_stocks_to_gpu_shared(engine, start_date, end_date)
 
-    # Convert to CuPy
-    tier_tensor = cp.asarray(tier_asof.values, dtype=cp.int8)
-    
-    print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
-    return tier_tensor
+def preload_tier_data_to_tensor(
+    engine,
+    start_date,
+    end_date,
+    all_tickers,
+    trading_dates_pd,
+    *,
+    universe_mode="optimistic_survivor",
+):
+    return preload_tier_data_to_tensor_shared(
+        engine,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+        universe_mode=universe_mode,
+    )
 
 # -----------------------------------------------------------------------------
 # 3. GPU Backtesting Kernel
@@ -251,6 +172,23 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     print(f"WORKER: Running Single Backtest for {start_date} to {end_date}")
     print(f"Params: {params_dict}")
     print("="*80)
+    universe_mode = resolve_universe_mode(
+        params_dict,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
+    price_basis, adjusted_gate_start_date = resolve_price_policy(params_dict)
+    validate_backtest_window_for_price_policy(
+        start_date=start_date,
+        end_date=end_date,
+        price_basis=price_basis,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+    )
+    use_adjusted_prices = is_adjusted_price_basis(price_basis)
+    print(f"Universe Policy: mode={universe_mode}")
+    print(
+        "Price Policy: "
+        f"basis={price_basis}, adjusted_gate_start={adjusted_gate_start_date}"
+    )
 
     # 1. 파라미터 딕셔너리를 GPU가 사용할 수 있는 cp.ndarray로 변환
     priority_map = {'lowest_order': 0, 'highest_drop': 1}
@@ -268,7 +206,14 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     ]], dtype=cp.float32)
 
     # 2. 데이터 로드 및 준비
-    all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
+    all_data_gpu = preload_all_data_to_gpu(
+        db_connection_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+        universe_mode=universe_mode,
+    )
     weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
     
     sql_engine = create_engine(db_connection_str)
@@ -288,7 +233,14 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
     # [Issue #67] Preload Tier Tensor
-    tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+    tier_tensor = preload_tier_data_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+        universe_mode=universe_mode,
+    )
 
     # 3. 백테스팅 커널 실행
     start_time_kernel = time.time()
@@ -297,6 +249,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     run_exec_params = execution_params.copy()
     run_exec_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
     run_exec_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
+    run_exec_params['universe_mode'] = universe_mode
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 

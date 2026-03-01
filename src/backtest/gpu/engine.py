@@ -76,23 +76,24 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
-    use_weekly_alpha_gate = _coerce_bool(execution_params.get("use_weekly_alpha_gate", False))
+    requested_candidate_source_mode = str(
+        execution_params.get("candidate_source_mode", "tier")
+    ).strip()
+    if requested_candidate_source_mode != "tier":
+        print(
+            f"[Warning] candidate_source_mode='{requested_candidate_source_mode}' is deprecated. "
+            "Forcing 'tier' (A-path) for CPU/GPU parity."
+        )
+    candidate_source_mode = "tier"
+    use_weekly_alpha_gate = False
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
-    strict_hysteresis_enabled = (
-        tier_hysteresis_mode == "strict_hysteresis_v1"
-        and candidate_source_mode in {"tier", "hybrid_transition"}
-    )
+    strict_hysteresis_enabled = tier_hysteresis_mode == "strict_hysteresis_v1"
     entry_tier1_only = strict_hysteresis_enabled
-    hold_max_tier = 2 if strict_hysteresis_enabled else 0
-    force_liquidate_tier3 = strict_hysteresis_enabled
-    valid_modes = {'weekly', 'tier', 'hybrid_transition'}
-    if candidate_source_mode not in valid_modes:
-        print(f"[Warning] Invalid candidate_source_mode '{candidate_source_mode}'. Falling back to 'tier'.")
-        candidate_source_mode = 'tier'
-    if candidate_source_mode in ('tier', 'hybrid_transition') and tier_tensor is None:
+    hold_max_tier = 2 if candidate_source_mode in {"tier", "hybrid_transition"} else 0
+    force_liquidate_tier3 = False
+    if candidate_source_mode == "tier" and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
 
     portfolio_state = cp.zeros((num_combinations, 2), dtype=cp.float32)
@@ -123,10 +124,7 @@ def run_magic_split_strategy_on_gpu(
             f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
             "Fallback to zeros enabled."
         )
-    needs_weekly_candidates = (
-        candidate_source_mode == "weekly"
-        or (candidate_source_mode == "hybrid_transition" and use_weekly_alpha_gate)
-    )
+    needs_weekly_candidates = False
     weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index() if needs_weekly_candidates else None
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
@@ -239,7 +237,8 @@ def run_magic_split_strategy_on_gpu(
             if final_candidate_indices.size > 1:
                 final_candidate_indices = cp.unique(final_candidate_indices)
 
-            # (D) Valid Data Check + deterministic ranking metrics (Cheap -> ATR -> MarketCap -> Ticker)
+            # (D) Valid Data Check + deterministic ranking metrics
+            # (CompositeScore -> MarketCap -> Ticker)
             if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
@@ -309,7 +308,7 @@ def run_magic_split_strategy_on_gpu(
                 current_opens_gpu, signal_closes_gpu, signal_lows_gpu, signal_day_idx,
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
                 all_tickers=all_tickers,
-                signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
+                signal_tiers=signal_tiers_gpu,
                 hold_max_tier=hold_max_tier,
                 strict_cash_rounding=strict_cash_rounding,
             )

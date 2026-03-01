@@ -21,13 +21,25 @@ DEFAULT_INVESTOR_FLOW5_THRESHOLD = -500_000_000
 DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS = 5
 DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS = 3
 DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS = 7
-DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.45
-DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.35
+DEFAULT_CHEAP_SCORE_WEIGHT_PBR = 0.25
+DEFAULT_CHEAP_SCORE_WEIGHT_PER = 0.55
 DEFAULT_CHEAP_SCORE_WEIGHT_DIV = 0.20
 DEFAULT_CHEAP_SCORE_MIN_OBS_DAYS = 126
 DEFAULT_ENABLE_SBV_TIER_OVERLAY = True
 DEFAULT_SBV_TIER3_THRESHOLD = 0.0272
 DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD = 0.0139
+DEFAULT_SBV_VALID_COVERAGE_THRESHOLD = 0.90
+DEFAULT_SBV_TIER3_CONSECUTIVE_DAYS = 3
+DEFAULT_TIER1_GROWTH_ROE_MIN = 5.0
+DEFAULT_TIER1_GROWTH_BPS_MIN = 0.0
+DEFAULT_TIER1_QUALITY_LOOKBACK_DAYS = 504
+DEFAULT_TIER1_POSITION_GATE_MAX_PCT = 0.33
+DEFAULT_TIER1_POSITION_GATE_START_DATE = "2014-11-20"
+DEFAULT_TIER1_POSITION_LOOKBACK_DAYS = 252 * 5
+DEFAULT_TIER1_POSITION_MIN_PERIODS_DAYS = 252
+DEFAULT_TIER3_FLOW20_QUANTILE = 0.10
+DEFAULT_TIER3_FLOW20_VALID_COVERAGE_THRESHOLD = 0.70
+DEFAULT_TIER3_FLOW20_CONSECUTIVE_DAYS = 5
 
 
 def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
@@ -144,15 +156,29 @@ def _build_in_clause_params(base_sql, values):
 def fetch_price_history(conn, start_date, end_date, ticker_codes=None):
     params = [start_date, end_date]
     query = """
-        SELECT stock_code, date, close_price, volume
-        FROM DailyStockPrice
-        WHERE date BETWEEN %s AND %s
+        SELECT
+            p.stock_code,
+            p.date,
+            p.close_price,
+            p.volume,
+            p.high_price,
+            p.low_price,
+            p.adj_close,
+            p.adj_high,
+            p.adj_low,
+            i.price_vs_5y_low_pct,
+            i.price_vs_10y_low_pct
+        FROM DailyStockPrice p
+        LEFT JOIN CalculatedIndicators i
+          ON i.stock_code = p.stock_code
+         AND i.date = p.date
+        WHERE p.date BETWEEN %s AND %s
     """
     if ticker_codes:
-        in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+        in_sql, in_params = _build_in_clause_params(" AND p.stock_code IN", ticker_codes)
         query += in_sql
         params.extend(in_params)
-    query += " ORDER BY stock_code, date"
+    query += " ORDER BY p.stock_code, p.date"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         return pd.read_sql(query, conn, params=params)
@@ -241,6 +267,23 @@ def fetch_investor_history(conn, start_date, end_date, ticker_codes=None):
     query = """
         SELECT stock_code, date, foreigner_net_buy, institution_net_buy
         FROM InvestorTradingTrend
+        WHERE date BETWEEN %s AND %s
+    """
+    if ticker_codes:
+        in_sql, in_params = _build_in_clause_params(" AND stock_code IN", ticker_codes)
+        query += in_sql
+        params.extend(in_params)
+    query += " ORDER BY stock_code, date"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return pd.read_sql(query, conn, params=params)
+
+
+def fetch_market_cap_history(conn, start_date, end_date, ticker_codes=None):
+    params = [start_date, end_date]
+    query = """
+        SELECT stock_code, date, market_cap
+        FROM MarketCapDaily
         WHERE date BETWEEN %s AND %s
     """
     if ticker_codes:
@@ -403,6 +446,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     if financial_df is None or financial_df.empty:
         output = price_df.copy()
         output["financial_risk"] = False
+        output["roe"] = np.nan
+        output["bps"] = np.nan
         output["per"] = np.nan
         output["pbr"] = np.nan
         output["div_yield"] = np.nan
@@ -416,6 +461,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
 
     financial_base = financial_df.copy()
     for col in [
+        "roe",
+        "bps",
         "per",
         "pbr",
         "div_yield",
@@ -437,6 +484,8 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
         ].copy()
         if stock_financials.empty:
             stock_prices["financial_risk"] = False
+            stock_prices["roe"] = np.nan
+            stock_prices["bps"] = np.nan
             stock_prices["per"] = np.nan
             stock_prices["pbr"] = np.nan
             stock_prices["div_yield"] = np.nan
@@ -522,6 +571,73 @@ def _apply_short_balance_ratio(base_df, short_balance_df):
         np.nan,
     )
     merged["sbv_ratio"] = pd.to_numeric(merged["sbv_ratio"], errors="coerce")
+    return merged.drop(columns=["short_balance_value", "market_cap"], errors="ignore")
+
+
+def _attach_market_cap(base_df, market_cap_df):
+    output = base_df.copy()
+    if market_cap_df is None or market_cap_df.empty:
+        output["market_cap"] = np.nan
+        return output
+
+    market_cap = market_cap_df.copy()
+    market_cap["date"] = pd.to_datetime(market_cap["date"], errors="coerce")
+    market_cap["market_cap"] = pd.to_numeric(market_cap["market_cap"], errors="coerce")
+    market_cap = market_cap.dropna(subset=["date"])
+    merged = output.merge(
+        market_cap[["stock_code", "date", "market_cap"]],
+        on=["stock_code", "date"],
+        how="left",
+    )
+    merged["market_cap"] = pd.to_numeric(merged["market_cap"], errors="coerce")
+    return merged
+
+
+def _attach_investor_flow_features(base_df, investor_df):
+    output = base_df.copy()
+    if investor_df is None or investor_df.empty:
+        output["flow5"] = np.nan
+        output["flow20"] = np.nan
+        output["flow5_mcap"] = np.nan
+        output["flow20_mcap"] = np.nan
+        return output
+
+    investor = investor_df.copy()
+    investor["date"] = pd.to_datetime(investor["date"], errors="coerce")
+    investor["foreigner_net_buy"] = pd.to_numeric(
+        investor["foreigner_net_buy"], errors="coerce"
+    ).fillna(0)
+    investor["institution_net_buy"] = pd.to_numeric(
+        investor["institution_net_buy"], errors="coerce"
+    ).fillna(0)
+    investor = investor.dropna(subset=["date"])
+    investor.sort_values(["stock_code", "date"], inplace=True)
+    investor["flow"] = investor["foreigner_net_buy"] + investor["institution_net_buy"]
+    investor["flow5"] = (
+        investor.groupby("stock_code")["flow"]
+        .rolling(window=5, min_periods=5)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    investor["flow20"] = (
+        investor.groupby("stock_code")["flow"]
+        .rolling(window=20, min_periods=20)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+
+    merged = output.merge(
+        investor[["stock_code", "date", "flow5", "flow20"]],
+        on=["stock_code", "date"],
+        how="left",
+    )
+    flow5 = pd.to_numeric(merged["flow5"], errors="coerce")
+    flow20 = pd.to_numeric(merged["flow20"], errors="coerce")
+    market_cap = pd.to_numeric(merged["market_cap"], errors="coerce")
+    valid_mask = flow5.notna() & (market_cap > 0)
+    merged["flow5_mcap"] = np.where(valid_mask, flow5 / market_cap, np.nan)
+    flow20_valid_mask = flow20.notna() & (market_cap > 0)
+    merged["flow20_mcap"] = np.where(flow20_valid_mask, flow20 / market_cap, np.nan)
     return merged
 
 
@@ -531,32 +647,65 @@ def _append_reason(base_reason, suffix):
     return f"{base_reason}+{suffix}"
 
 
-def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_threshold):
-    if investor_df is None or investor_df.empty:
-        return with_financial
+def _coerce_numeric_column(frame, col):
+    if col not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[col], errors="coerce")
 
-    investor = investor_df.copy()
-    investor["date"] = pd.to_datetime(investor["date"])
-    investor["foreigner_net_buy"] = pd.to_numeric(
-        investor["foreigner_net_buy"], errors="coerce"
-    ).fillna(0)
-    investor["institution_net_buy"] = pd.to_numeric(
-        investor["institution_net_buy"], errors="coerce"
-    ).fillna(0)
-    investor.sort_values(["stock_code", "date"], inplace=True)
-    investor["flow"] = investor["foreigner_net_buy"] + investor["institution_net_buy"]
-    investor["flow5"] = (
-        investor.groupby("stock_code")["flow"]
-        .rolling(window=5, min_periods=5)
-        .sum()
+
+def _normalize_ratio_or_percent_threshold(value):
+    threshold = float(value)
+    if threshold > 1.0:
+        return threshold / 100.0
+    return threshold
+
+
+def _compute_adjusted_price_vs_5y(
+    frame,
+    lookback_days,
+    min_periods_days,
+):
+    adj_close = _coerce_numeric_column(frame, "adj_close")
+    adj_low = _coerce_numeric_column(frame, "adj_low")
+    adj_high = _coerce_numeric_column(frame, "adj_high")
+    low_5y = (
+        adj_low.groupby(frame["stock_code"], sort=False)
+        .rolling(window=max(int(lookback_days), 1), min_periods=max(int(min_periods_days), 1))
+        .min()
         .reset_index(level=0, drop=True)
     )
-
-    merged = with_financial.merge(
-        investor[["stock_code", "date", "flow5"]],
-        on=["stock_code", "date"],
-        how="left",
+    high_5y = (
+        adj_high.groupby(frame["stock_code"], sort=False)
+        .rolling(window=max(int(lookback_days), 1), min_periods=max(int(min_periods_days), 1))
+        .max()
+        .reset_index(level=0, drop=True)
     )
+    denom = high_5y - low_5y
+    ratio = (adj_close - low_5y) / denom
+    ratio = ratio.where(denom > 0)
+    return ratio.clip(lower=0.0, upper=1.0)
+
+
+def _rolling_all_true_by_stock(mask, stock_codes, window_days):
+    return (
+        mask.fillna(False)
+        .astype(np.int8)
+        .groupby(stock_codes, sort=False)
+        .rolling(window=max(int(window_days), 1), min_periods=max(int(window_days), 1))
+        .min()
+        .reset_index(level=0, drop=True)
+        .fillna(0)
+        .astype(bool)
+    )
+
+
+def _apply_investor_flow_overlay(with_financial, investor_flow5_threshold):
+    if with_financial is None or with_financial.empty:
+        return with_financial
+    if "flow5" not in with_financial.columns:
+        return with_financial
+
+    merged = with_financial.copy()
     flow5 = pd.to_numeric(merged["flow5"], errors="coerce")
     flow_mask = (
         (merged["tier"] == 2)
@@ -567,13 +716,14 @@ def _apply_investor_flow_overlay(with_financial, investor_df, investor_flow5_thr
     merged.loc[flow_mask, "reason"] = merged.loc[flow_mask, "reason"].apply(
         lambda reason: _append_reason(reason, "investor_flow5")
     )
-    return merged.drop(columns=["flow5"], errors="ignore")
+    return merged
 
 
 def build_daily_stock_tier_frame(
     price_df,
     financial_df=None,
     investor_df=None,
+    market_cap_df=None,
     short_balance_df=None,
     lookback_days=DEFAULT_LOOKBACK_DAYS,
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
@@ -591,6 +741,18 @@ def build_daily_stock_tier_frame(
     enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
     sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
     sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
+    sbv_valid_coverage_threshold=DEFAULT_SBV_VALID_COVERAGE_THRESHOLD,
+    sbv_tier3_consecutive_days=DEFAULT_SBV_TIER3_CONSECUTIVE_DAYS,
+    tier1_growth_roe_min=DEFAULT_TIER1_GROWTH_ROE_MIN,
+    tier1_growth_bps_min=DEFAULT_TIER1_GROWTH_BPS_MIN,
+    tier1_quality_lookback_days=DEFAULT_TIER1_QUALITY_LOOKBACK_DAYS,
+    tier1_position_gate_max_pct=DEFAULT_TIER1_POSITION_GATE_MAX_PCT,
+    tier1_position_gate_start_date=DEFAULT_TIER1_POSITION_GATE_START_DATE,
+    tier1_position_lookback_days=DEFAULT_TIER1_POSITION_LOOKBACK_DAYS,
+    tier1_position_min_periods_days=DEFAULT_TIER1_POSITION_MIN_PERIODS_DAYS,
+    tier3_flow20_quantile=DEFAULT_TIER3_FLOW20_QUANTILE,
+    tier3_flow20_valid_coverage_threshold=DEFAULT_TIER3_FLOW20_VALID_COVERAGE_THRESHOLD,
+    tier3_flow20_consecutive_days=DEFAULT_TIER3_FLOW20_CONSECUTIVE_DAYS,
 ):
     if price_df is None or price_df.empty:
         return pd.DataFrame(
@@ -601,6 +763,7 @@ def build_daily_stock_tier_frame(
                 "reason",
                 "liquidity_20d_avg_value",
                 "sbv_ratio",
+                "flow5_mcap",
                 "pbr_discount",
                 "per_discount",
                 "div_premium",
@@ -623,6 +786,7 @@ def build_daily_stock_tier_frame(
         .reset_index(level=0, drop=True)
     )
     base = _apply_short_balance_ratio(base, short_balance_df)
+    base = _attach_market_cap(base, market_cap_df)
 
     financial_with_factors = _augment_financial_factors(
         financial_df=financial_df,
@@ -639,6 +803,7 @@ def build_daily_stock_tier_frame(
         financial_with_factors,
         financial_lag_days,
     )
+    with_financial = _attach_investor_flow_features(with_financial, investor_df)
     avg_value = pd.to_numeric(with_financial["liquidity_20d_avg_value"], errors="coerce")
 
     with_financial["tier"] = np.where(
@@ -657,33 +822,134 @@ def build_daily_stock_tier_frame(
     with_financial.loc[risk_mask, "reason"] = with_financial.loc[risk_mask, "reason"].apply(
         lambda reason: _append_reason(reason, "financial_risk")
     )
-    div_yield = pd.to_numeric(with_financial["div_yield"], errors="coerce")
-    div_non_positive_mask = (
-        (with_financial["tier"] == 1)
-        & div_yield.notna()
-        & (div_yield <= 0)
+    with_financial.sort_values(["stock_code", "date"], inplace=True)
+
+    continuity_days = max(int(tier1_quality_lookback_days), 1)
+    position_gate_threshold = _normalize_ratio_or_percent_threshold(
+        tier1_position_gate_max_pct
     )
-    with_financial.loc[div_non_positive_mask, "tier"] = 2
-    with_financial.loc[div_non_positive_mask, "reason"] = with_financial.loc[
-        div_non_positive_mask, "reason"
-    ].apply(lambda reason: _append_reason(reason, "div_zero_or_negative"))
+    position_gate_start = pd.to_datetime(tier1_position_gate_start_date)
+    div_yield = _coerce_numeric_column(with_financial, "div_yield")
+    roe = _coerce_numeric_column(with_financial, "roe")
+    bps = _coerce_numeric_column(with_financial, "bps")
+    price_vs_5y_raw = _coerce_numeric_column(with_financial, "price_vs_5y_low_pct").clip(
+        lower=0.0, upper=1.0
+    )
+    price_vs_5y_adjusted = _compute_adjusted_price_vs_5y(
+        with_financial,
+        lookback_days=tier1_position_lookback_days,
+        min_periods_days=tier1_position_min_periods_days,
+    )
+    div_non_negative_2y = _rolling_all_true_by_stock(
+        div_yield >= 0,
+        with_financial["stock_code"],
+        continuity_days,
+    )
+    roe_min_2y = _rolling_all_true_by_stock(
+        roe >= float(tier1_growth_roe_min),
+        with_financial["stock_code"],
+        continuity_days,
+    )
+    bps_non_negative_2y = _rolling_all_true_by_stock(
+        bps >= float(tier1_growth_bps_min),
+        with_financial["stock_code"],
+        continuity_days,
+    )
+    position_gate_use_adjusted = with_financial["date"] >= position_gate_start
+    effective_price_vs_5y = price_vs_5y_raw.where(
+        ~position_gate_use_adjusted,
+        price_vs_5y_adjusted,
+    )
+    pos5_gate = (
+        effective_price_vs_5y.notna()
+        & (effective_price_vs_5y <= position_gate_threshold)
+    )
+
+    quality_pass_mask = (
+        div_non_negative_2y
+        & roe_min_2y
+        & bps_non_negative_2y
+        & pos5_gate
+    )
+    tier1_quality_fail_mask = (
+        (with_financial["tier"] == 1)
+        & (~quality_pass_mask)
+    )
+    with_financial.loc[tier1_quality_fail_mask, "tier"] = 2
+    with_financial.loc[tier1_quality_fail_mask, "reason"] = with_financial.loc[
+        tier1_quality_fail_mask, "reason"
+    ].apply(lambda reason: _append_reason(reason, "tier1_quality_gate_failed"))
+
+    distress_daily_mask = (roe <= 0) | (bps <= 0)
+    financial_distress_2y_mask = _rolling_all_true_by_stock(
+        distress_daily_mask,
+        with_financial["stock_code"],
+        continuity_days,
+    )
+    with_financial.loc[financial_distress_2y_mask, "tier"] = 3
+    with_financial.loc[financial_distress_2y_mask, "reason"] = with_financial.loc[
+        financial_distress_2y_mask, "reason"
+    ].apply(lambda reason: _append_reason(reason, "financial_distress_2y"))
+
+    flow20_mcap = _coerce_numeric_column(with_financial, "flow20_mcap")
+    with_financial["flow20_mcap"] = flow20_mcap
+    flow20_valid_coverage_by_date = flow20_mcap.notna().groupby(with_financial["date"]).mean()
+    flow20_valid_dates = flow20_valid_coverage_by_date[
+        flow20_valid_coverage_by_date >= float(tier3_flow20_valid_coverage_threshold)
+    ].index
+    flow20_valid_day_mask = with_financial["date"].isin(flow20_valid_dates)
+    flow20_tail_threshold_by_date = (
+        with_financial.loc[flow20_valid_day_mask]
+        .groupby("date")["flow20_mcap"]
+        .quantile(float(tier3_flow20_quantile))
+    )
+    flow20_tail_threshold = with_financial["date"].map(flow20_tail_threshold_by_date)
+    flow20_bad_raw_mask = (
+        flow20_valid_day_mask
+        & flow20_mcap.notna()
+        & flow20_tail_threshold.notna()
+        & (flow20_mcap <= flow20_tail_threshold)
+    )
+    flow20_bad_consecutive_mask = _rolling_all_true_by_stock(
+        flow20_bad_raw_mask,
+        with_financial["stock_code"],
+        tier3_flow20_consecutive_days,
+    )
+    with_financial.loc[flow20_bad_consecutive_mask, "tier"] = 3
+    with_financial.loc[flow20_bad_consecutive_mask, "reason"] = with_financial.loc[
+        flow20_bad_consecutive_mask, "reason"
+    ].apply(lambda reason: _append_reason(reason, "flow20_mcap_tail"))
 
     if enable_investor_v1_write:
         with_financial = _apply_investor_flow_overlay(
             with_financial=with_financial,
-            investor_df=investor_df,
             investor_flow5_threshold=investor_flow5_threshold,
         )
     if enable_sbv_tier_overlay:
         sbv_ratio = pd.to_numeric(with_financial["sbv_ratio"], errors="coerce")
-        sbv_tier3_mask = sbv_ratio.notna() & (sbv_ratio >= float(sbv_tier3_threshold))
+        sbv_coverage_by_date = sbv_ratio.notna().groupby(with_financial["date"]).mean()
+        sbv_valid_dates = sbv_coverage_by_date[
+            sbv_coverage_by_date >= float(sbv_valid_coverage_threshold)
+        ].index
+        sbv_valid_day_mask = with_financial["date"].isin(sbv_valid_dates)
+        sbv_tier3_raw_mask = (
+            sbv_valid_day_mask
+            & sbv_ratio.notna()
+            & (sbv_ratio >= float(sbv_tier3_threshold))
+        )
+        sbv_tier3_mask = _rolling_all_true_by_stock(
+            sbv_tier3_raw_mask,
+            with_financial["stock_code"],
+            sbv_tier3_consecutive_days,
+        )
         with_financial.loc[sbv_tier3_mask, "tier"] = 3
         with_financial.loc[sbv_tier3_mask, "reason"] = with_financial.loc[
             sbv_tier3_mask, "reason"
         ].apply(lambda reason: _append_reason(reason, "sbv_ratio_extreme"))
 
         sbv_tier1_demote_mask = (
-            (with_financial["tier"] == 1)
+            sbv_valid_day_mask
+            & (with_financial["tier"] == 1)
             & sbv_ratio.notna()
             & (sbv_ratio >= float(sbv_tier1_demote_threshold))
         )
@@ -700,6 +966,7 @@ def build_daily_stock_tier_frame(
             "reason",
             "liquidity_20d_avg_value",
             "sbv_ratio",
+            "flow5_mcap",
             "pbr_discount",
             "per_discount",
             "div_premium",
@@ -719,6 +986,7 @@ def build_daily_stock_tier_frame(
         pd.to_numeric(output["sbv_ratio"], errors="coerce")
         .clip(lower=0.0)
     )
+    output["flow5_mcap"] = pd.to_numeric(output["flow5_mcap"], errors="coerce")
     for col in ["pbr_discount", "per_discount", "div_premium", "cheap_score"]:
         output[col] = (
             pd.to_numeric(output[col], errors="coerce")
@@ -745,6 +1013,7 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             reason,
             liquidity_20d_avg_value,
             sbv_ratio,
+            flow5_mcap,
             pbr_discount,
             per_discount,
             div_premium,
@@ -752,12 +1021,13 @@ def upsert_daily_stock_tier(conn, rows_df, batch_size=10000):
             cheap_score_version,
             cheap_score_confidence
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             tier = VALUES(tier),
             reason = VALUES(reason),
             liquidity_20d_avg_value = VALUES(liquidity_20d_avg_value),
             sbv_ratio = VALUES(sbv_ratio),
+            flow5_mcap = VALUES(flow5_mcap),
             pbr_discount = VALUES(pbr_discount),
             per_discount = VALUES(per_discount),
             div_premium = VALUES(div_premium),
@@ -830,6 +1100,18 @@ def run_daily_stock_tier_batch(
     enable_sbv_tier_overlay=DEFAULT_ENABLE_SBV_TIER_OVERLAY,
     sbv_tier3_threshold=DEFAULT_SBV_TIER3_THRESHOLD,
     sbv_tier1_demote_threshold=DEFAULT_SBV_TIER1_DEMOTE_THRESHOLD,
+    sbv_valid_coverage_threshold=DEFAULT_SBV_VALID_COVERAGE_THRESHOLD,
+    sbv_tier3_consecutive_days=DEFAULT_SBV_TIER3_CONSECUTIVE_DAYS,
+    tier1_growth_roe_min=DEFAULT_TIER1_GROWTH_ROE_MIN,
+    tier1_growth_bps_min=DEFAULT_TIER1_GROWTH_BPS_MIN,
+    tier1_quality_lookback_days=DEFAULT_TIER1_QUALITY_LOOKBACK_DAYS,
+    tier1_position_gate_max_pct=DEFAULT_TIER1_POSITION_GATE_MAX_PCT,
+    tier1_position_gate_start_date=DEFAULT_TIER1_POSITION_GATE_START_DATE,
+    tier1_position_lookback_days=DEFAULT_TIER1_POSITION_LOOKBACK_DAYS,
+    tier1_position_min_periods_days=DEFAULT_TIER1_POSITION_MIN_PERIODS_DAYS,
+    tier3_flow20_quantile=DEFAULT_TIER3_FLOW20_QUANTILE,
+    tier3_flow20_valid_coverage_threshold=DEFAULT_TIER3_FLOW20_VALID_COVERAGE_THRESHOLD,
+    tier3_flow20_consecutive_days=DEFAULT_TIER3_FLOW20_CONSECUTIVE_DAYS,
 ):
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -850,7 +1132,10 @@ def run_daily_stock_tier_batch(
             "end_date": end_date.strftime("%Y-%m-%d"),
         }
 
-    query_start = start_date - timedelta(days=lookback_days + financial_lag_days + 5)
+    tier_position_history_days = max(int(tier1_position_lookback_days), int(tier1_position_min_periods_days))
+    query_start = start_date - timedelta(
+        days=max(lookback_days + financial_lag_days + 5, tier_position_history_days + 5)
+    )
     financial_lookback_days = _to_calendar_lookback_days(
         max(
             cheap_score_pbr_lookback_years,
@@ -885,18 +1170,23 @@ def run_daily_stock_tier_batch(
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
-    investor_df = None
-    if enable_investor_v1_write:
-        investor_df = fetch_investor_history(
-            conn=conn,
-            start_date=query_start.strftime("%Y-%m-%d"),
-            end_date=end_date.strftime("%Y-%m-%d"),
-            ticker_codes=ticker_codes,
-        )
+    investor_df = fetch_investor_history(
+        conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+        ticker_codes=ticker_codes,
+    )
+    market_cap_df = fetch_market_cap_history(
+        conn=conn,
+        start_date=query_start.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+        ticker_codes=ticker_codes,
+    )
     calculated = build_daily_stock_tier_frame(
         price_df=price_df,
         financial_df=financial_df,
         investor_df=investor_df,
+        market_cap_df=market_cap_df,
         short_balance_df=short_balance_df,
         lookback_days=lookback_days,
         financial_lag_days=financial_lag_days,
@@ -914,6 +1204,18 @@ def run_daily_stock_tier_batch(
         enable_sbv_tier_overlay=enable_sbv_tier_overlay,
         sbv_tier3_threshold=sbv_tier3_threshold,
         sbv_tier1_demote_threshold=sbv_tier1_demote_threshold,
+        sbv_valid_coverage_threshold=sbv_valid_coverage_threshold,
+        sbv_tier3_consecutive_days=sbv_tier3_consecutive_days,
+        tier1_growth_roe_min=tier1_growth_roe_min,
+        tier1_growth_bps_min=tier1_growth_bps_min,
+        tier1_quality_lookback_days=tier1_quality_lookback_days,
+        tier1_position_gate_max_pct=tier1_position_gate_max_pct,
+        tier1_position_gate_start_date=tier1_position_gate_start_date,
+        tier1_position_lookback_days=tier1_position_lookback_days,
+        tier1_position_min_periods_days=tier1_position_min_periods_days,
+        tier3_flow20_quantile=tier3_flow20_quantile,
+        tier3_flow20_valid_coverage_threshold=tier3_flow20_valid_coverage_threshold,
+        tier3_flow20_consecutive_days=tier3_flow20_consecutive_days,
     )
     if calculated.empty:
         return {
@@ -935,6 +1237,7 @@ def run_daily_stock_tier_batch(
             "reason",
             "liquidity_20d_avg_value",
             "sbv_ratio",
+            "flow5_mcap",
             "pbr_discount",
             "per_discount",
             "div_premium",

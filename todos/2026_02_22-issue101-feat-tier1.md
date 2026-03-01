@@ -45,7 +45,7 @@
 - `src/analysis/walk_forward_analyzer.py`
 - `src/optimization/gpu/parameter_simulation.py`
 - `TODO.md`
-- `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
+- `todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
 
 ---
 
@@ -120,4 +120,4 @@
 - issue: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101
 - issue: https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/71
 - file: `TODO.md`
-- file: `todos/2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`
+- file: `todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md`

@@ -18,11 +18,19 @@ try:
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from ...universe_policy import (
+        is_survivor_optimistic_mode,
+        resolve_universe_mode,
+    )
 except ImportError:  # pragma: no cover
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
+    )
+    from universe_policy import (  # type: ignore
+        is_survivor_optimistic_mode,
+        resolve_universe_mode,
     )
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
@@ -90,6 +98,17 @@ def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_ga
     )
 
 
+def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate):
+    requested_mode = str(candidate_source_mode).strip()
+    _ = _coerce_bool(use_weekly_alpha_gate)
+    if requested_mode != "tier":
+        print(
+            f"[Warning] candidate_source_mode='{requested_mode}' is deprecated. "
+            "Forcing 'tier' (A-path) for CPU/GPU parity."
+        )
+    return "tier", False
+
+
 # -----------------------------------------------------------------------------
 # Worker: find_optimal_parameters
 # -----------------------------------------------------------------------------
@@ -111,11 +130,18 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
-    execution_params["candidate_source_mode"] = strategy_params.get("candidate_source_mode", "tier")
-    execution_params["use_weekly_alpha_gate"] = _coerce_bool(
-        strategy_params.get("use_weekly_alpha_gate", False)
+    normalized_mode, normalized_weekly_gate = _normalize_candidate_source_mode(
+        strategy_params.get("candidate_source_mode", "tier"),
+        strategy_params.get("use_weekly_alpha_gate", False),
     )
+    execution_params["candidate_source_mode"] = normalized_mode
+    execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
     execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
+    universe_mode = resolve_universe_mode(
+        strategy_params,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
+    execution_params["universe_mode"] = universe_mode
     price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_params)
     validate_backtest_window_for_price_policy(
         start_date=start_date,
@@ -131,6 +157,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         f"Price Policy: basis={price_basis}, "
         f"adjusted_gate_start={adjusted_gate_start_date}"
     )
+    print(f"Universe Policy: mode={universe_mode}")
     print("=" * 80)
 
     all_data_gpu = preload_all_data_to_gpu(
@@ -139,6 +166,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         end_date,
         use_adjusted_prices=use_adjusted_prices,
         adjusted_price_gate_start_date=adjusted_gate_start_date,
+        universe_mode=universe_mode,
     )
     needs_weekly_candidates = _should_preload_weekly_candidates(
         execution_params["candidate_source_mode"],
@@ -171,7 +199,14 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     print(f"  - Tickers for period: {len(all_tickers)}")
     print(f"  - Trading days for period: {len(trading_dates_pd)}")
 
-    tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+    tier_tensor = preload_tier_data_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+        universe_mode=universe_mode,
+    )
 
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
@@ -236,12 +271,19 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         trading_dates_pd,
         save_to_file=False,
     )
+    all_results_df = all_results_df.copy()
+    all_results_df["universe_mode"] = universe_mode
+    all_results_df["is_experimental"] = bool(is_survivor_optimistic_mode(universe_mode))
 
     if "additional_buy_priority" in best_params_for_log:
         best_params_for_log["additional_buy_priority"] = PRIORITY_MAP_REV.get(
             int(best_params_for_log.get("additional_buy_priority", -1)),
             "unknown",
         )
+    best_params_for_log["universe_mode"] = universe_mode
+    best_params_for_log["is_experimental"] = bool(
+        is_survivor_optimistic_mode(universe_mode)
+    )
 
     return best_params_for_log, all_results_df
 
