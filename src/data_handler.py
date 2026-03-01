@@ -12,6 +12,11 @@ try:
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from .universe_policy import (
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+        resolve_universe_mode,
+    )
 except ImportError:  # pragma: no cover
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
@@ -19,6 +24,11 @@ except ImportError:  # pragma: no cover
         normalize_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
+    )
+    from universe_policy import (  # type: ignore
+        is_survivor_optimistic_mode,
+        normalize_universe_mode,
+        resolve_universe_mode,
     )
 
 # CompanyInfo 캐시를 직접 관리
@@ -36,6 +46,7 @@ class DataHandler:
         *,
         price_basis=None,
         adjusted_price_gate_start_date=None,
+        universe_mode=None,
         strategy_params=None,
     ):
         self.db_config = db_config
@@ -49,18 +60,76 @@ class DataHandler:
                 adjusted_price_gate_start_date,
                 field_name="adjusted_price_gate_start_date",
             )
+        resolved_universe_mode = resolve_universe_mode(
+            strategy_params=strategy_params,
+            universe_mode=universe_mode,
+        )
         self.price_basis = resolved_price_basis
         self.adjusted_price_gate_start_date = resolved_gate_start_date
         self.use_adjusted_prices = is_adjusted_price_basis(self.price_basis)
+        self.universe_mode = normalize_universe_mode(resolved_universe_mode)
+        self._eventual_delisted_codes_cache = None
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
                                                                use_pure=True,
                                                                **self.db_config)
+            self.has_stored_adj_ohlc = self._detect_stored_adj_ohlc_columns()
+            self.has_tier_flow5_mcap = self._detect_tier_flow5_mcap_column()
             self._load_company_info_cache()
         except Exception as e:
             print(f"DB 연결 풀 생성 또는 캐시 로딩 실패: {e}")
             raise
+
+    def _detect_stored_adj_ohlc_columns(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'DailyStockPrice'
+                      AND COLUMN_NAME IN ('adj_open', 'adj_high', 'adj_low')
+                    """
+                )
+                row = cur.fetchone()
+            count = int((row[0] if row else 0) or 0)
+            return count == 3
+        except Exception as exc:
+            print(
+                "[DataHandler] warning: failed to detect stored adjusted OHLC columns "
+                f"({type(exc).__name__}). fallback=formula"
+            )
+            return False
+        finally:
+            conn.close()
+
+    def _detect_tier_flow5_mcap_column(self):
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'DailyStockTier'
+                      AND COLUMN_NAME = 'flow5_mcap'
+                    """
+                )
+                row = cur.fetchone()
+            count = int((row[0] if row else 0) or 0)
+            return count == 1
+        except Exception as exc:
+            print(
+                "[DataHandler] warning: failed to detect DailyStockTier.flow5_mcap column "
+                f"({type(exc).__name__}). fallback=NULL"
+            )
+            return False
+        finally:
+            conn.close()
 
     def _load_company_info_cache(self):
         """DB의 CompanyInfo 테이블에서 데이터를 읽어와 인메모리 캐시를 채웁니다."""
@@ -141,22 +210,53 @@ class DataHandler:
         ticker_key = str(ticker)
         start_date_str = self._normalize_date_key(start_date)
         end_date_str = self._normalize_date_key(end_date)
-        return self._load_stock_data_cached(ticker_key, start_date_str, end_date_str)
+        return self._load_stock_data_cached(
+            ticker_key,
+            start_date_str,
+            end_date_str,
+            self.universe_mode,
+        )
 
     @lru_cache(maxsize=200)
-    def _load_stock_data_cached(self, ticker, start_date_str, end_date_str):
+    def _load_stock_data_cached(self, ticker, start_date_str, end_date_str, _universe_mode):
         conn = self.get_connection()
         # 지표 계산에 필요한 충분한 과거 데이터를 위해 시작 날짜 확장
         extended_start_date = pd.to_datetime(start_date_str) - timedelta(days=252*10 + 50)
         extended_start_date_str = extended_start_date.strftime('%Y-%m-%d')
         
         if self.use_adjusted_prices:
-            price_select_sql = """
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
-                CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
-                dsp.adj_close AS close_price
-            """
+            if self.has_stored_adj_ohlc:
+                price_select_sql = """
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_open IS NULL THEN dsp.open_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_open - (dsp.open_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.open_price * dsp.adj_ratio
+                        ELSE dsp.adj_open
+                    END AS open_price,
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_high IS NULL THEN dsp.high_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_high - (dsp.high_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.high_price * dsp.adj_ratio
+                        ELSE dsp.adj_high
+                    END AS high_price,
+                    CASE
+                        WHEN dsp.adj_ratio IS NULL THEN NULL
+                        WHEN dsp.adj_low IS NULL THEN dsp.low_price * dsp.adj_ratio
+                        WHEN ABS(dsp.adj_low - (dsp.low_price * dsp.adj_ratio)) > 1e-5
+                            THEN dsp.low_price * dsp.adj_ratio
+                        ELSE dsp.adj_low
+                    END AS low_price,
+                    dsp.adj_close AS close_price
+                """
+            else:
+                price_select_sql = """
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.open_price * dsp.adj_ratio ELSE NULL END AS open_price,
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.high_price * dsp.adj_ratio ELSE NULL END AS high_price,
+                    CASE WHEN dsp.adj_ratio IS NOT NULL THEN dsp.low_price * dsp.adj_ratio ELSE NULL END AS low_price,
+                    dsp.adj_close AS close_price
+                """
         else:
             price_select_sql = """
                 dsp.open_price,
@@ -173,7 +273,8 @@ class DataHandler:
                 ci.ma_5, ci.ma_20, ci.atr_14_ratio, ci.price_vs_5y_low_pct, ci.price_vs_10y_low_pct AS normalized_value,
                 mcd.market_cap,
                 dst.cheap_score,
-                dst.cheap_score_confidence
+                dst.cheap_score_confidence,
+                {"dst.flow5_mcap" if self.has_tier_flow5_mcap else "NULL AS flow5_mcap"}
             FROM DailyStockPrice dsp
             LEFT JOIN CalculatedIndicators ci ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
             LEFT JOIN MarketCapDaily mcd ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
@@ -188,21 +289,29 @@ class DataHandler:
             if df.empty:
                 return df
 
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            start_dt = pd.to_datetime(start_date_str)
+            end_dt = pd.to_datetime(end_date_str)
+            df_filtered = df.loc[start_dt:end_dt].copy()
+            if df_filtered.empty:
+                return df_filtered
+
             if self.use_adjusted_prices:
-                missing_price_mask = df[["open_price", "high_price", "low_price", "close_price"]].isna().any(axis=1)
+                missing_price_mask = df_filtered[
+                    ["open_price", "high_price", "low_price", "close_price"]
+                ].isna().any(axis=1)
                 if missing_price_mask.any():
-                    first_missing_date = pd.to_datetime(df.loc[missing_price_mask, "date"].iloc[0]).date()
+                    first_missing_date = pd.to_datetime(
+                        df_filtered.loc[missing_price_mask, :].index[0]
+                    ).date()
                     raise ValueError(
                         "Adjusted price mode found NULL adjusted OHLC values "
                         f"for ticker={ticker} at date={first_missing_date}. "
                         f"Backtest window must satisfy date >= {self.adjusted_price_gate_start_date}."
                     )
 
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            
-            # 실제 백테스팅 기간 데이터만 필터링하여 반환
-            df_filtered = df.loc[start_date_str:end_date_str].copy()
             return df_filtered
         finally:
             conn.close()
@@ -362,6 +471,41 @@ class DataHandler:
             return []
         return [code for code in candidate_codes if code in tier_map]
 
+    def _get_eventual_delisted_codes(self):
+        if self._eventual_delisted_codes_cache is not None:
+            return self._eventual_delisted_codes_cache
+
+        conn = self.get_connection()
+        try:
+            query = """
+                SELECT DISTINCT stock_code
+                FROM TickerUniverseHistory
+                WHERE delisted_date IS NOT NULL
+            """
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                df = pd.read_sql(query, conn)
+            if df.empty:
+                self._eventual_delisted_codes_cache = set()
+                return self._eventual_delisted_codes_cache
+
+            codes = set(df["stock_code"].dropna().astype(str).tolist())
+            self._eventual_delisted_codes_cache = codes
+            return self._eventual_delisted_codes_cache
+        finally:
+            conn.close()
+
+    def _apply_universe_mode_filter(self, codes):
+        if not codes:
+            return []
+        if not is_survivor_optimistic_mode(self.universe_mode):
+            return list(codes)
+
+        eventual_delisted = self._get_eventual_delisted_codes()
+        if not eventual_delisted:
+            return list(codes)
+        return [code for code in codes if str(code) not in eventual_delisted]
+
     def get_pit_universe_codes_as_of(self, as_of_date):
         """
         Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
@@ -388,7 +532,11 @@ class DataHandler:
                 warnings.simplefilter("ignore", UserWarning)
                 snapshot_df = pd.read_sql(snapshot_query, conn, params=[as_of_date_str])
             if not snapshot_df.empty:
-                return snapshot_df["stock_code"].tolist(), "SNAPSHOT_ASOF"
+                codes = self._apply_universe_mode_filter(snapshot_df["stock_code"].tolist())
+                source = "SNAPSHOT_ASOF"
+                if is_survivor_optimistic_mode(self.universe_mode):
+                    source = f"{source}_SURVIVOR_ONLY"
+                return codes, source
 
             history_query = """
                 SELECT stock_code
@@ -401,7 +549,11 @@ class DataHandler:
                 warnings.simplefilter("ignore", UserWarning)
                 history_df = pd.read_sql(history_query, conn, params=[as_of_date_str, as_of_date_str])
             if not history_df.empty:
-                return history_df["stock_code"].tolist(), "HISTORY_ACTIVE_ASOF"
+                codes = self._apply_universe_mode_filter(history_df["stock_code"].tolist())
+                source = "HISTORY_ACTIVE_ASOF"
+                if is_survivor_optimistic_mode(self.universe_mode):
+                    source = f"{source}_SURVIVOR_ONLY"
+                return codes, source
             return [], "NO_UNIVERSE"
         finally:
             conn.close()
@@ -436,10 +588,12 @@ class DataHandler:
         date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
         try:
             tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
+            tier1_codes = self._apply_universe_mode_filter(tier1_codes)
             if tier1_codes:
                 return tier1_codes, "TIER_1"
 
             tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
+            tier12_codes = self._apply_universe_mode_filter(tier12_codes)
             if tier12_codes:
                 return tier12_codes, "TIER_2_FALLBACK"
 

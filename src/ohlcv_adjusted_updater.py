@@ -42,11 +42,50 @@ HARD_INVALID_ADJ_CLOSE_VALUES = {9_999_999.0}
 SOFT_SENTINEL_ADJ_CLOSE_VALUE = 1_000_000.0
 
 
-def _build_ticker_scope_filter(ticker_codes):
-    if not ticker_codes:
+def _build_scope_filter(ticker_codes=None, start_date_str=None, end_date_str=None):
+    clauses = []
+    params = []
+
+    if ticker_codes:
+        placeholders = ", ".join(["%s"] * len(ticker_codes))
+        clauses.append(f"stock_code IN ({placeholders})")
+        params.extend(list(ticker_codes))
+
+    if start_date_str and end_date_str:
+        clauses.append("date BETWEEN %s AND %s")
+        params.extend([start_date_str, end_date_str])
+    elif start_date_str:
+        clauses.append("date >= %s")
+        params.append(start_date_str)
+    elif end_date_str:
+        clauses.append("date <= %s")
+        params.append(end_date_str)
+
+    if not clauses:
         return "", []
-    placeholders = ", ".join(["%s"] * len(ticker_codes))
-    return f" AND stock_code IN ({placeholders})", list(ticker_codes)
+    return " AND " + " AND ".join(clauses), params
+
+
+def _has_stored_adj_ohlc_columns(conn):
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'DailyStockPrice'
+                  AND COLUMN_NAME IN ('adj_open', 'adj_high', 'adj_low')
+                """
+            )
+            row = cur.fetchone()
+        return int((row[0] if row else 0) or 0) == 3
+    except Exception as exc:
+        print(
+            "[adjusted_updater] warning: failed to detect stored adjusted OHLC columns "
+            f"({type(exc).__name__}). Fallback to formula mode."
+        )
+        return False
 
 
 def fetch_adjusted_ohlcv(ticker, start_date, end_date, wait_slot):
@@ -70,7 +109,7 @@ def is_soft_sentinel_adj_close(value):
     return float(value) == SOFT_SENTINEL_ADJ_CLOSE_VALUE
 
 
-def update_adjusted_prices(conn, ticker, df):
+def update_adjusted_prices(conn, ticker, df, *, commit=True):
     if df.empty:
         return {
             "updated_rows": 0,
@@ -115,7 +154,8 @@ def update_adjusted_prices(conn, ticker, df):
     sql = "UPDATE DailyStockPrice SET adj_close = %s WHERE stock_code = %s AND date = %s"
     with conn.cursor() as cur:
         cur.executemany(sql, rows)
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "updated_rows": len(rows),
         "skipped_hard_invalid": skipped_hard_invalid,
@@ -127,65 +167,93 @@ def cleanup_known_adj_anomalies(
     conn,
     soft_ratio_threshold=DEFAULT_SOFT_SENTINEL_RATIO_THRESHOLD,
     ticker_codes=None,
+    start_date_str=None,
+    end_date_str=None,
+    *,
+    commit=True,
 ):
     """
     Nullifies known anomaly patterns before ratio recomputation:
     - hard invalid adj_close sentinel values (9,999,999)
     - soft sentinel 1,000,000 when implied ratio is implausibly large
     """
-    ticker_filter, ticker_params = _build_ticker_scope_filter(ticker_codes)
+    where_scope, scope_params = _build_scope_filter(
+        ticker_codes=ticker_codes,
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
+    )
+    has_stored_adj_ohlc = _has_stored_adj_ohlc_columns(conn)
+    clear_adj_ohlc_sql = ", adj_open = NULL, adj_high = NULL, adj_low = NULL" if has_stored_adj_ohlc else ""
+
     hard_invalid_rows = 0
     soft_sentinel_rows = 0
     with conn.cursor() as cur:
         cur.execute(
             f"""
             UPDATE DailyStockPrice
-            SET adj_close = NULL, adj_ratio = NULL
+            SET adj_close = NULL, adj_ratio = NULL{clear_adj_ohlc_sql}
             WHERE adj_close = %s
-            {ticker_filter}
+            {where_scope}
             """,
-            [9_999_999] + ticker_params,
+            [9_999_999] + scope_params,
         )
         hard_invalid_rows = cur.rowcount
 
         cur.execute(
             f"""
             UPDATE DailyStockPrice
-            SET adj_close = NULL, adj_ratio = NULL
+            SET adj_close = NULL, adj_ratio = NULL{clear_adj_ohlc_sql}
             WHERE adj_close = %s
               AND close_price > 0
               AND (adj_close / close_price) > %s
-            {ticker_filter}
+            {where_scope}
             """,
-            [1_000_000, float(soft_ratio_threshold)] + ticker_params,
+            [1_000_000, float(soft_ratio_threshold)] + scope_params,
         )
         soft_sentinel_rows = cur.rowcount
 
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "hard_invalid_rows_nullified": int(hard_invalid_rows),
         "soft_sentinel_rows_nullified": int(soft_sentinel_rows),
     }
 
 
-def calculate_all_adj_ratios(conn, ticker_codes=None):
+def calculate_all_adj_ratios(
+    conn,
+    ticker_codes=None,
+    start_date_str=None,
+    end_date_str=None,
+    *,
+    commit=True,
+    verbose=True,
+):
     """
     Recomputes adj_ratio and clears invalid ratio rows.
     """
-    print("[adjusted_updater] calculating adj_ratios for all rows...")
-    ticker_filter, ticker_params = _build_ticker_scope_filter(ticker_codes)
+    if verbose:
+        print("[adjusted_updater] calculating adj_ratios for all rows...")
+    where_scope, scope_params = _build_scope_filter(
+        ticker_codes=ticker_codes,
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
+    )
+    has_stored_adj_ohlc = _has_stored_adj_ohlc_columns(conn)
+    clear_adj_ohlc_sql = ", adj_open = NULL, adj_high = NULL, adj_low = NULL" if has_stored_adj_ohlc else ""
+
     rows_nullified = 0
     rows_updated = 0
     with conn.cursor() as cur:
         cur.execute(
             f"""
             UPDATE DailyStockPrice
-            SET adj_ratio = NULL
+            SET adj_ratio = NULL{clear_adj_ohlc_sql}
             WHERE adj_ratio IS NOT NULL
               AND (adj_close IS NULL OR close_price <= 0)
-              {ticker_filter}
+              {where_scope}
             """,
-            ticker_params,
+            scope_params,
         )
         rows_nullified = cur.rowcount
 
@@ -199,21 +267,107 @@ def calculate_all_adj_ratios(conn, ticker_codes=None):
                     adj_ratio IS NULL
                     OR ABS(adj_ratio - (adj_close / close_price)) > 1e-10
                   )
-              {ticker_filter}
+              {where_scope}
             """,
-            ticker_params,
+            scope_params,
         )
         rows_updated = cur.rowcount
 
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "rows_nullified": int(rows_nullified),
         "rows_updated": int(rows_updated),
     }
 
 
-def collect_adj_quality_summary(conn, ticker_codes=None):
-    where_scope, params = _build_ticker_scope_filter(ticker_codes)
+def calculate_all_adj_ohlc(
+    conn,
+    ticker_codes=None,
+    start_date_str=None,
+    end_date_str=None,
+    *,
+    commit=True,
+    verbose=True,
+):
+    """
+    Recomputes adj_open/adj_high/adj_low from raw OHLC * adj_ratio.
+    """
+    if not _has_stored_adj_ohlc_columns(conn):
+        return {"skipped": True, "rows_nullified": 0, "rows_updated": 0}
+
+    if verbose:
+        print("[adjusted_updater] calculating adj_open/adj_high/adj_low...")
+    where_scope, scope_params = _build_scope_filter(
+        ticker_codes=ticker_codes,
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
+    )
+    rows_nullified = 0
+    rows_updated = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE DailyStockPrice
+            SET adj_open = NULL, adj_high = NULL, adj_low = NULL
+            WHERE (adj_ratio IS NULL OR adj_close IS NULL OR close_price <= 0)
+              AND (adj_open IS NOT NULL OR adj_high IS NOT NULL OR adj_low IS NOT NULL)
+              {where_scope}
+            """,
+            scope_params,
+        )
+        rows_nullified = cur.rowcount
+
+        cur.execute(
+            f"""
+            UPDATE DailyStockPrice
+            SET
+                adj_open = open_price * adj_ratio,
+                adj_high = high_price * adj_ratio,
+                adj_low = low_price * adj_ratio
+            WHERE adj_ratio IS NOT NULL
+              AND adj_close IS NOT NULL
+              AND close_price > 0
+              AND (
+                    adj_open IS NULL
+                    OR adj_high IS NULL
+                    OR adj_low IS NULL
+                    OR ABS(adj_open - (open_price * adj_ratio)) > 1e-5
+                    OR ABS(adj_high - (high_price * adj_ratio)) > 1e-5
+                    OR ABS(adj_low - (low_price * adj_ratio)) > 1e-5
+                  )
+              {where_scope}
+            """,
+            scope_params,
+        )
+        rows_updated = cur.rowcount
+
+    if commit:
+        conn.commit()
+    return {
+        "skipped": False,
+        "rows_nullified": int(rows_nullified),
+        "rows_updated": int(rows_updated),
+    }
+
+
+def collect_adj_quality_summary(conn, ticker_codes=None, start_date_str=None, end_date_str=None):
+    has_adj_ohlc_columns = _has_stored_adj_ohlc_columns(conn)
+    adj_ohlc_select = ""
+    adj_ohlc_keys = []
+    if has_adj_ohlc_columns:
+        adj_ohlc_select = """
+                SUM(CASE WHEN adj_open IS NOT NULL THEN 1 ELSE 0 END) AS adj_open_rows,
+                SUM(CASE WHEN adj_high IS NOT NULL THEN 1 ELSE 0 END) AS adj_high_rows,
+                SUM(CASE WHEN adj_low IS NOT NULL THEN 1 ELSE 0 END) AS adj_low_rows,
+        """
+        adj_ohlc_keys = ["adj_open_rows", "adj_high_rows", "adj_low_rows"]
+
+    where_scope, params = _build_scope_filter(
+        ticker_codes=ticker_codes,
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
+    )
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -221,6 +375,7 @@ def collect_adj_quality_summary(conn, ticker_codes=None):
                 COUNT(*) AS total_rows,
                 SUM(CASE WHEN adj_close IS NOT NULL THEN 1 ELSE 0 END) AS adj_close_rows,
                 SUM(CASE WHEN adj_ratio IS NOT NULL THEN 1 ELSE 0 END) AS adj_ratio_rows,
+                {adj_ohlc_select}
                 SUM(CASE WHEN adj_close = 1000000 THEN 1 ELSE 0 END) AS sentinel_1m_rows,
                 SUM(CASE WHEN adj_close = 9999999 THEN 1 ELSE 0 END) AS sentinel_9999999_rows,
                 SUM(CASE WHEN adj_ratio > 100 THEN 1 ELSE 0 END) AS ratio_gt_100_rows,
@@ -237,6 +392,7 @@ def collect_adj_quality_summary(conn, ticker_codes=None):
         "total_rows",
         "adj_close_rows",
         "adj_ratio_rows",
+        *adj_ohlc_keys,
         "sentinel_1m_rows",
         "sentinel_9999999_rows",
         "ratio_gt_100_rows",
@@ -288,6 +444,9 @@ def run_adjusted_update_batch(
     soft_sentinel_ratio_threshold=DEFAULT_SOFT_SENTINEL_RATIO_THRESHOLD,
     enable_anomaly_cleanup=True,
 ):
+    start_date_sql = pd.to_datetime(start_date_str).strftime("%Y-%m-%d")
+    end_date_sql = pd.to_datetime(end_date_str).strftime("%Y-%m-%d")
+
     if ticker_codes is None:
         with conn.cursor() as cur:
             cur.execute("SELECT stock_code FROM TickerUniverseHistory ORDER BY stock_code")
@@ -307,6 +466,12 @@ def run_adjusted_update_batch(
         "tickers_total": total,
         "tickers_processed": 0,
         "rows_updated": 0,
+        "ratio_rows_updated": 0,
+        "ratio_rows_nullified": 0,
+        "adj_ohlc_rows_updated": 0,
+        "adj_ohlc_rows_nullified": 0,
+        "cleanup_hard_invalid_rows_nullified": 0,
+        "cleanup_soft_sentinel_rows_nullified": 0,
         "errors": 0,
         "fetch_errors": 0,
         "fetch_error_tickers": [],
@@ -320,7 +485,53 @@ def run_adjusted_update_batch(
 
     def _update_db(ticker, df):
         with db_lock:
-            return update_adjusted_prices(conn, ticker, df)
+            try:
+                affected = update_adjusted_prices(conn, ticker, df, commit=False)
+                cleanup_stats = {
+                    "hard_invalid_rows_nullified": 0,
+                    "soft_sentinel_rows_nullified": 0,
+                }
+                if affected["updated_rows"] > 0:
+                    ticker_scope = [ticker]
+                    if enable_anomaly_cleanup:
+                        cleanup_stats = cleanup_known_adj_anomalies(
+                            conn,
+                            soft_ratio_threshold=soft_sentinel_ratio_threshold,
+                            ticker_codes=ticker_scope,
+                            start_date_str=start_date_sql,
+                            end_date_str=end_date_sql,
+                            commit=False,
+                        )
+                    ratio_stats = calculate_all_adj_ratios(
+                        conn,
+                        ticker_codes=ticker_scope,
+                        start_date_str=start_date_sql,
+                        end_date_str=end_date_sql,
+                        commit=False,
+                        verbose=False,
+                    )
+                    adj_ohlc_stats = calculate_all_adj_ohlc(
+                        conn,
+                        ticker_codes=ticker_scope,
+                        start_date_str=start_date_sql,
+                        end_date_str=end_date_sql,
+                        commit=False,
+                        verbose=False,
+                    )
+                else:
+                    ratio_stats = {"rows_updated": 0, "rows_nullified": 0}
+                    adj_ohlc_stats = {"skipped": False, "rows_updated": 0, "rows_nullified": 0}
+
+                conn.commit()
+                return {
+                    **affected,
+                    "cleanup_stats": cleanup_stats,
+                    "ratio_stats": ratio_stats,
+                    "adj_ohlc_stats": adj_ohlc_stats,
+                }
+            except Exception:
+                conn.rollback()
+                raise
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_map = {
@@ -347,6 +558,12 @@ def run_adjusted_update_batch(
                     summary["rows_updated"] += affected["updated_rows"]
                     summary["skipped_hard_invalid"] += affected["skipped_hard_invalid"]
                     summary["observed_soft_sentinel"] += affected["observed_soft_sentinel"]
+                    summary["ratio_rows_updated"] += affected["ratio_stats"]["rows_updated"]
+                    summary["ratio_rows_nullified"] += affected["ratio_stats"]["rows_nullified"]
+                    summary["adj_ohlc_rows_updated"] += affected["adj_ohlc_stats"]["rows_updated"]
+                    summary["adj_ohlc_rows_nullified"] += affected["adj_ohlc_stats"]["rows_nullified"]
+                    summary["cleanup_hard_invalid_rows_nullified"] += affected["cleanup_stats"]["hard_invalid_rows_nullified"]
+                    summary["cleanup_soft_sentinel_rows_nullified"] += affected["cleanup_stats"]["soft_sentinel_rows_nullified"]
                 summary["tickers_processed"] += 1
             except Exception as exc:
                 print(f"[adjusted_updater] error ticker={ticker}: {exc}")
@@ -360,30 +577,12 @@ def run_adjusted_update_batch(
                     f"elapsed={_format_duration(elapsed)} eta={_estimate_eta(elapsed, i, total)}"
                 )
 
-    cleanup_stats = {
-        "hard_invalid_rows_nullified": 0,
-        "soft_sentinel_rows_nullified": 0,
-    }
-    if enable_anomaly_cleanup:
-        cleanup_stats = cleanup_known_adj_anomalies(
-            conn,
-            soft_ratio_threshold=soft_sentinel_ratio_threshold,
-            ticker_codes=ticker_codes,
-        )
-        print(
-            "[adjusted_updater] anomaly cleanup completed: "
-            f"hard_invalid_nullified={cleanup_stats['hard_invalid_rows_nullified']} "
-            f"soft_sentinel_nullified={cleanup_stats['soft_sentinel_rows_nullified']}"
-        )
-
-    ratio_stats = calculate_all_adj_ratios(conn, ticker_codes=ticker_codes)
-    print(
-        "[adjusted_updater] adj_ratio update completed: "
-        f"updated={ratio_stats['rows_updated']} "
-        f"nullified={ratio_stats['rows_nullified']}"
+    quality_summary = collect_adj_quality_summary(
+        conn,
+        ticker_codes=ticker_codes,
+        start_date_str=start_date_sql,
+        end_date_str=end_date_sql,
     )
-
-    quality_summary = collect_adj_quality_summary(conn, ticker_codes=ticker_codes)
     print(f"[adjusted_updater] quality summary: {quality_summary}")
     if summary["fetch_error_tickers"]:
         print(
@@ -395,12 +594,24 @@ def run_adjusted_update_batch(
     print(
         f"[adjusted_updater] completed in {_format_duration(total_elapsed)}. "
         f"processed={summary['tickers_processed']} rows_updated={summary['rows_updated']} "
+        f"ratio_rows_updated={summary['ratio_rows_updated']} "
+        f"adj_ohlc_rows_updated={summary['adj_ohlc_rows_updated']} "
         f"errors={summary['errors']} fetch_errors={summary['fetch_errors']} "
         f"skipped_hard_invalid={summary['skipped_hard_invalid']} "
         f"observed_soft_sentinel={summary['observed_soft_sentinel']}"
     )
-    summary["cleanup_stats"] = cleanup_stats
-    summary["ratio_stats"] = ratio_stats
+    summary["cleanup_stats"] = {
+        "hard_invalid_rows_nullified": int(summary["cleanup_hard_invalid_rows_nullified"]),
+        "soft_sentinel_rows_nullified": int(summary["cleanup_soft_sentinel_rows_nullified"]),
+    }
+    summary["ratio_stats"] = {
+        "rows_updated": int(summary["ratio_rows_updated"]),
+        "rows_nullified": int(summary["ratio_rows_nullified"]),
+    }
+    summary["adj_ohlc_stats"] = {
+        "rows_updated": int(summary["adj_ohlc_rows_updated"]),
+        "rows_nullified": int(summary["adj_ohlc_rows_nullified"]),
+    }
     summary["quality_summary"] = quality_summary
     return summary
 

@@ -149,6 +149,10 @@ SELECT MIN(date), MAX(date) FROM ShortSellingDaily;
 
 ## 5) 증적 기록 (운영 로그)
 
+관측 시점:
+- 최초 차단 확인 시점(레포 증적 기준): `2026-02-11` (`TODO.md`의 `external_blocked` 운영 결정 기록)
+- 오늘 재시도 시점: `2026-02-28 18:12:54 KST` (`market_cap`, `short_selling` probe 모두 HTTP 403 재확인)
+
 민감값을 제외하고 아래 항목만 이슈/로그에 남깁니다.
 
 1. 실행 시각 (로컬 시간)

@@ -20,6 +20,10 @@ strategy_params:
   price_basis: "adjusted"
   # In adjusted mode, start_date must be >= this date.
   adjusted_price_gate_start_date: "2013-11-20"
+  # Backtest universe mode:
+  # - strict_pit: 시점기준(PIT) 유니버스 (검증용)
+  # - optimistic_survivor: 상폐 미발생 종목만 사용 (기본)
+  universe_mode: "optimistic_survivor"
 
   max_stocks: 20
   order_investment_ratio: 0.02
@@ -41,6 +45,10 @@ strategy_params:
   # legacy: Entry(Tier1 -> fallback Tier2), Hold/Add path ignores Tier recheck
   # strict_hysteresis_v1: Entry(Tier1 only, empty=>skip), Hold/Add(Tier<=2), Tier3 forced liquidation
   tier_hysteresis_mode: "legacy"
+  # Tier candidate lookup error handling:
+  # - raise: 즉시 예외 발생(감사/재현 우선, 권장)
+  # - skip: 해당일 신규진입 스킵 후 계속 진행
+  candidate_lookup_error_policy: "raise"
 
 execution_params:
   buy_commission_rate: 0.00015

@@ -121,6 +121,48 @@ class TestDataHandler(unittest.TestCase):
         self.assertIn("dsp.adj_close AS close_price", query)
 
     @patch('pandas.read_sql')
+    def test_load_stock_data_adjusted_query_uses_stored_adj_ohlc_with_stale_guard(self, mock_read_sql):
+        mock_read_sql.return_value = pd.DataFrame(
+            {
+                'date': pd.to_datetime(['2022-01-03']),
+                'open_price': [100.0],
+                'high_price': [101.0],
+                'low_price': [99.0],
+                'close_price': [100.0],
+            }
+        )
+        self.data_handler.has_stored_adj_ohlc = True
+        self.data_handler.clear_load_stock_data_cache()
+
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+
+        query = mock_read_sql.call_args.args[0]
+        self.assertIn("CASE", query)
+        self.assertIn("ABS(dsp.adj_open - (dsp.open_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("ABS(dsp.adj_high - (dsp.high_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("ABS(dsp.adj_low - (dsp.low_price * dsp.adj_ratio)) > 1e-5", query)
+        self.assertIn("dsp.adj_open", query)
+        self.assertIn("dsp.adj_high", query)
+        self.assertIn("dsp.adj_low", query)
+
+    @patch('pandas.read_sql')
+    def test_load_stock_data_adjusted_mode_ignores_pre_start_null_ohlc(self, mock_read_sql):
+        mock_read_sql.return_value = pd.DataFrame(
+            {
+                'date': pd.to_datetime(['2006-12-19', '2014-01-03']),
+                'open_price': [float('nan'), 12000.0],
+                'high_price': [float('nan'), 12100.0],
+                'low_price': [float('nan'), 11900.0],
+                'close_price': [float('nan'), 12050.0],
+            }
+        )
+
+        stock_data = self.data_handler.load_stock_data('000060', '2014-01-03', '2014-01-03')
+
+        self.assertEqual(list(stock_data.index), [pd.Timestamp('2014-01-03')])
+        self.assertFalse(stock_data.isna().any().any())
+
+    @patch('pandas.read_sql')
     def test_load_stock_data_cache_key_is_normalized(self, mock_read_sql):
         d = {
             'date': pd.to_datetime(['2022-01-03', '2022-01-04', '2022-01-05']),
@@ -140,6 +182,30 @@ class TestDataHandler(unittest.TestCase):
 
         self.assertEqual(mock_read_sql.call_count, 1)
         self.assertTrue(stock_data_str.equals(stock_data_ts))
+
+    @patch('pandas.read_sql')
+    def test_load_stock_data_cache_key_includes_universe_mode(self, mock_read_sql):
+        def _make_df():
+            return pd.DataFrame(
+                {
+                    'date': pd.to_datetime(['2022-01-03']),
+                    'open_price': [101],
+                    'high_price': [103],
+                    'low_price': [100],
+                    'close_price': [102],
+                }
+            )
+        mock_read_sql.side_effect = [_make_df(), _make_df()]
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+        self.assertEqual(mock_read_sql.call_count, 1)
+
+        self.data_handler.universe_mode = "strict_pit"
+        self.data_handler.load_stock_data('005930', '2022-01-03', '2022-01-03')
+        self.assertEqual(
+            mock_read_sql.call_count,
+            2,
+            msg="cache key must include universe_mode to avoid cross-mode cache reuse",
+        )
 
     def test_get_latest_price(self):
         """특정 날짜의 최근 가격을 올바르게 가져오는지 테스트"""
@@ -178,6 +244,23 @@ class TestDataHandler(unittest.TestCase):
         args, kwargs = mock_read_sql.call_args
         self.assertIn("SELECT stock_code FROM WeeklyFilteredStocks", args[0])
         self.assertEqual(kwargs['params'], [date_str])
+
+    def test_default_universe_mode_is_optimistic_survivor(self):
+        self.assertEqual(self.data_handler.universe_mode, "optimistic_survivor")
+
+    @patch('pandas.read_sql')
+    def test_get_pit_universe_codes_survivor_mode_filters_eventual_delisted(self, mock_read_sql):
+        survivor_handler = DataHandler(self.db_config, universe_mode="optimistic_survivor")
+        survivor_handler.clear_load_stock_data_cache()
+        mock_read_sql.side_effect = [
+            pd.DataFrame({"stock_code": ["000001", "000002", "000003"]}),
+            pd.DataFrame({"stock_code": ["000002"]}),
+        ]
+
+        codes, source = survivor_handler.get_pit_universe_codes_as_of("2024-01-02")
+
+        self.assertEqual(codes, ["000001", "000003"])
+        self.assertEqual(source, "SNAPSHOT_ASOF_SURVIVOR_ONLY")
 
 if __name__ == '__main__':
     unittest.main()
