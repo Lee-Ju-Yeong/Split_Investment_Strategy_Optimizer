@@ -86,7 +86,13 @@ def _resolve_free_gpu_memory_bytes() -> tuple[int | None, str]:
     return None, "unavailable"
 
 
-def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_factor=0.9):
+def get_optimal_batch_size(
+    config,
+    num_tickers,
+    fixed_data_memory_bytes,
+    safety_factor=0.9,
+    num_trading_days=252,
+):
     """
     현재 가용 GPU 메모리를 기반으로 최적의 시뮬레이션 배치 크기를 계산합니다.
     """
@@ -98,26 +104,32 @@ def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_
         free_memory_mib = free_memory_bytes // (1024 * 1024)
 
         p_space = config["parameter_space"]
-        max_stocks = (
-            max(p_space["max_stocks"]["values"])
-            if p_space["max_stocks"]["type"] == "list"
-            else int(p_space["max_stocks"]["stop"])
-        )
         max_splits = (
             max(p_space["max_splits_limit"]["values"])
             if p_space["max_splits_limit"]["type"] == "list"
             else int(p_space["max_splits_limit"]["stop"])
         )
+        trading_days = max(int(num_trading_days), 1)
+        slots_per_sim = max(int(num_tickers), 1) * max(int(max_splits), 1)
 
-        portfolio_state_per_sim = 4 * 4
-        positions_state_per_sim = max_stocks * max_splits * 6 * 4
-        buy_signals_per_sim = num_tickers * 1
-        sell_signals_per_sim = max_stocks * 1
+        # State arrays (engine.py)
+        portfolio_state_per_sim = 2 * 4
+        positions_state_per_sim = slots_per_sim * 3 * 4
+        cooldown_last_trade_per_sim = num_tickers * 2 * 4
+        daily_values_per_sim = trading_days * 4
+
+        # Conservative per-sim working buffers for sell/add-buy masks & temporary tensors.
+        # 6 float32-equivalent buffers per slot keeps estimator on the safe side.
+        working_buffers_per_sim = slots_per_sim * 6 * 4
 
         estimated_mem_per_sim = (
-            portfolio_state_per_sim + positions_state_per_sim + buy_signals_per_sim + sell_signals_per_sim
+            portfolio_state_per_sim
+            + positions_state_per_sim
+            + cooldown_last_trade_per_sim
+            + daily_values_per_sim
+            + working_buffers_per_sim
         )
-        estimated_mem_per_sim_with_buffer = estimated_mem_per_sim * 1.2  # 20% buffer
+        estimated_mem_per_sim_with_buffer = estimated_mem_per_sim * 1.5  # 50% buffer
 
         usable_memory = (free_memory_bytes * safety_factor) - fixed_data_memory_bytes
         if usable_memory <= 0:
@@ -130,7 +142,7 @@ def get_optimal_batch_size(config, num_tickers, fixed_data_memory_bytes, safety_
         print(f"  - Available GPU Memory   : {free_memory_mib} MiB")
         print(f"  - Memory for Fixed Data  : {fixed_data_memory_bytes / (1024 * 1024):.2f} MiB")
         print(f"  - Usable Memory (90% SF) : {usable_memory / (1024 * 1024):.2f} MiB")
-        print(f"  - Estimated Mem/Sim (20% Buf): {estimated_mem_per_sim_with_buffer / 1024:.2f} KB")
+        print(f"  - Estimated Mem/Sim (50% Buf): {estimated_mem_per_sim_with_buffer / 1024:.2f} KB")
         print(f"  - Calculated Batch Size  : {usable_memory:.2f} / {estimated_mem_per_sim_with_buffer:.2f} = {optimal_size}")
         print("----------------------------------------\n")
 

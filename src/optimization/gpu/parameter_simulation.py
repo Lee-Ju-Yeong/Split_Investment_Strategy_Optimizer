@@ -49,6 +49,47 @@ DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
 
 
+def _is_gpu_oom_error(error, cp_module):
+    if isinstance(error, MemoryError):
+        return True
+
+    oom_cls = None
+    cuda_module = getattr(cp_module, "cuda", None)
+    if cuda_module is not None:
+        memory_module = getattr(cuda_module, "memory", None)
+        if memory_module is not None:
+            oom_cls = getattr(memory_module, "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(error, oom_cls):
+        return True
+
+    message = str(error).lower()
+    markers = (
+        "out_of_memory",
+        "out of memory",
+        "std::bad_alloc",
+        "failed to allocate",
+        "cudaerroroutofmemory",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _release_gpu_memory(cp_module):
+    try:
+        cp_module.get_default_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+    try:
+        cp_module.get_default_pinned_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+
+
+def _to_cpu_array(array_like, np_module):
+    if hasattr(array_like, "get"):
+        return array_like.get()
+    return np_module.asarray(array_like)
+
+
 def _coerce_bool(value):
     if isinstance(value, bool):
         return value
@@ -120,7 +161,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     (WFO 오케스트레이터가 이 결과를 받아 분석을 수행합니다.)
     """
     cp, _, create_engine, _ = _ensure_gpu_deps()
-    _, pd = _ensure_core_deps()
+    np, pd = _ensure_core_deps()
 
     ctx = _get_context()
     config = ctx.config
@@ -220,7 +261,12 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     fixed_mem += int(tier_tensor.nbytes)
     fixed_mem += int(pit_universe_mask_tensor.nbytes)
 
-    optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    optimal_batch_size = get_optimal_batch_size(
+        config=config,
+        num_tickers=len(all_tickers),
+        fixed_data_memory_bytes=fixed_mem,
+        num_trading_days=len(trading_dates_pd),
+    )
     batch_size, batch_size_source = _resolve_batch_size(
         optimal_batch_size=optimal_batch_size,
         backtest_settings=backtest_settings,
@@ -237,47 +283,91 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
             f"({batch_size_source}): {batch_size}"
         )
 
-    num_batches = (ctx.num_combinations + batch_size - 1) // batch_size
-    print(f"  - Total Simulations: {ctx.num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")
+    estimated_batches = (ctx.num_combinations + batch_size - 1) // batch_size
+    print(
+        "  - Total Simulations: "
+        f"{ctx.num_combinations} | Batch Size: {batch_size} | "
+        f"Estimated Batches: {estimated_batches}"
+    )
 
-    all_daily_values_list = []
+    num_days = len(trading_dates_pd)
+    daily_values_result_cpu = np.empty((ctx.num_combinations, num_days), dtype=np.float32)
     total_kernel_time = 0.0
-    for idx in range(num_batches):
-        start_idx = idx * batch_size
-        end_idx = min((idx + 1) * batch_size, ctx.num_combinations)
-        param_batch = ctx.param_combinations[start_idx:end_idx]
+    cursor = 0
+    executed_batches = 0
+    current_batch_size = batch_size
 
-        print(f"\n  --- Running Batch {idx + 1}/{num_batches} (Sims {start_idx}-{end_idx - 1}) ---")
+    while cursor < ctx.num_combinations:
+        remaining = ctx.num_combinations - cursor
+        attempt_batch_size = min(current_batch_size, remaining)
+        attempt = 0
 
-        start_time_kernel = time.time()
-        daily_values_batch = run_gpu_optimization(
-            param_batch,
-            all_data_gpu,
-            weekly_filtered_gpu,
-            all_tickers,
-            trading_date_indices_gpu,
-            trading_dates_pd,
-            initial_cash,
-            execution_params,
-            tier_tensor=tier_tensor,
-            pit_universe_mask_tensor=pit_universe_mask_tensor,
-        )
-        batch_time = time.time() - start_time_kernel
-        total_kernel_time += batch_time
-        print(f"  - Batch {idx + 1} Kernel Execution Time: {batch_time:.2f}s")
+        while True:
+            attempt += 1
+            start_idx = cursor
+            end_idx = start_idx + attempt_batch_size
+            param_batch = ctx.param_combinations[start_idx:end_idx]
 
-        all_daily_values_list.append(daily_values_batch)
+            print(
+                "\n  --- Running Batch "
+                f"{executed_batches + 1} (Sims {start_idx}-{end_idx - 1}, "
+                f"size={attempt_batch_size}, attempt={attempt}) ---"
+            )
+
+            start_time_kernel = time.time()
+            try:
+                daily_values_batch = run_gpu_optimization(
+                    param_batch,
+                    all_data_gpu,
+                    weekly_filtered_gpu,
+                    all_tickers,
+                    trading_date_indices_gpu,
+                    trading_dates_pd,
+                    initial_cash,
+                    execution_params,
+                    tier_tensor=tier_tensor,
+                    pit_universe_mask_tensor=pit_universe_mask_tensor,
+                )
+                daily_values_result_cpu[start_idx:end_idx] = _to_cpu_array(
+                    daily_values_batch,
+                    np,
+                )
+                batch_time = time.time() - start_time_kernel
+                total_kernel_time += batch_time
+                print(f"  - Batch {executed_batches + 1} Kernel Execution Time: {batch_time:.2f}s")
+                del daily_values_batch
+                _release_gpu_memory(cp)
+                break
+            except Exception as err:
+                batch_time = time.time() - start_time_kernel
+                if not _is_gpu_oom_error(err, cp):
+                    raise
+                _release_gpu_memory(cp)
+                if attempt_batch_size <= 1:
+                    raise RuntimeError(
+                        "GPU OOM persists even with batch_size=1; aborting simulation."
+                    ) from err
+                reduced_batch_size = max(attempt_batch_size // 2, 1)
+                print(
+                    "[GPU_WARNING] OOM in batch "
+                    f"{executed_batches + 1} after {batch_time:.2f}s. "
+                    f"Reducing batch size {attempt_batch_size} -> {reduced_batch_size} and retrying."
+                )
+                attempt_batch_size = reduced_batch_size
+                continue
+
+        cursor = end_idx
+        executed_batches += 1
+        current_batch_size = min(current_batch_size, attempt_batch_size)
 
     print(f"\n  - Total GPU Kernel Execution Time: {total_kernel_time:.2f}s")
-    if not all_daily_values_list:
+    if ctx.num_combinations <= 0:
         print("[Error] No simulation results were generated.")
         return {}, pd.DataFrame()
 
-    daily_values_result = cp.vstack(all_daily_values_list)
-
     best_params_for_log, all_results_df = analyze_and_save_results(
         ctx.param_combinations,
-        daily_values_result,
+        daily_values_result_cpu,
         trading_dates_pd,
         save_to_file=False,
     )

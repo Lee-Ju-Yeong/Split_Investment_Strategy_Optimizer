@@ -25,8 +25,14 @@ def analyze_and_save_results(param_combinations_gpu, daily_values_gpu, trading_d
     print("\n--- 🔬 Analyzing detailed performance metrics ---")
     start_time = time.time()
 
-    param_combinations_cpu = param_combinations_gpu.get()
-    daily_values_cpu = daily_values_gpu.get()
+    if hasattr(param_combinations_gpu, "get"):
+        param_combinations_cpu = param_combinations_gpu.get()
+    else:
+        param_combinations_cpu = np.asarray(param_combinations_gpu)
+    if hasattr(daily_values_gpu, "get"):
+        daily_values_cpu = daily_values_gpu.get()
+    else:
+        daily_values_cpu = np.asarray(daily_values_gpu)
 
     results_list = []
     for idx in range(daily_values_cpu.shape[0]):

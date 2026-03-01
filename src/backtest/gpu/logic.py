@@ -232,13 +232,8 @@ def _process_sell_signals_gpu(
                         f"High: {high_price}"
                     )
 
-        broadcasted_liquidation_prices = cp.broadcast_to(
-            liquidation_price_basis.reshape(positions_state.shape[0], -1, 1),
-            buy_prices.shape,
-        )
-        adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_liquidation_prices)
-
-        revenue_matrix = quantities * adjusted_liquidation_prices
+        adjusted_liquidation_prices_2d = adjust_price_up_gpu(liquidation_price_basis)
+        revenue_matrix = quantities * adjusted_liquidation_prices_2d[:, :, cp.newaxis]
         liquidation_revenue_matrix = revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis]
         if strict_cash_rounding:
             liquidation_net_matrix = cp.floor(liquidation_revenue_matrix * cost_factor)
@@ -263,7 +258,7 @@ def _process_sell_signals_gpu(
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    execution_sell_prices = adjust_price_up_gpu(current_open_prices_3d)
+    execution_sell_prices_1d = adjust_price_up_gpu(current_open_prices)
     execution_reachable_mask = current_open_prices_3d > 0
     profit_signal_mask = signal_high_prices_3d >= target_sell_prices
     profit_taking_mask = profit_signal_mask & execution_reachable_mask & valid_positions & sellable_time_mask
@@ -284,7 +279,7 @@ def _process_sell_signals_gpu(
                     ticker = all_tickers[stock_idx]
                     high_price = current_high_prices[stock_idx].item()
                     target_price = target_sell_prices[0, stock_idx, split_idx].item()
-                    exec_price = execution_sell_prices[0, stock_idx, split_idx].item()
+                    exec_price = execution_sell_prices_1d[stock_idx].item()
                     qty_to_log = quantities[0, stock_idx, split_idx].item()
                     revenue_to_log = qty_to_log * exec_price
                     print(
@@ -298,7 +293,7 @@ def _process_sell_signals_gpu(
                         f"High: {high_price}"
                     )
 
-        revenue_matrix = quantities * execution_sell_prices
+        revenue_matrix = quantities * execution_sell_prices_1d.reshape(1, -1, 1)
         profit_revenue_matrix = revenue_matrix * profit_taking_mask
         if strict_cash_rounding:
             profit_net_matrix = cp.floor(profit_revenue_matrix * cost_factor)
