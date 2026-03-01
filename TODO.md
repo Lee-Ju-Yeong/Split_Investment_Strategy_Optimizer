@@ -18,6 +18,7 @@
   - [x] 2026-02-28 1차 의사결정: `3-tier 유지`, Tier 강제청산 기본 비활성, `survivor-only` 연구모드 허용
   - [x] 2026-02-28 2차 의사결정: `flow20_mcap` 임계치, Tier3 조합 규칙, 랭킹축, raw/adjusted 지표 기준 확정
   - [ ] 브리프 참고: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`
+- [ ] 이슈 #71 범위 외 후속 백로그 분리 문서: `todos/2026_03_01-issue71-carryover-non71-backlog.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k, 부분 충족/재오픈): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
