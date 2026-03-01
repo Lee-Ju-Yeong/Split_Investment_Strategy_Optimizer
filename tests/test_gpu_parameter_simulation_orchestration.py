@@ -122,6 +122,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
     @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
+    @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
@@ -136,6 +137,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_all,
         mock_preload_weekly,
         mock_build_empty_weekly,
+        mock_preload_pit_mask,
         mock_preload_tier,
         _mock_batch_size,
         mock_run_gpu,
@@ -147,6 +149,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_all.return_value = self._fake_all_data_gpu()
         mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
+        mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
         mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
             (param_batch.shape[0], 2), dtype=np.float32
         )
@@ -176,6 +179,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
     @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
+    @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
@@ -190,6 +194,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_all,
         mock_preload_weekly,
         mock_build_empty_weekly,
+        mock_preload_pit_mask,
         mock_preload_tier,
         _mock_batch_size,
         mock_run_gpu,
@@ -202,6 +207,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_weekly.return_value = _FakeWeeklyFrame(mem_bytes=128)
         mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
+        mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
         mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
             (param_batch.shape[0], 2), dtype=np.float32
         )
