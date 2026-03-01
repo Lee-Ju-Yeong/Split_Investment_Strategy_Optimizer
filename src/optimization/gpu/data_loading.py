@@ -263,7 +263,7 @@ def _build_universe_mask_frame(
     history_df = pd.read_sql(
         history_query,
         sql_engine,
-        params=[end_date_sql, start_date_sql],
+        params=(end_date_sql, start_date_sql),
         parse_dates=["listed_date", "delisted_date"],
     )
     if not history_df.empty:
@@ -300,7 +300,7 @@ def _build_universe_mask_frame(
     snapshot_df = pd.read_sql(
         snapshot_query,
         sql_engine,
-        params=[end_date_sql, start_date_sql],
+        params=(end_date_sql, start_date_sql),
         parse_dates=["date"],
     )
     if snapshot_df.empty:
