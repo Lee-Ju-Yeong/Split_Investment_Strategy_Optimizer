@@ -179,6 +179,7 @@ def _run_cpu_and_collect_trade_events(
     params: Dict[str, Any],
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
+    universe_mode: str,
 ) -> Tuple[List[SellEvent], List[BuyEvent]]:
     strategy_params = dict(config["strategy_params"])
     strategy_params.update(
@@ -216,6 +217,7 @@ def _run_cpu_and_collect_trade_events(
     data_handler = DataHandler(
         db_config=config["database"],
         strategy_params=strategy_params_for_data,
+        universe_mode=universe_mode,
     )
     strategy = MagicSplitStrategy(**strategy_params)
     portfolio = Portfolio(initial_cash=float(initial_cash), start_date=start_date, end_date=end_date)
@@ -277,6 +279,7 @@ def _run_gpu_and_collect_sell_events(
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
     parity_mode: str,
+    universe_mode: str,
 ) -> Tuple[List[SellEvent], List[BuyEvent], str]:
     cp, _, create_engine, run_magic_split_strategy_on_gpu = _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
@@ -284,11 +287,6 @@ def _run_gpu_and_collect_sell_events(
     strategy_cfg = dict(config.get("strategy_params", {}))
     price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_cfg)
     use_adjusted_prices = is_adjusted_price_basis(price_basis)
-    universe_mode = resolve_universe_mode(
-        strategy_cfg,
-        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
-    )
-
     db_connection_str = _build_db_connection_str(config["database"])
     all_data_gpu = preload_all_data_to_gpu(
         db_connection_str,
@@ -626,6 +624,11 @@ def _save_json(path: str, payload: Dict[str, Any]) -> None:
 def main() -> None:
     args = _build_parser().parse_args()
     config = load_config()
+    strategy_cfg = dict(config.get("strategy_params", {}))
+    universe_mode = resolve_universe_mode(
+        strategy_cfg,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
     initial_cash = float(config["backtest_settings"]["initial_cash"])
     if args.params_csv:
         params = _load_param_row_from_csv(args.params_csv, args.param_id)
@@ -639,6 +642,7 @@ def main() -> None:
         params=params,
         candidate_source_mode=args.candidate_source_mode,
         use_weekly_alpha_gate=args.use_weekly_alpha_gate,
+        universe_mode=universe_mode,
     )
     gpu_sell_events, gpu_buy_events, gpu_log_text = _run_gpu_and_collect_sell_events(
         config=config,
@@ -649,6 +653,7 @@ def main() -> None:
         candidate_source_mode=args.candidate_source_mode,
         use_weekly_alpha_gate=args.use_weekly_alpha_gate,
         parity_mode=args.parity_mode,
+        universe_mode=universe_mode,
     )
 
     sell_pairs = _pair_events(cpu_sell_events, gpu_sell_events)
@@ -661,6 +666,7 @@ def main() -> None:
         "params": params,
         "candidate_source_mode": args.candidate_source_mode,
         "parity_mode": args.parity_mode,
+        "universe_mode": universe_mode,
         "cpu_sell_events_count": len(cpu_sell_events),
         "gpu_sell_events_count": len(gpu_sell_events),
         "cpu_buy_events_count": len(cpu_buy_events),
