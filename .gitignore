@@ -167,3 +167,6 @@ docs/operations/*secrets*.md
 docs/operations/*values*.md
 config/ops.local.*
 *.secrets.yaml
+
+# Codex local settings
+.codex/
