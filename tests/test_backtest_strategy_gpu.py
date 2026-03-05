@@ -283,6 +283,144 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
         self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
         self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
 
+    def test_additional_buy_uses_first_empty_split_slot(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+        # hole at split 1, active split at index 2
+        positions_state[0, 0, 2, 0] = 5.0
+        positions_state[0, 0, 2, 1] = 90.0
+        positions_state[0, 0, 2, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        _, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([80.0], dtype=cp.float32),
+            signal_close_prices=cp.array([85.0], dtype=cp.float32),
+            signal_lows=cp.array([80.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        # New additional buy must fill the first empty split(index=1), not overwrite split(index=2)
+        self.assertGreater(float(positions_after[0, 0, 1, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[0, 0, 2, 0].item()), 5.0)
+
+    def test_additional_buy_uses_latest_open_day_trigger_after_hole_fill(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 4, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+        # split 1 is the latest buy (hole fill), split 2 is older but right-most
+        positions_state[0, 0, 1, 0] = 5.0
+        positions_state[0, 0, 1, 1] = 90.0
+        positions_state[0, 0, 1, 2] = 2.0
+        positions_state[0, 0, 2, 0] = 5.0
+        positions_state[0, 0, 2, 1] = 120.0
+        positions_state[0, 0, 2, 2] = 1.0
+
+        last_trade_day_idx_state = cp.array([[2]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=3,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([95.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=2,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        # latest split buy_price=90 -> trigger=85.5, so signal_low=90 should NOT trigger
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 3, 0].item()), 0.0)
+
+    def test_additional_buy_rejects_invalid_priority_code(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        invalid_params = cp.array([[10, 0.02, 0.05, 0.10, 2, -0.50, 10, 999]], dtype=cp.float32)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported additional_buy_priority"):
+            _process_additional_buy_signals_gpu(
+                portfolio_state=portfolio_state,
+                positions_state=positions_state,
+                last_trade_day_idx_state=last_trade_day_idx_state,
+                sell_occurred_today_mask=sell_occurred_today_mask,
+                current_day_idx=1,
+                param_combinations=invalid_params,
+                current_opens=cp.array([95.0], dtype=cp.float32),
+                signal_close_prices=cp.array([100.0], dtype=cp.float32),
+                signal_lows=cp.array([90.0], dtype=cp.float32),
+                signal_day_idx=0,
+                buy_commission_rate=0.00015,
+                log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+                log_counter=cp.zeros((1,), dtype=cp.int32),
+                debug_mode=False,
+                all_tickers=["TEST"],
+            )
+
+    def test_additional_buy_skips_nonpositive_signal_values(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        _, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([0.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
+
     def test_sell_forces_liquidation_when_tier_is_3_under_strict_hysteresis(self):
         portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
         positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
