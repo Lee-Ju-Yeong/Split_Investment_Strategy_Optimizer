@@ -21,6 +21,24 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
         self.assertEqual(batch_size, 512)
         self.assertEqual(source, "auto")
 
+    def test_resolve_batch_size_caps_auto_by_config_when_both_available(self):
+        batch_size, source = _resolve_batch_size(
+            optimal_batch_size=512,
+            backtest_settings={"simulation_batch_size": 339},
+            num_combinations=1000,
+        )
+        self.assertEqual(batch_size, 339)
+        self.assertEqual(source, "auto-capped-by-config")
+
+    def test_resolve_batch_size_keeps_auto_when_config_cap_is_higher(self):
+        batch_size, source = _resolve_batch_size(
+            optimal_batch_size=512,
+            backtest_settings={"simulation_batch_size": 1024},
+            num_combinations=1000,
+        )
+        self.assertEqual(batch_size, 512)
+        self.assertEqual(source, "auto")
+
     def test_resolve_batch_size_uses_configured_fallback_when_auto_missing(self):
         batch_size, source = _resolve_batch_size(
             optimal_batch_size=None,

@@ -1,7 +1,7 @@
 # perf(gpu): GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (Issue #98)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98`
 - 작성일: 2026-02-17
-- 최종 갱신: 2026-02-20
+- 최종 갱신: 2026-02-25
 - 목적: GPU 처리량 병목과 fallback 유발 성능 저하를 제거하되, CPU=SSOT 원칙과 decision-level parity(`#56`)를 유지
 
 ## 0. 분리 원칙 (Issue #97/#56/#67 관계)
@@ -573,3 +573,24 @@
 - `R-001` (`src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py`):
   - GPU 후보군/정렬 변경이므로 CPU 대응 변경 필요 여부를 PR 시작 시 명시
   - CPU 코드 변경이 없다면 `정렬/시점 계약 불변 근거`를 PR 본문에 서술
+
+## 18. 최신 정합성 재검증 + 머지 판단 (2026-02-25)
+- 목적:
+  - Issue #98 관련 최근 수정 상태에서 `2022-01-03 ~ 2022-09-30` 구간 strict parity 재확인
+  - 문서 증적을 기준으로 `main` 머지 가능 여부를 명시
+- 입력:
+  - params: `results/best_param_20260224.csv` (`topk=1`)
+  - mode: `candidate_source_mode=tier`
+  - tolerance: `1e-3`
+- strict parity(top-k) 결과:
+  - 리포트: `results/parity_topk_strict_20220103_20220930_20260225_212904.json`
+  - 요약: `passed rows=1`, `failed=0`
+- strict sell/buy event dump 결과:
+  - 리포트: `results/parity_sell_buy_dump_20220103_20220930_20260225_214329.json`
+  - GPU 로그: `results/parity_sell_buy_gpu_20220103_20220930_20260225_214329.log`
+  - 요약: `cpu_sell_events=72`, `gpu_sell_events=72`, `sell_mismatched_pairs=0`
+  - 요약: `cpu_buy_events=163`, `gpu_buy_events=163`, `buy_mismatched_pairs=0`
+- 판단:
+  - Gate B(정합성)는 본 검증 범위에서 충족됨
+  - Issue #98 범위는 문서/증적 기준으로 `main` 머지 진행 가능 상태
+  - 단, throughput 개선 항목(`R-*`)은 별도 PR로 분리해 gate를 다시 적용

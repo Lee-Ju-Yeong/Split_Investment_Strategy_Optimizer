@@ -12,7 +12,7 @@ import urllib.parse
 
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
-from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
+from src.backtest.gpu.engine import run_magic_split_strategy_on_gpu
 from src.price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,

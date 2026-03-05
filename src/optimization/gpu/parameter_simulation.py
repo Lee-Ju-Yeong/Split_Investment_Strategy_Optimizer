@@ -120,11 +120,15 @@ def _resolve_adaptive_fallback_batch_size(num_combinations):
 
 
 def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations):
-    if optimal_batch_size:
-        batch_size = min(int(optimal_batch_size), num_combinations)
-        return batch_size, "auto"
-
     configured_batch_size = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+    if optimal_batch_size:
+        auto_batch_size = min(int(optimal_batch_size), num_combinations)
+        if configured_batch_size:
+            batch_size = min(auto_batch_size, configured_batch_size)
+            source = "auto-capped-by-config" if batch_size < auto_batch_size else "auto"
+            return batch_size, source
+        return auto_batch_size, "auto"
+
     if configured_batch_size:
         batch_size = min(configured_batch_size, num_combinations)
         return batch_size, "config.simulation_batch_size"
@@ -277,6 +281,12 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     if batch_size_source == "auto":
         print(f"✅ Using automatically calculated optimal batch size: {batch_size}")
+    elif batch_size_source == "auto-capped-by-config":
+        configured_cap = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+        print(
+            "✅ Using auto batch size capped by config: "
+            f"{batch_size} (simulation_batch_size={configured_cap})"
+        )
     else:
         print(
             "⚠️ Using fallback batch size "
