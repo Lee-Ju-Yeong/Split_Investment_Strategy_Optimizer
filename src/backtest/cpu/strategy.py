@@ -42,6 +42,8 @@ class Strategy(ABC):
         raise NotImplementedError("generate_additional_buy_signals() 메소드를 구현해야 합니다.")
 
 class MagicSplitStrategy(Strategy):
+    VALID_ADDITIONAL_BUY_PRIORITIES = {"lowest_order", "highest_drop"}
+
     def __init__(
         self,
         max_stocks,
@@ -71,7 +73,7 @@ class MagicSplitStrategy(Strategy):
         self.sell_profit_rate = sell_profit_rate
         self.backtest_start_date = pd.to_datetime(backtest_start_date)
         self.backtest_end_date = pd.to_datetime(backtest_end_date)
-        self.additional_buy_priority = additional_buy_priority
+        self.additional_buy_priority = self._normalize_additional_buy_priority(additional_buy_priority)
         self.cooldown_period_days = cooldown_period_days
         self.stop_loss_rate = stop_loss_rate
         self.max_splits_limit = max_splits_limit
@@ -109,6 +111,18 @@ class MagicSplitStrategy(Strategy):
         }
         self.candidate_lookup_error_count = 0
         self.first_candidate_lookup_error = None
+
+    @classmethod
+    def _normalize_additional_buy_priority(cls, value):
+        key = str(value).strip().lower()
+        if key == "biggest_drop":
+            key = "highest_drop"
+        if key not in cls.VALID_ADDITIONAL_BUY_PRIORITIES:
+            raise ValueError(
+                "Unsupported additional_buy_priority="
+                f"{value!r}. supported=[lowest_order, highest_drop]"
+            )
+        return key
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -509,7 +523,7 @@ class MagicSplitStrategy(Strategy):
             
             signal_close = signal_row["close_price"]
             signal_low = signal_row["low_price"]
-            if signal_close <= 0:
+            if signal_close <= 0 or signal_low <= 0:
                 continue
 
             last_pos = portfolio.positions[ticker][-1]
@@ -521,7 +535,15 @@ class MagicSplitStrategy(Strategy):
             if signal_low <= buy_trigger_price:
                 if self.investment_per_order > 0:
                     new_pos = Position(signal_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - signal_close) / last_pos.buy_price)
+                    if self.additional_buy_priority == "lowest_order":
+                        sort_metric = len(portfolio.positions[ticker])
+                    elif self.additional_buy_priority == "highest_drop":
+                        sort_metric = -((last_pos.buy_price - signal_close) / last_pos.buy_price)
+                    else:
+                        raise ValueError(
+                            "Unsupported additional_buy_priority="
+                            f"{self.additional_buy_priority!r}. supported=[lowest_order, highest_drop]"
+                        )
                     buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
 
         # 추가 매수 신호 내에서의 정렬
