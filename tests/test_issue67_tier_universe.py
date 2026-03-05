@@ -440,6 +440,21 @@ class TestIssue67Hysteresis(unittest.TestCase):
         self.assertEqual(called_args[0], "TICK")
         self.assertEqual(called_args[1], pd.Timestamp("2024-01-01"))
 
+    def test_additional_buy_skips_nonpositive_signal_low(self):
+        self.portfolio.positions.clear()
+        self._add_entry(self.trading_dates[0])
+        self.data_handler.get_stock_row_as_of.return_value = pd.Series({"close_price": 96.0, "low_price": 0.0})
+
+        signals = self.strategy.generate_additional_buy_signals(
+            self.current_date,
+            self.portfolio,
+            self.data_handler,
+            self.trading_dates,
+            1,
+        )
+
+        self.assertEqual(signals, [])
+
     def test_strict_hysteresis_additional_buy_requires_tier_leq2(self):
         strategy = MagicSplitStrategy(
             max_stocks=5,
