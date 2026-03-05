@@ -218,6 +218,7 @@
 - 하나라도 fail이면 `STOP` (채택 금지), 모두 pass일 때만 `GO` (canary 후 승격)
 
 ### Parking Backlog (조건부 재검토)
+- [ ] 추가매수 우선순위 `momentum` 확장: 현재는 리스크 선행 조치(Parity/OOM/정합성) 우선. 재검토 조건은 `#56 parity mismatch 0건` + `#98 throughput 안정화` + WFO 4셀(`priority x momentum_gate`) 기본 실험 설계 확정 후
 - [ ] `#19` CLI 단일 엔트리(`main.py`) 도입: 현재는 모듈별 CLI 체계 유지. 재검토 조건은 P1 핵심(`#54/#58/#93`) 안정화 이후 UX 관점 통합 필요성이 명확할 때
 - [ ] `#20` README 상세 문서화(legacy 스코프 재정의 필요): 기존 이슈 본문의 `config.ini` 전제가 현재 정책(`config.yaml` SSOT)과 불일치. 재검토 시 “README-현재상태 정합성 보수”로 재작성
 - [ ] `#21` 핵심 모듈 Docstring 확장: low-priority 문서 보강 작업. 재검토 조건은 P1/P2 기능 변경 안정화 이후 API/동작이 고정됐을 때
