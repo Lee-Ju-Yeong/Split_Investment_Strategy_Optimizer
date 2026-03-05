@@ -366,17 +366,27 @@ def _process_additional_buy_signals_gpu(
                 "stock_idx": int(all_tickers.index(trace_ticker)) if trace_ticker in all_tickers else -1,
             }
 
-    last_pos_mask = (cp.cumsum(has_positions, axis=2) == num_positions[:, :, cp.newaxis]) & has_positions
-    last_buy_prices = cp.sum(buy_prices_state * last_pos_mask, axis=2)
+    open_day_indices = positions_state[..., 2]
+    # last split은 split index가 아니라 최신 open_day_idx 기준으로 선택한다.
+    # 부분청산 hole-fill 이후에도 "가장 최근 매수"를 trigger 기준으로 유지하기 위함.
+    split_axis = cp.arange(has_positions.shape[2], dtype=cp.int32).reshape(1, 1, -1)
+    latest_open_day = cp.max(cp.where(has_positions, open_day_indices, -1), axis=2, keepdims=True)
+    latest_open_mask = has_positions & (open_day_indices == latest_open_day)
+    latest_split_scores = cp.where(latest_open_mask, split_axis, -1)
+    latest_split_indices = cp.argmax(latest_split_scores, axis=2).astype(cp.int32)
+    sim_axis = cp.arange(has_positions.shape[0], dtype=cp.int32)[:, None]
+    stock_axis = cp.arange(has_positions.shape[1], dtype=cp.int32)[None, :]
+    last_buy_prices = buy_prices_state[sim_axis, stock_axis, latest_split_indices]
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
     has_first_split = positions_state[..., 0, 0] > 0
-    open_day_indices = positions_state[..., 2]
     first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
     is_not_new_today = (first_open_day_idx < current_day_idx)
     
     signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
+    signal_closes_2d = cp.broadcast_to(signal_close_prices, trigger_prices.shape)
+    valid_signal_mask = (signal_lows_2d > 0) & (signal_closes_2d > 0)
     initial_buy_mask = (
         (signal_lows_2d <= trigger_prices)
         & has_any_position
@@ -384,6 +394,7 @@ def _process_additional_buy_signals_gpu(
         & can_add_buy
         & is_not_new_today
         & has_first_split
+        & valid_signal_mask
     )
     if hold_max_tier > 0 and signal_tiers is not None:
         signal_tiers_2d = cp.broadcast_to(signal_tiers.reshape(1, -1), trigger_prices.shape)
@@ -437,6 +448,13 @@ def _process_additional_buy_signals_gpu(
 
     # 우선순위 점수 계산
     add_buy_priorities = param_combinations[sim_indices, 4]
+    valid_priority_mask = (add_buy_priorities == 0) | (add_buy_priorities == 1)
+    if not bool(cp.all(valid_priority_mask)):
+        invalid_priorities = cp.unique(add_buy_priorities[~valid_priority_mask]).tolist()
+        raise ValueError(
+            "Unsupported additional_buy_priority in GPU path: "
+            f"{invalid_priorities}. supported=[0(lowest_order), 1(highest_drop)]"
+        )
     scores_lowest_order = num_positions[sim_indices, stock_indices]
     candidate_last_buy_prices = last_buy_prices[sim_indices, stock_indices]
     candidate_signal_closes = signal_close_prices[stock_indices]
@@ -541,8 +559,16 @@ def _process_additional_buy_signals_gpu(
     # 자본 업데이트 (rank 순차 선택 결과 반영본)
     portfolio_state[:, 0] = remaining_capital
 
-    # 포지션 업데이트
-    split_indices = num_positions[final_sims, final_stocks]
+    # 포지션 업데이트: 부분청산으로 split hole이 생길 수 있으므로 첫 empty slot에 기록
+    split_slot_empty_mask = positions_state[final_sims, final_stocks, :, 0] <= 0
+    has_empty_slot = cp.any(split_slot_empty_mask, axis=1)
+    if not bool(cp.all(has_empty_slot)):
+        missing_slots = int(cp.sum(~has_empty_slot).item())
+        raise RuntimeError(
+            "No empty split slot for additional buy in GPU path. "
+            f"missing_slots={missing_slots}"
+        )
+    split_indices = cp.argmax(split_slot_empty_mask, axis=1).astype(cp.int32)
     
     positions_state[final_sims, final_stocks, split_indices, 0] = final_quantities
     positions_state[final_sims, final_stocks, split_indices, 1] = final_exec_prices
