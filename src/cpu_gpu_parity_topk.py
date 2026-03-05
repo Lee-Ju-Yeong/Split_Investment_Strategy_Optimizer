@@ -440,28 +440,49 @@ def main() -> None:
         trading_dates_pd,
     )
 
-    param_gpu = cp.asarray([row.to_gpu_row() for row in rows], dtype=cp.float32)
     exec_params = copy.deepcopy(config["execution_params"])
     exec_params["cooldown_period_days"] = config.get("strategy_params", {}).get("cooldown_period_days", 5)
     exec_params["candidate_source_mode"] = "tier"
     exec_params["parity_mode"] = str(args.parity_mode).strip().lower()
     exec_params["tier_hysteresis_mode"] = config.get("strategy_params", {}).get("tier_hysteresis_mode", "legacy")
-
-    daily_values_gpu = run_magic_split_strategy_on_gpu(
-        initial_cash=float(initial_cash),
-        param_combinations=param_gpu,
-        all_data_gpu=all_data_gpu,
-        weekly_filtered_gpu=weekly_filtered_gpu,
-        trading_date_indices=trading_date_indices_gpu,
-        trading_dates_pd_cpu=trading_dates_pd,
-        all_tickers=all_tickers,
-        execution_params=exec_params,
-        max_splits_limit=int(max(row.max_splits_limit for row in rows)),
-        tier_tensor=tier_tensor,
-        pit_universe_mask_tensor=pit_universe_mask_tensor,
-        debug_mode=False,
-    )
-    gpu_curves = daily_values_gpu.get()
+    gpu_curves: list = []
+    if exec_params["parity_mode"] == "strict":
+        # Strict parity mode favors semantic equivalence over throughput.
+        # Run one parameter row at a time so GPU path uses single-sim semantics.
+        for row in rows:
+            single_param_gpu = cp.asarray([row.to_gpu_row()], dtype=cp.float32)
+            daily_values_gpu = run_magic_split_strategy_on_gpu(
+                initial_cash=float(initial_cash),
+                param_combinations=single_param_gpu,
+                all_data_gpu=all_data_gpu,
+                weekly_filtered_gpu=weekly_filtered_gpu,
+                trading_date_indices=trading_date_indices_gpu,
+                trading_dates_pd_cpu=trading_dates_pd,
+                all_tickers=all_tickers,
+                execution_params=exec_params,
+                max_splits_limit=int(row.max_splits_limit),
+                tier_tensor=tier_tensor,
+                pit_universe_mask_tensor=pit_universe_mask_tensor,
+                debug_mode=False,
+            )
+            gpu_curves.append(daily_values_gpu.get()[0])
+    else:
+        param_gpu = cp.asarray([row.to_gpu_row() for row in rows], dtype=cp.float32)
+        daily_values_gpu = run_magic_split_strategy_on_gpu(
+            initial_cash=float(initial_cash),
+            param_combinations=param_gpu,
+            all_data_gpu=all_data_gpu,
+            weekly_filtered_gpu=weekly_filtered_gpu,
+            trading_date_indices=trading_date_indices_gpu,
+            trading_dates_pd_cpu=trading_dates_pd,
+            all_tickers=all_tickers,
+            execution_params=exec_params,
+            max_splits_limit=int(max(row.max_splits_limit for row in rows)),
+            tier_tensor=tier_tensor,
+            pit_universe_mask_tensor=pit_universe_mask_tensor,
+            debug_mode=False,
+        )
+        gpu_curves = list(daily_values_gpu.get())
 
     # CPU runs (sequential), using a single DataHandler instance for caching.
     data_handler = DataHandler(
