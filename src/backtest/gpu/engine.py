@@ -306,6 +306,38 @@ def run_magic_split_strategy_on_gpu(
                 strict_cash_rounding=strict_cash_rounding,
                 debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
             )
+            # Strict single-sim parity path:
+            # CPU ranks only active candidates (post-sell holdings/cooldown filtered).
+            # GPU fast path ranks all tier candidates first, then skips during execution.
+            # Re-rank on active subset to match CPU semantics when parity_mode='strict'.
+            if strict_cash_rounding and num_combinations == 1 and candidate_tickers_for_day.size > 0:
+                held_mask_sim0 = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
+                cooldown_row_sim0 = cooldown_state[0]
+                in_cooldown_mask_sim0 = (cooldown_row_sim0 >= 0) & (
+                    (day_idx - cooldown_row_sim0) < cooldown_period_days
+                )
+                active_mask_sim0 = (~held_mask_sim0) & (~in_cooldown_mask_sim0)
+                active_candidate_mask = active_mask_sim0[candidate_tickers_for_day]
+                filtered_candidate_indices = candidate_tickers_for_day[active_candidate_mask].astype(
+                    cp.int32, copy=False
+                )
+                if signal_date is None or filtered_candidate_indices.size == 0:
+                    candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                    candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                else:
+                    filtered_metrics_df = _collect_candidate_rank_metrics_asof(
+                        all_data_reset_idx=all_data_reset_idx,
+                        final_candidate_indices=filtered_candidate_indices,
+                        signal_date=signal_date,
+                    )
+                    if filtered_metrics_df is None or filtered_metrics_df.empty:
+                        candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                        candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                    else:
+                        candidate_tickers_for_day, candidate_atrs_for_day, _ = build_ranked_candidate_payload(
+                            valid_candidate_metrics_df=filtered_metrics_df,
+                            return_ranked_records=False,
+                        )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
                 cooldown_period_days, param_combinations, current_opens_gpu,

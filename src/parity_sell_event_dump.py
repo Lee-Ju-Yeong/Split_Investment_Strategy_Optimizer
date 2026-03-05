@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import io
+import inspect
 import json
 import math
+import os
 import re
 from contextlib import redirect_stdout
 from dataclasses import dataclass
@@ -37,6 +39,8 @@ from .optimization.gpu.data_loading import (
     preload_tier_data_to_tensor,
     preload_weekly_filtered_stocks_to_gpu,
 )
+from .price_policy import is_adjusted_price_basis, resolve_price_policy
+from .universe_policy import resolve_universe_mode
 
 
 @dataclass
@@ -193,16 +197,29 @@ def _run_cpu_and_collect_trade_events(
             "backtest_end_date": end_date,
         }
     )
+    strategy_params_for_data = dict(strategy_params)
 
     execution_params = dict(config["execution_params"])
-    data_handler = DataHandler(db_config=config["database"])
+    strategy_allowed = {
+        key
+        for key in inspect.signature(MagicSplitStrategy.__init__).parameters.keys()
+        if key != "self"
+    }
+    execution_allowed = {
+        key
+        for key in inspect.signature(BasicExecutionHandler.__init__).parameters.keys()
+        if key != "self"
+    }
+    strategy_params = {k: v for k, v in strategy_params.items() if k in strategy_allowed}
+    execution_params = {k: v for k, v in execution_params.items() if k in execution_allowed}
+
+    data_handler = DataHandler(
+        db_config=config["database"],
+        strategy_params=strategy_params_for_data,
+    )
     strategy = MagicSplitStrategy(**strategy_params)
     portfolio = Portfolio(initial_cash=float(initial_cash), start_date=start_date, end_date=end_date)
-    execution_handler = BasicExecutionHandler(
-        buy_commission_rate=execution_params["buy_commission_rate"],
-        sell_commission_rate=execution_params["sell_commission_rate"],
-        sell_tax_rate=execution_params["sell_tax_rate"],
-    )
+    execution_handler = BasicExecutionHandler(**execution_params)
     engine = BacktestEngine(
         start_date=start_date,
         end_date=end_date,
@@ -264,8 +281,23 @@ def _run_gpu_and_collect_sell_events(
     cp, _, create_engine, run_magic_split_strategy_on_gpu = _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
 
+    strategy_cfg = dict(config.get("strategy_params", {}))
+    price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_cfg)
+    use_adjusted_prices = is_adjusted_price_basis(price_basis)
+    universe_mode = resolve_universe_mode(
+        strategy_cfg,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
+
     db_connection_str = _build_db_connection_str(config["database"])
-    all_data_gpu = preload_all_data_to_gpu(db_connection_str, start_date, end_date)
+    all_data_gpu = preload_all_data_to_gpu(
+        db_connection_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+        universe_mode=universe_mode,
+    )
     weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
 
     sql_engine = create_engine(db_connection_str)
@@ -281,7 +313,14 @@ def _run_gpu_and_collect_sell_events(
 
     all_data_gpu = all_data_gpu[all_data_gpu.index.get_level_values("date").isin(trading_dates_pd)]
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
-    tier_tensor = preload_tier_data_to_tensor(db_connection_str, start_date, end_date, all_tickers, trading_dates_pd)
+    tier_tensor = preload_tier_data_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+        universe_mode=universe_mode,
+    )
     pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
         db_connection_str,
         start_date,
