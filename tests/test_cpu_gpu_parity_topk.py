@@ -7,12 +7,12 @@ from src.cpu_gpu_parity_topk import ParityParamRow, _compare_curves, _load_all_d
 
 
 class TestCpuGpuParityTopk(unittest.TestCase):
-    def test_gpu_preload_query_includes_cheap_columns_and_tier_join(self):
+    def test_gpu_preload_uses_shared_loader_with_price_and_universe_policy(self):
         src = inspect.getsource(_load_all_data_to_gpu)
-        self.assertIn("dst.cheap_score", src)
-        self.assertIn("dst.cheap_score_confidence", src)
-        self.assertIn("dst.flow5_mcap", src)
-        self.assertIn("LEFT JOIN DailyStockTier dst", src)
+        self.assertIn("preload_all_data_to_gpu_shared", src)
+        self.assertIn("use_adjusted_prices=use_adjusted_prices", src)
+        self.assertIn("adjusted_price_gate_start_date=adjusted_price_gate_start_date", src)
+        self.assertIn("universe_mode=universe_mode", src)
 
     def test_param_row_priority_mapping(self):
         row0 = ParityParamRow.from_mapping(

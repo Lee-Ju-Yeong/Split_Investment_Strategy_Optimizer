@@ -37,7 +37,12 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
-from .optimization.gpu.data_loading import preload_pit_universe_mask_to_tensor
+from .optimization.gpu.data_loading import (
+    preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
+    preload_pit_universe_mask_to_tensor,
+)
+from .price_policy import is_adjusted_price_basis, resolve_price_policy
+from .universe_policy import resolve_universe_mode
 
 
 def _require_gpu_stack():
@@ -76,39 +81,23 @@ def _load_trading_dates(sql_engine, start_date: str, end_date: str) -> pd.Dateti
     return pd.DatetimeIndex(pd.to_datetime(df["date"]).sort_values().unique())
 
 
-def _load_all_data_to_gpu(sql_engine, start_date: str, end_date: str):
-    import cudf
-
-    query = """
-        SELECT
-            dsp.stock_code AS ticker,
-            dsp.date,
-            dsp.open_price,
-            dsp.high_price,
-            dsp.low_price,
-            dsp.close_price,
-            dsp.volume,
-            ci.atr_14_ratio,
-            mcd.market_cap,
-            dst.cheap_score,
-            dst.cheap_score_confidence,
-            dst.flow5_mcap
-        FROM DailyStockPrice dsp
-        LEFT JOIN CalculatedIndicators ci
-          ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
-        LEFT JOIN MarketCapDaily mcd
-          ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
-        LEFT JOIN DailyStockTier dst
-          ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
-        WHERE dsp.date BETWEEN %s AND %s
-    """
-    df_pd = pd.read_sql(query, sql_engine, params=(start_date, end_date), parse_dates=["date"])
-    if df_pd.empty:
-        return cudf.DataFrame()
-    for col in ("cheap_score", "cheap_score_confidence"):
-        if col in df_pd.columns:
-            df_pd[col] = pd.to_numeric(df_pd[col], errors="coerce").astype("float32")
-    return cudf.from_pandas(df_pd).set_index(["ticker", "date"])
+def _load_all_data_to_gpu(
+    db_connection_str: str,
+    start_date: str,
+    end_date: str,
+    *,
+    use_adjusted_prices: bool,
+    adjusted_price_gate_start_date: str,
+    universe_mode: str,
+):
+    return preload_all_data_to_gpu_shared(
+        db_connection_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_price_gate_start_date,
+        universe_mode=universe_mode,
+    )
 
 
 def _build_empty_weekly_filtered_gpu():
@@ -412,14 +401,28 @@ def main() -> None:
     if trading_dates_pd.empty:
         raise ValueError("No trading dates in the requested range.")
 
-    all_data_gpu = _load_all_data_to_gpu(sql_engine, start_date, end_date)
+    strategy_cfg = config.get("strategy_params", {})
+    price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_cfg)
+    use_adjusted_prices = is_adjusted_price_basis(price_basis)
+    universe_mode = resolve_universe_mode(
+        strategy_cfg,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
+
+    all_data_gpu = _load_all_data_to_gpu(
+        db_conn_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+        universe_mode=universe_mode,
+    )
     if all_data_gpu.empty:
         raise ValueError("No DailyStockPrice rows in the requested range.")
 
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     weekly_filtered_gpu = _build_empty_weekly_filtered_gpu()
-    strategy_cfg = config.get("strategy_params", {})
     tier_tensor = _load_tier_tensor(
         sql_engine,
         start_date,
@@ -461,7 +464,11 @@ def main() -> None:
     gpu_curves = daily_values_gpu.get()
 
     # CPU runs (sequential), using a single DataHandler instance for caching.
-    data_handler = DataHandler(db_config=config["database"])
+    data_handler = DataHandler(
+        db_config=config["database"],
+        strategy_params=strategy_cfg,
+        universe_mode=universe_mode,
+    )
 
     report = {
         "meta": {
@@ -475,6 +482,9 @@ def main() -> None:
             "candidate_source_mode": "tier",
             "parity_mode": exec_params["parity_mode"],
             "tier_hysteresis_mode": exec_params["tier_hysteresis_mode"],
+            "price_basis": price_basis,
+            "adjusted_price_gate_start_date": adjusted_gate_start_date,
+            "universe_mode": universe_mode,
         },
         "rows": [],
         "summary": {"failed": 0, "passed": 0},
