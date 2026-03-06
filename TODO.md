@@ -19,6 +19,8 @@
   - [x] 2026-02-28 2차 의사결정: `flow20_mcap` 임계치, Tier3 조합 규칙, 랭킹축, raw/adjusted 지표 기준 확정
   - [ ] 브리프 참고: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`
 - [ ] 이슈 #71 범위 외 후속 백로그 분리 문서: `todos/2026_03_01-issue71-carryover-non71-backlog.md`
+- [ ] 멀티에이전트 숙의 메모(성능/안정성 재검토, 2026-03-06): `todos/2026_03_06-multi-agent-performance-stability-review.md`
+- [ ] GPU-native WFO v2 연구 트랙 초안(2026-03-06): `todos/2026_03_06-gpu-native-wfo-v2-design.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k, 부분 충족/재오픈): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
@@ -161,10 +163,12 @@
   - [ ] 사용자 확인 게이트 C: 배포 전 최종 승인
 - [ ] GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (이슈 #98): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98
   - [ ] Scope 고정: #97(거버넌스)와 분리 운영
+  - [ ] 실행 원칙(2026-03-06): `GPU proposes, CPU certifies finalists` 하이브리드 적용
   - [ ] 병목 1차: batch-size fallback 정리(`src/optimization/gpu/kernel.py`, `src/optimization/gpu/parameter_simulation.py`)
   - [ ] 병목 2차: 과대 universe fallback 정리(`src/pipeline/ohlcv_batch.py`, `src/data/collectors/financial_collector.py`)
   - [ ] 성능 증적: 동일 조건 wall-time / kernel launch / GPU util 비교
-  - [ ] 안정성 게이트: strict parity mismatch `0` 유지
+  - [ ] 안정성 게이트: PIT/no-lookahead 유지 + finalist CPU certification 통과
+  - [ ] Release 승격 게이트: strict parity mismatch `0` 유지
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
 - [x] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
   - [x] Deprecation 정책/일정 문서화
@@ -177,6 +181,14 @@
 - [ ] DB 접근 계층 표준화(connector/engine) (이슈 #58): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58
 
 ### P2 (전략 고도화/개선)
+- [ ] GPU-native WFO v2 연구 트랙(별도 엔진, 승격 전 shadow only)
+  - [ ] 설계 초안 고정: `todos/2026_03_06-gpu-native-wfo-v2-design.md`
+  - [ ] 새 승격 계약 정의: `PIT/no-lookahead`, `deterministic replay`, `accounting/execution invariants`, `GPU-only WFO acceptance`
+  - [ ] Stage 1 범위 고정: `fold manifest + super-range tensor cache + telemetry`
+  - [ ] small-scale prototype로 `wall-time/GPU util/OOM/backoff` A/B 계측
+  - [ ] Shadow run 증적 전까지 official path 승격 금지
+  - [ ] Reopen 전 선행 조건: `#56 -> #67 -> #97 -> #98(low-risk evidence)` 순서 충족
+  - [ ] Reopen 근거는 `end-to-end fold wall-time` 개선 + `future reference=0` + invariant 위반 `0`
 - [ ] ATR 단일 랭킹을 멀티팩터 랭킹으로 전환 + WFO/Ablation 검증 (이슈 #68): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68
   - [ ] `walk_forward_analyzer` 강건 점수 함수 도입: `robust_score = (mean - k*std) * log1p(cluster_size)` 형태 실험/고정
   - [ ] WFO 하드 게이트 도입: `median(OOS/IS) >= 0.60`, `fold pass rate >= 70%`, `OOS MDD p95 <= 25%`
@@ -187,6 +199,7 @@
   - [ ] `robust_selection_enabled` feature flag와 `legacy` rollback 경로 추가
   - [ ] Ablation 매트릭스 고정: `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+BehaviorFeature`
 - [ ] CPU/GPU 결과 정합성(Parity) 테스트 하네스 추가 (이슈 #56): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56
+  - [ ] 역할 재정의(2026-03-06): 전면 선행 blocker보다 finalist CPU certification/release gate 중심으로 운영
   - [x] `#67` Phase A parity blocker 선반영: GPU `signal_date(T-1)` + ATR as-of + Tier preload(30일 가정 제거)
   - [x] top-k(권장 100+) 배치 parity 검증 루틴 추가 (`src/cpu_gpu_parity_topk.py`)
   - [x] scenario pack parity 추가(`baseline_deterministic`, `seeded_stress`, `jackknife_drop_topN`)
