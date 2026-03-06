@@ -124,7 +124,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
-    @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
@@ -135,7 +134,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_gpu_deps,
         mock_core_deps,
         mock_preload_all,
-        mock_preload_weekly,
         mock_build_empty_weekly,
         mock_preload_pit_mask,
         mock_preload_tier,
@@ -160,7 +158,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         best_params, _ = sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
 
-        mock_preload_weekly.assert_not_called()
         mock_build_empty_weekly.assert_called_once()
         mock_preload_all.assert_called_once()
         _, kwargs = mock_preload_all.call_args
@@ -181,7 +178,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
-    @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
@@ -192,7 +188,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_gpu_deps,
         mock_core_deps,
         mock_preload_all,
-        mock_preload_weekly,
         mock_build_empty_weekly,
         mock_preload_pit_mask,
         mock_preload_tier,
@@ -204,7 +199,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_gpu_deps.return_value = self._fake_gpu_deps()
         mock_core_deps.return_value = self._fake_core_deps()
         mock_preload_all.return_value = self._fake_all_data_gpu()
-        mock_preload_weekly.return_value = _FakeWeeklyFrame(mem_bytes=128)
         mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
         mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
@@ -215,7 +209,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
 
-        mock_preload_weekly.assert_not_called()
         mock_build_empty_weekly.assert_called_once()
         mock_preload_all.assert_called_once()
         _, kwargs = mock_preload_all.call_args

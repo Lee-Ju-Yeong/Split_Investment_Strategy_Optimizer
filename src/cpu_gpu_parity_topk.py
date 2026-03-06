@@ -113,6 +113,7 @@ def _load_tier_tensor(
     end_date: str,
     all_tickers: list[str],
     trading_dates_pd,
+    pit_universe_mask_tensor,
     min_liquidity_20d_avg_value: int,
     min_tier12_coverage_ratio: float,
 ):
@@ -171,9 +172,19 @@ def _load_tier_tensor(
 
     min_ratio = float(min_tier12_coverage_ratio or 0.0)
     if min_ratio > 0 and len(all_tickers) > 0:
-        tier12_count = ((tier_asof > 0) & (tier_asof <= 2)).sum(axis=1).astype(int)
-        ratio = tier12_count / float(len(all_tickers))
-        failed = ratio[ratio < min_ratio]
+        pit_mask_df = pd.DataFrame(
+            cp.asnumpy(pit_universe_mask_tensor).astype(bool),
+            index=pd.DatetimeIndex(trading_dates_pd),
+            columns=all_tickers_str,
+        )
+        tier12_mask = ((tier_asof > 0) & (tier_asof <= 2)) & pit_mask_df
+        pit_size = pit_mask_df.sum(axis=1).astype(int)
+        ratio = pd.Series(0.0, index=tier_asof.index, dtype=float)
+        valid_mask = pit_size > 0
+        ratio.loc[valid_mask] = (
+            tier12_mask.sum(axis=1).astype(int).loc[valid_mask] / pit_size.loc[valid_mask]
+        )
+        failed = ratio[valid_mask & (ratio < min_ratio)]
         if not failed.empty:
             fail_date = failed.index[0]
             raise ValueError(
@@ -323,16 +334,33 @@ def _compare_curves(cpu_curve: pd.Series, gpu_curve: pd.Series, tolerance: float
     aligned = pd.concat(
         [cpu_curve.rename("cpu"), gpu_curve.rename("gpu")],
         axis=1,
-        join="inner",
-    ).dropna()
+        join="outer",
+    ).sort_index()
     if aligned.empty:
         return {"points": 0, "mismatch_count": None, "first_mismatch": None}
 
-    diff = (aligned["cpu"] - aligned["gpu"]).abs()
+    missing_mask = aligned["cpu"].isna() | aligned["gpu"].isna()
+    missing_count = int(missing_mask.sum())
+    aligned_present = aligned.loc[~missing_mask]
+    diff = (aligned_present["cpu"] - aligned_present["gpu"]).abs()
     mismatches = diff > float(tolerance)
-    mismatch_count = int(mismatches.sum())
+    mismatch_count = missing_count + int(mismatches.sum())
     if mismatch_count <= 0:
         return {"points": int(len(aligned)), "mismatch_count": 0, "first_mismatch": None}
+
+    if missing_count > 0:
+        first_idx = aligned.loc[missing_mask].index[0]
+        return {
+            "points": int(len(aligned)),
+            "mismatch_count": mismatch_count,
+            "first_mismatch": {
+                "date": pd.to_datetime(first_idx).strftime("%Y-%m-%d"),
+                "cpu": None if pd.isna(aligned.loc[first_idx, "cpu"]) else float(aligned.loc[first_idx, "cpu"]),
+                "gpu": None if pd.isna(aligned.loc[first_idx, "gpu"]) else float(aligned.loc[first_idx, "gpu"]),
+                "abs_diff": None,
+                "reason": "missing_curve_point",
+            },
+        }
 
     first_idx = diff[mismatches].index[0]
     return {
@@ -345,6 +373,153 @@ def _compare_curves(cpu_curve: pd.Series, gpu_curve: pd.Series, tolerance: float
             "abs_diff": float(diff.loc[first_idx]),
         },
     }
+
+
+def _build_parity_summary(rows: list[dict], *, parity_mode: str, universe_mode: str) -> dict:
+    failed = 0
+    total_mismatches = 0
+    failed_indices = []
+    first_failed_row = None
+    max_abs_diff = 0.0
+
+    for row in rows:
+        compare = dict(row.get("compare") or {})
+        mismatch_count = int(compare.get("mismatch_count") or 0)
+        total_mismatches += mismatch_count
+        first_mismatch = compare.get("first_mismatch") or {}
+        max_abs_diff = max(max_abs_diff, float(first_mismatch.get("abs_diff") or 0.0))
+        if mismatch_count <= 0:
+            continue
+        failed += 1
+        row_index = int(row.get("index", -1))
+        failed_indices.append(row_index)
+        if first_failed_row is None:
+            first_failed_row = {
+                "index": row_index,
+                "mismatch_count": mismatch_count,
+                "first_mismatch": compare.get("first_mismatch"),
+            }
+
+    passed = max(len(rows) - failed, 0)
+    policy_ready = str(parity_mode).strip().lower() == "strict" and str(universe_mode).strip().lower() == "strict_pit"
+    promotion_block_reasons = []
+    if not policy_ready:
+        promotion_block_reasons.append(
+            f"policy_not_release_ready(parity_mode={parity_mode}, universe_mode={universe_mode})"
+        )
+    if total_mismatches > 0:
+        promotion_block_reasons.append(f"curve_mismatch_count={int(total_mismatches)}")
+    promotion_block_reasons.append("decision_level_evidence_missing")
+
+    return {
+        "failed": int(failed),
+        "passed": int(passed),
+        "failed_indices": failed_indices,
+        "total_mismatches": int(total_mismatches),
+        "max_abs_diff": float(max_abs_diff),
+        "first_failed_row": first_failed_row,
+        "comparison_level": "equity_curve",
+        "policy_ready_for_release_gate": bool(policy_ready),
+        "curve_level_parity_zero_mismatch": bool(policy_ready and total_mismatches == 0),
+        "decision_level_parity_zero_mismatch": False,
+        "event_level_diff_collected": False,
+        "promotion_blocked": bool(promotion_block_reasons),
+        "promotion_block_reasons": promotion_block_reasons,
+    }
+
+
+def _resolve_decision_evidence_indices(rows: list[dict], mode: str) -> list[int]:
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode == "off" or not rows:
+        return []
+
+    failed_indices = [
+        int(row.get("index", -1))
+        for row in rows
+        if int((row.get("compare") or {}).get("mismatch_count") or 0) > 0
+    ]
+    available_indices = [int(row.get("index", -1)) for row in rows]
+
+    if normalized_mode == "first_failed":
+        return failed_indices[:1]
+    if normalized_mode == "representative":
+        return failed_indices[:1] or available_indices[:1]
+    if normalized_mode == "all":
+        return available_indices
+    raise ValueError(f"Unsupported decision_evidence_mode={mode!r}")
+
+
+def _build_decision_evidence_detail_path(report_out: str, row_index: int) -> str:
+    base_dir = os.path.dirname(report_out) or "."
+    base_name = os.path.splitext(os.path.basename(report_out))[0]
+    return os.path.join(base_dir, f"{base_name}.decision_evidence_row{row_index}.json")
+
+
+def _write_json_artifact(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, ensure_ascii=False, indent=2)
+
+
+def _summarize_decision_evidence_payload(row_index: int, payload: dict, *, detail_path: str | None) -> dict:
+    return {
+        "row_index": int(row_index),
+        "decision_level_zero_mismatch": bool(payload.get("decision_level_zero_mismatch", False)),
+        "comparison_scope": str(payload.get("comparison_scope", "core_trade_events")),
+        "release_decision_fields_complete": bool(payload.get("release_decision_fields_complete", False)),
+        "sell_mismatched_pairs": int(payload.get("sell_mismatched_pairs", 0) or 0),
+        "buy_mismatched_pairs": int(payload.get("buy_mismatched_pairs", 0) or 0),
+        "cpu_sell_events_count": int(payload.get("cpu_sell_events_count", 0) or 0),
+        "gpu_sell_events_count": int(payload.get("gpu_sell_events_count", 0) or 0),
+        "cpu_buy_events_count": int(payload.get("cpu_buy_events_count", 0) or 0),
+        "gpu_buy_events_count": int(payload.get("gpu_buy_events_count", 0) or 0),
+        "detail_path": detail_path,
+    }
+
+
+def _apply_decision_evidence(summary: dict, evidence_rows: list[dict], *, total_rows: int) -> dict:
+    updated = dict(summary)
+    reasons = [
+        reason
+        for reason in list(updated.get("promotion_block_reasons") or [])
+        if reason != "decision_level_evidence_missing"
+        and not str(reason).startswith("decision_level_evidence_partial(")
+        and not str(reason).startswith("decision_event_mismatch_rows=")
+    ]
+
+    checked_count = len(evidence_rows)
+    passed_count = sum(1 for row in evidence_rows if row.get("decision_level_zero_mismatch"))
+    all_rows_covered = total_rows > 0 and checked_count == total_rows
+    release_fields_complete = checked_count > 0 and all(
+        bool(row.get("release_decision_fields_complete", False))
+        for row in evidence_rows
+    )
+
+    updated["event_level_diff_collected"] = checked_count > 0
+    updated["decision_evidence_rows_checked"] = int(checked_count)
+    updated["decision_evidence_rows_passed"] = int(passed_count)
+    updated["decision_evidence_all_rows_covered"] = bool(all_rows_covered)
+    updated["decision_evidence_release_fields_complete"] = bool(release_fields_complete)
+    updated["decision_level_parity_zero_mismatch"] = bool(
+        updated.get("curve_level_parity_zero_mismatch", False)
+        and all_rows_covered
+        and checked_count > 0
+        and passed_count == checked_count
+        and release_fields_complete
+    )
+
+    if checked_count <= 0:
+        reasons.append("decision_level_evidence_missing")
+    elif not all_rows_covered:
+        reasons.append(f"decision_level_evidence_partial({checked_count}/{total_rows})")
+    elif passed_count != checked_count:
+        reasons.append(f"decision_event_mismatch_rows={checked_count - passed_count}")
+    elif not release_fields_complete:
+        reasons.append("decision_fields_not_covered")
+
+    updated["promotion_block_reasons"] = reasons
+    updated["promotion_blocked"] = bool(reasons)
+    return updated
 
 
 def main() -> None:
@@ -361,6 +536,15 @@ def main() -> None:
         choices=["fast", "strict"],
         default="strict",
         help="GPU parity mode for evaluation path (default: strict).",
+    )
+    parser.add_argument(
+        "--decision-evidence-mode",
+        choices=["off", "first_failed", "representative", "all"],
+        default="representative",
+        help=(
+            "Collect event-level CPU/GPU trade diffs using parity_sell_event_dump helpers. "
+            "representative=first failed row, or row0 when curves all match."
+        ),
     )
     parser.add_argument("--out", default=None, help="Write JSON report to this path.")
     parser.add_argument(
@@ -423,21 +607,22 @@ def main() -> None:
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
     weekly_filtered_gpu = _build_empty_weekly_filtered_gpu()
-    tier_tensor = _load_tier_tensor(
-        sql_engine,
-        start_date,
-        end_date,
-        all_tickers,
-        trading_dates_pd,
-        min_liquidity_20d_avg_value=int(strategy_cfg.get("min_liquidity_20d_avg_value", 0) or 0),
-        min_tier12_coverage_ratio=float(strategy_cfg.get("min_tier12_coverage_ratio", 0.0) or 0.0),
-    )
     pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
         db_conn_str,
         start_date,
         end_date,
         all_tickers,
         trading_dates_pd,
+    )
+    tier_tensor = _load_tier_tensor(
+        sql_engine,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+        pit_universe_mask_tensor,
+        min_liquidity_20d_avg_value=int(strategy_cfg.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=float(strategy_cfg.get("min_tier12_coverage_ratio", 0.45) or 0.45),
     )
 
     exec_params = copy.deepcopy(config["execution_params"])
@@ -508,7 +693,14 @@ def main() -> None:
             "universe_mode": universe_mode,
         },
         "rows": [],
-        "summary": {"failed": 0, "passed": 0},
+        "summary": {},
+        "evidence_gaps": [
+            "event_level_diff_not_collected",
+        ],
+        "decision_evidence": {
+            "mode": str(args.decision_evidence_mode).strip().lower(),
+            "rows": [],
+        },
     }
 
     for idx, row in enumerate(rows):
@@ -530,13 +722,70 @@ def main() -> None:
                 "compare": cmp_result,
             }
         )
-        report["summary"]["failed"] += int(failed)
-        report["summary"]["passed"] += int(not failed)
+
+    report["summary"] = _build_parity_summary(
+        report["rows"],
+        parity_mode=exec_params["parity_mode"],
+        universe_mode=universe_mode,
+    )
+    decision_evidence_mode = str(args.decision_evidence_mode).strip().lower()
+    decision_evidence_indices = _resolve_decision_evidence_indices(report["rows"], decision_evidence_mode)
+    if decision_evidence_indices:
+        from .parity_sell_event_dump import collect_trade_event_parity_report
+
+        row_lookup = {int(row["index"]): row for row in report["rows"]}
+        for row_index in decision_evidence_indices:
+            row_payload = row_lookup.get(int(row_index))
+            if row_payload is None:
+                continue
+            params = ParityParamRow.from_mapping(row_payload["params"]).to_gpu_row()
+            normalized_params = {
+                "max_stocks": int(params[0]),
+                "order_investment_ratio": float(params[1]),
+                "additional_buy_drop_rate": float(params[2]),
+                "sell_profit_rate": float(params[3]),
+                "additional_buy_priority": int(params[4]),
+                "stop_loss_rate": float(params[5]),
+                "max_splits_limit": int(params[6]),
+                "max_inactivity_period": int(params[7]),
+            }
+            payload = collect_trade_event_parity_report(
+                config=config,
+                start_date=start_date,
+                end_date=end_date,
+                initial_cash=float(initial_cash),
+                params=normalized_params,
+                candidate_source_mode="tier",
+                use_weekly_alpha_gate=False,
+                parity_mode=exec_params["parity_mode"],
+                universe_mode=universe_mode,
+            )
+            detail_path = None
+            if args.out:
+                detail_path = _build_decision_evidence_detail_path(args.out, int(row_index))
+                _write_json_artifact(detail_path, payload)
+            summary_payload = _summarize_decision_evidence_payload(
+                int(row_index),
+                payload,
+                detail_path=detail_path,
+            )
+            row_payload["decision_evidence"] = summary_payload
+            report["decision_evidence"]["rows"].append(summary_payload)
+
+    report["summary"] = _apply_decision_evidence(
+        report["summary"],
+        report["decision_evidence"]["rows"],
+        total_rows=len(report["rows"]),
+    )
+    if not report["summary"]["event_level_diff_collected"]:
+        report["evidence_gaps"] = ["event_level_diff_not_collected"]
+    elif not report["summary"]["decision_evidence_all_rows_covered"]:
+        report["evidence_gaps"] = ["decision_level_evidence_partial"]
+    else:
+        report["evidence_gaps"] = []
 
     if args.out:
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
+        _write_json_artifact(args.out, report)
         print(f"[cpu_gpu_parity_topk] report_saved path={args.out}")
 
     if report["summary"]["failed"] > 0 and not args.no_fail_on_mismatch:

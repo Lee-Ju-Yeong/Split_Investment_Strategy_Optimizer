@@ -14,6 +14,16 @@ backtest_settings:
   save_full_trade_history: false
 
 strategy_params:
+  # Example profiles:
+  # - release-safe / promotion candidate:
+  #   universe_mode: strict_pit
+  #   candidate_source_mode: tier
+  #   tier_hysteresis_mode: strict_hysteresis_v1
+  #   candidate_lookup_error_policy: raise
+  # - research-only / non-promotion:
+  #   universe_mode: optimistic_survivor
+  #   tier_hysteresis_mode: legacy
+
   # Price basis for backtesting/simulation:
   # - adjusted: use adj_close/adj_ratio derived OHLC (recommended)
   # - raw: use original close/open/high/low
@@ -21,9 +31,9 @@ strategy_params:
   # In adjusted mode, start_date must be >= this date.
   adjusted_price_gate_start_date: "2013-11-20"
   # Backtest universe mode:
-  # - strict_pit: 시점기준(PIT) 유니버스 (검증용)
-  # - optimistic_survivor: 상폐 미발생 종목만 사용 (기본)
-  universe_mode: "optimistic_survivor"
+  # - strict_pit: 승격/승인 트랙 기본값
+  # - optimistic_survivor: 연구/비승격 트랙 전용
+  universe_mode: "strict_pit"
 
   max_stocks: 20
   order_investment_ratio: 0.02
@@ -39,12 +49,15 @@ strategy_params:
   # tier: PIT universe + DailyStockTier (Tier 1 -> Fallback Tier 2)
   candidate_source_mode: "tier"
   min_liquidity_20d_avg_value: 0
-  min_tier12_coverage_ratio: 0.0
+  # Empirical baseline (2026-03-07):
+  # - as-of sampled windows around low-coverage periods stayed above 0.45
+  # - exact-snapshot proxy sample minimum was ~0.4525
+  min_tier12_coverage_ratio: 0.45
 
   # [Issue #67] Entry/Hold Hysteresis Policy
-  # legacy: Entry(Tier1 -> fallback Tier2), Hold/Add path ignores Tier recheck
-  # strict_hysteresis_v1: Entry(Tier1 only, empty=>skip), Hold/Add(Tier<=2), Tier3 forced liquidation
-  tier_hysteresis_mode: "legacy"
+  # strict_hysteresis_v1: 승격/승인 트랙 기본값
+  # legacy: 연구/비승격 트랙 전용
+  tier_hysteresis_mode: "strict_hysteresis_v1"
   # Tier candidate lookup error handling:
   # - raise: 즉시 예외 발생(감사/재현 우선, 권장)
   # - skip: 해당일 신규진입 스킵 후 계속 진행
@@ -109,7 +122,9 @@ parameter_space:
 walk_forward_settings:
   total_folds: 6
   period_length_days: 365
+  # Hybrid lane:
   # GPU가 상위 후보를 제안한 뒤 CPU가 shortlist를 재실행해 최종 채택합니다.
+  # 이 설정이 켜져 있어도 release/promotion은 별도 gate(`strict_pit`, parity, future reference=0)를 닫아야 합니다.
   cpu_certification_enabled: true
   cpu_certification_top_n: 5
   cpu_certification_metric: "calmar_ratio"

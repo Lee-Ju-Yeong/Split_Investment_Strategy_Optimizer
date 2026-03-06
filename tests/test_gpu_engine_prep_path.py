@@ -3,16 +3,31 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-import cupy as cp
-import cudf
 import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.backtest.gpu import engine as gpu_engine
+
+_GPU_IMPORT_ERROR = None
+try:
+    import cupy as cp
+    import cudf
+    from src.backtest.gpu import engine as gpu_engine
+except Exception as exc:  # pragma: no cover - environment dependent
+    cp = None
+    cudf = None
+    gpu_engine = None
+    _GPU_IMPORT_ERROR = exc
 
 
 class TestGpuEnginePrepPath(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if _GPU_IMPORT_ERROR is not None:
+            raise unittest.SkipTest(
+                f"GPU engine test dependencies unavailable: {type(_GPU_IMPORT_ERROR).__name__}: {_GPU_IMPORT_ERROR}"
+            )
+
     @staticmethod
     def _empty_tensors():
         return {

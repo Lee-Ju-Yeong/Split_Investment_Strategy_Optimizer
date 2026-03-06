@@ -38,11 +38,29 @@
       - `buy: 8 vs 8, mismatch=0`
     - `results/parity_topk_tier_param0_5d_after_slotloopfix.json` (`total_mismatches=0`)
     - `results/parity_topk_tier_top5_5d_after_slotloopfix.json` (`total_mismatches=0`)
+  - 업데이트(2026-03-07):
+    - `src/cpu_gpu_parity_topk.py` summary JSON에 `comparison_level=equity_curve`, `promotion_blocked`, `promotion_block_reasons` 추가
+    - 목적: 곡선 일치 결과를 decision-level release evidence로 과대 해석하지 않도록 gate 상태를 보고서에 직접 남김
   - 파이프라인 분리(2026-02-17):
     - `src.cpu_gpu_parity_topk`에 2단계 실행 추가
     - `--pipeline-stage gpu`: GPU 스냅샷만 생성
     - `--pipeline-stage cpu --snapshot-in <...>`: 스냅샷 기반 CPU strict parity만 재실행
     - CPU 병렬 옵션 `--cpu-workers` 추가(기본 1, 권장 2~4)
+  - 업데이트(2026-03-07):
+    - `src.cpu_gpu_parity_topk._build_parity_summary()`에 `failed_indices`, `max_abs_diff`를 추가해 release gate 보드가 읽기 쉬운 curve-level summary를 제공
+    - 단, `event_level_diff_collected=false`는 유지되어 decision-level gate 미충족 상태를 계속 명시
+  - 업데이트(2026-03-07, decision evidence wiring):
+    - `src.cpu_gpu_parity_topk.py`에 `--decision-evidence-mode=off|first_failed|representative|all` 추가
+    - 선택된 row에 대해 `src.parity_sell_event_dump.collect_trade_event_parity_report()`를 호출해 buy/sell event mismatch를 JSON summary에 병합
+    - `--out` 사용 시 row별 상세 artifact(`*.decision_evidence_row<N>.json`)도 함께 저장
+    - event pairing은 `(date, ticker)` bucket 안에서 best-match로 정렬해 중간 extra event가 있어도 mismatch가 연쇄 전파되지 않도록 보강
+    - 단위 테스트 추가: `tests/test_parity_sell_event_dump.py`, `tests/test_cpu_gpu_parity_topk.py`
+    - release gate 의미는 그대로 보수적으로 유지:
+      - 일부 row만 확인한 경우 `decision_level_evidence_partial(...)`
+      - 아무 row도 수집하지 않으면 `decision_level_evidence_missing`
+      - 현재 helper 비교 범위는 `structured_trade_events(date/ticker/qty/fill_price/net_or_total_cost/reason/trigger_price/order_semantics)`까지 확장
+      - 단, `cash/positions`는 아직 미포함이므로 전체 row를 모두 커버하고 event mismatch가 `0`이어도 `decision_fields_not_covered`를 남기고 release gate는 계속 차단
+    - curve parity는 missing date를 `mismatch`로 계산해 `inner join`에 의한 false-zero 가능성을 제거
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `tier-only` parity gate 추가:
@@ -86,9 +104,11 @@
 - [x] snapshot 메타데이터 저장: 기간, 파라미터, 코드 버전, 생성시각
 - [x] snapshot 메타데이터에 `candidate_source_mode`, `use_weekly_alpha_gate` 필드 추가
 - [x] snapshot 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
+- [x] selected-row decision evidence 자동수집: `--decision-evidence-mode` + row별 detail artifact 저장
 - [x] GPU 미사용 환경 skip 처리 유지
 - [x] CI/로컬 실행 명령 문서화
-- [x] 승격 게이트용 5거래일 이상 `tier top-k>=5` decision-level parity `0 mismatch` 충족(기준 시나리오/기간)
+- [x] 5거래일 이상 `tier top-k>=5` curve-level parity `0 mismatch` 충족(기준 시나리오/기간)
+  - 주의: event/diff 증적이 없어 decision-level release gate 충족으로 해석하면 안 됨
 - [ ] mismatch 원인(class) 태깅 리포트 추가(선정 drift / 체결가 drift / 수치 오차)
 - [ ] `Tier v2 deterministic mapping/sort` 정책 적용(Release 기본)
 - [ ] `Tier v2` 운영 모니터링/롤백 지표 2주 관찰 통과
