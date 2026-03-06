@@ -5,9 +5,9 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.optimization.gpu.parameter_simulation import (
+    _normalize_candidate_source_mode,
     _resolve_adaptive_fallback_batch_size,
     _resolve_batch_size,
-    _should_preload_weekly_candidates,
 )
 
 
@@ -69,23 +69,25 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
     def test_adaptive_fallback_batch_size_minimum_is_one(self):
         self.assertEqual(_resolve_adaptive_fallback_batch_size(0), 1)
 
-    def test_should_preload_weekly_candidates_weekly_mode(self):
-        self.assertTrue(_should_preload_weekly_candidates("weekly", False))
+    def test_normalize_candidate_source_mode_keeps_tier(self):
+        mode, weekly_gate = _normalize_candidate_source_mode("tier", False)
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
-    def test_should_preload_weekly_candidates_tier_mode(self):
-        self.assertFalse(_should_preload_weekly_candidates("tier", False))
+    def test_normalize_candidate_source_mode_forces_weekly_to_tier(self):
+        mode, weekly_gate = _normalize_candidate_source_mode("weekly", False)
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
-    def test_should_preload_weekly_candidates_hybrid_with_gate(self):
-        self.assertTrue(_should_preload_weekly_candidates("hybrid_transition", True))
+    def test_normalize_candidate_source_mode_forces_hybrid_with_gate_to_tier(self):
+        mode, weekly_gate = _normalize_candidate_source_mode("hybrid_transition", True)
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
-    def test_should_preload_weekly_candidates_hybrid_without_gate(self):
-        self.assertFalse(_should_preload_weekly_candidates("hybrid_transition", False))
-
-    def test_should_preload_weekly_candidates_hybrid_string_false(self):
-        self.assertFalse(_should_preload_weekly_candidates("hybrid_transition", "false"))
-
-    def test_should_preload_weekly_candidates_hybrid_string_true(self):
-        self.assertTrue(_should_preload_weekly_candidates("hybrid_transition", "true"))
+    def test_normalize_candidate_source_mode_ignores_string_gate(self):
+        mode, weekly_gate = _normalize_candidate_source_mode("hybrid_transition", "true")
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
 
 if __name__ == "__main__":

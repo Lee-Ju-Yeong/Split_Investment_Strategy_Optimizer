@@ -34,10 +34,10 @@ from .config_loader import load_config
 from .data_handler import DataHandler
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
+    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
     preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
-    preload_weekly_filtered_stocks_to_gpu,
 )
 from .price_policy import is_adjusted_price_basis, resolve_price_policy
 from .universe_policy import resolve_universe_mode
@@ -296,7 +296,7 @@ def _run_gpu_and_collect_sell_events(
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
+    weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -534,70 +534,242 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
     return events
 
 
-def _pair_events(cpu_events: List[SellEvent], gpu_events: List[SellEvent]) -> List[Dict[str, Any]]:
-    cpu_sorted = sorted(cpu_events, key=lambda e: (e.date, e.ticker, e.quantity, e.execution_price, e.order or 0))
-    gpu_sorted = sorted(gpu_events, key=lambda e: (e.date, e.ticker, e.quantity, e.execution_price, e.split or 0))
+def _normalize_trade_reason(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
 
-    max_len = max(len(cpu_sorted), len(gpu_sorted))
+    mapping = {
+        "수익 실현": "profit_taking",
+        "Profit-Taking": "profit_taking",
+        "손절매 (평균가 기준)": "stop_loss",
+        "Stop-Loss": "stop_loss",
+        "매매 미발생 기간 초과": "inactivity",
+        "Inactivity": "inactivity",
+        "Tier3": "tier3",
+        "신규 매수": "new_buy",
+        "추가 매수(하락)": "add_buy_drop",
+    }
+    return mapping.get(text, text.lower())
+
+
+def _trigger_price_diff(cpu_value: Optional[float], gpu_value: Optional[float]) -> Optional[float]:
+    if cpu_value is None and gpu_value is None:
+        return 0.0
+    if cpu_value is None or gpu_value is None:
+        return None
+    return float(cpu_value) - float(gpu_value)
+
+
+def _sell_order_match(cpu: SellEvent, gpu: SellEvent) -> Optional[bool]:
+    if cpu.order is None or gpu.split is None:
+        return None
+    return int(cpu.order) == int(gpu.split) + 1
+
+
+def _buy_order_semantics_match(cpu: BuyEvent, gpu: BuyEvent) -> Optional[bool]:
+    if cpu.order is None:
+        return None
+
+    normalized_reason = _normalize_trade_reason(gpu.reason)
+    if normalized_reason == "new_buy":
+        return int(cpu.order) == 1
+    if normalized_reason == "add_buy_drop":
+        if int(cpu.order) < 2:
+            return False
+        if gpu.split is None:
+            return None
+        return int(cpu.order) == int(gpu.split) + 1
+    return None
+
+
+def _event_bucket_key(event: Any) -> Tuple[str, str]:
+    return str(event.date), str(event.ticker)
+
+
+def _bucket_events(events: List[Any]) -> Dict[Tuple[str, str], List[Any]]:
+    buckets: Dict[Tuple[str, str], List[Any]] = {}
+    for event in events:
+        buckets.setdefault(_event_bucket_key(event), []).append(event)
+    return buckets
+
+
+def _build_sell_pair_row(pair_index: int, cpu: Optional[SellEvent], gpu: Optional[SellEvent]) -> Dict[str, Any]:
+    row = {
+        "pair_index": pair_index,
+        "cpu": None if cpu is None else cpu.__dict__,
+        "gpu": None if gpu is None else gpu.__dict__,
+        "matched": False,
+        "diff": {},
+    }
+    if cpu is None or gpu is None:
+        return row
+
+    qty_diff = int(cpu.quantity - gpu.quantity)
+    price_diff = float(cpu.execution_price - gpu.execution_price)
+    net_diff = float(cpu.net_revenue - gpu.net_revenue)
+    trigger_diff = _trigger_price_diff(cpu.trigger_price, gpu.trigger_price)
+    reason_same = _normalize_trade_reason(cpu.reason) == _normalize_trade_reason(gpu.reason)
+    order_match = _sell_order_match(cpu, gpu)
+    same_key = (cpu.date == gpu.date) and (cpu.ticker == gpu.ticker)
+    row["diff"] = {
+        "date_same": cpu.date == gpu.date,
+        "ticker_same": cpu.ticker == gpu.ticker,
+        "quantity_diff": qty_diff,
+        "execution_price_diff": price_diff,
+        "net_revenue_diff": net_diff,
+        "reason_same": reason_same,
+        "trigger_price_diff": trigger_diff,
+        "order_match": order_match,
+    }
+    trigger_same = trigger_diff is not None and abs(trigger_diff) < 1e-6
+    order_ok = True if order_match is None else bool(order_match)
+    row["matched"] = (
+        same_key
+        and qty_diff == 0
+        and abs(price_diff) < 1e-6
+        and abs(net_diff) < 1e-6
+        and reason_same
+        and trigger_same
+        and order_ok
+    )
+    return row
+
+
+def _build_buy_pair_row(pair_index: int, cpu: Optional[BuyEvent], gpu: Optional[BuyEvent]) -> Dict[str, Any]:
+    row = {
+        "pair_index": pair_index,
+        "cpu": None if cpu is None else cpu.__dict__,
+        "gpu": None if gpu is None else gpu.__dict__,
+        "matched": False,
+        "diff": {},
+    }
+    if cpu is None or gpu is None:
+        return row
+
+    qty_diff = int(cpu.quantity - gpu.quantity)
+    price_diff = float(cpu.execution_price - gpu.execution_price)
+    cost_diff = float(cpu.total_cost - gpu.total_cost)
+    trigger_diff = _trigger_price_diff(cpu.trigger_price, gpu.trigger_price)
+    reason_same = _normalize_trade_reason(cpu.reason) == _normalize_trade_reason(gpu.reason)
+    order_match = _buy_order_semantics_match(cpu, gpu)
+    same_key = (cpu.date == gpu.date) and (cpu.ticker == gpu.ticker)
+    row["diff"] = {
+        "date_same": cpu.date == gpu.date,
+        "ticker_same": cpu.ticker == gpu.ticker,
+        "quantity_diff": qty_diff,
+        "execution_price_diff": price_diff,
+        "total_cost_diff": cost_diff,
+        "reason_same": reason_same,
+        "trigger_price_diff": trigger_diff,
+        "order_match": order_match,
+    }
+    trigger_same = trigger_diff is not None and abs(trigger_diff) < 1e-6
+    order_ok = True if order_match is None else bool(order_match)
+    row["matched"] = (
+        same_key
+        and qty_diff == 0
+        and abs(price_diff) < 1e-6
+        and abs(cost_diff) < 1e-6
+        and reason_same
+        and trigger_same
+        and order_ok
+    )
+    return row
+
+
+def _sell_match_score(cpu: SellEvent, gpu: SellEvent) -> Tuple[float, ...]:
+    trigger_diff = _trigger_price_diff(cpu.trigger_price, gpu.trigger_price)
+    order_match = _sell_order_match(cpu, gpu)
+    order_penalty = 0 if order_match in (None, True) else 1
+    trigger_penalty = 0 if trigger_diff is not None else 1
+    return (
+        abs(int(cpu.quantity - gpu.quantity)),
+        abs(float(cpu.execution_price - gpu.execution_price)),
+        abs(float(cpu.net_revenue - gpu.net_revenue)),
+        0 if _normalize_trade_reason(cpu.reason) == _normalize_trade_reason(gpu.reason) else 1,
+        trigger_penalty,
+        abs(trigger_diff) if trigger_diff is not None else 0.0,
+        order_penalty,
+    )
+
+
+def _buy_match_score(cpu: BuyEvent, gpu: BuyEvent) -> Tuple[float, ...]:
+    trigger_diff = _trigger_price_diff(cpu.trigger_price, gpu.trigger_price)
+    order_match = _buy_order_semantics_match(cpu, gpu)
+    order_penalty = 0 if order_match in (None, True) else 1
+    trigger_penalty = 0 if trigger_diff is not None else 1
+    return (
+        abs(int(cpu.quantity - gpu.quantity)),
+        abs(float(cpu.execution_price - gpu.execution_price)),
+        abs(float(cpu.total_cost - gpu.total_cost)),
+        0 if _normalize_trade_reason(cpu.reason) == _normalize_trade_reason(gpu.reason) else 1,
+        trigger_penalty,
+        abs(trigger_diff) if trigger_diff is not None else 0.0,
+        order_penalty,
+    )
+
+
+def _pair_bucket_events(
+    cpu_events: List[Any],
+    gpu_events: List[Any],
+    *,
+    cpu_sort_key,
+    gpu_sort_key,
+    build_row,
+    match_score,
+) -> List[Dict[str, Any]]:
+    cpu_buckets = _bucket_events(cpu_events)
+    gpu_buckets = _bucket_events(gpu_events)
+    bucket_keys = sorted(set(cpu_buckets.keys()) | set(gpu_buckets.keys()))
+
     rows: List[Dict[str, Any]] = []
-    for idx in range(max_len):
-        cpu = cpu_sorted[idx] if idx < len(cpu_sorted) else None
-        gpu = gpu_sorted[idx] if idx < len(gpu_sorted) else None
-        row = {
-            "pair_index": idx,
-            "cpu": None if cpu is None else cpu.__dict__,
-            "gpu": None if gpu is None else gpu.__dict__,
-            "matched": False,
-            "diff": {},
-        }
-        if cpu is not None and gpu is not None:
-            qty_diff = int(cpu.quantity - gpu.quantity)
-            price_diff = float(cpu.execution_price - gpu.execution_price)
-            net_diff = float(cpu.net_revenue - gpu.net_revenue)
-            same_key = (cpu.date == gpu.date) and (cpu.ticker == gpu.ticker)
-            row["diff"] = {
-                "date_same": cpu.date == gpu.date,
-                "ticker_same": cpu.ticker == gpu.ticker,
-                "quantity_diff": qty_diff,
-                "execution_price_diff": price_diff,
-                "net_revenue_diff": net_diff,
-            }
-            row["matched"] = same_key and qty_diff == 0 and abs(price_diff) < 1e-6 and abs(net_diff) < 1e-6
-        rows.append(row)
+    pair_index = 0
+    for bucket_key in bucket_keys:
+        cpu_bucket = sorted(cpu_buckets.get(bucket_key, []), key=cpu_sort_key)
+        gpu_bucket = sorted(gpu_buckets.get(bucket_key, []), key=gpu_sort_key)
+        remaining_gpu = list(gpu_bucket)
+
+        for cpu_event in cpu_bucket:
+            if not remaining_gpu:
+                rows.append(build_row(pair_index, cpu_event, None))
+                pair_index += 1
+                continue
+
+            best_pos = min(
+                range(len(remaining_gpu)),
+                key=lambda idx: (match_score(cpu_event, remaining_gpu[idx]), gpu_sort_key(remaining_gpu[idx])),
+            )
+            gpu_event = remaining_gpu.pop(best_pos)
+            rows.append(build_row(pair_index, cpu_event, gpu_event))
+            pair_index += 1
+
+        for gpu_event in remaining_gpu:
+            rows.append(build_row(pair_index, None, gpu_event))
+            pair_index += 1
     return rows
+
+
+def _pair_events(cpu_events: List[SellEvent], gpu_events: List[SellEvent]) -> List[Dict[str, Any]]:
+    return _pair_bucket_events(
+        cpu_events,
+        gpu_events,
+        cpu_sort_key=lambda e: (e.quantity, e.execution_price, e.order or 0, e.trigger_price or 0.0),
+        gpu_sort_key=lambda e: (e.quantity, e.execution_price, e.split or 0, e.trigger_price or 0.0),
+        build_row=_build_sell_pair_row,
+        match_score=_sell_match_score,
+    )
 
 
 def _pair_buy_events(cpu_events: List[BuyEvent], gpu_events: List[BuyEvent]) -> List[Dict[str, Any]]:
-    cpu_sorted = sorted(cpu_events, key=lambda e: (e.date, e.ticker, e.quantity, e.execution_price, e.order or 0))
-    gpu_sorted = sorted(gpu_events, key=lambda e: (e.date, e.ticker, e.quantity, e.execution_price))
-
-    max_len = max(len(cpu_sorted), len(gpu_sorted))
-    rows: List[Dict[str, Any]] = []
-    for idx in range(max_len):
-        cpu = cpu_sorted[idx] if idx < len(cpu_sorted) else None
-        gpu = gpu_sorted[idx] if idx < len(gpu_sorted) else None
-        row = {
-            "pair_index": idx,
-            "cpu": None if cpu is None else cpu.__dict__,
-            "gpu": None if gpu is None else gpu.__dict__,
-            "matched": False,
-            "diff": {},
-        }
-        if cpu is not None and gpu is not None:
-            qty_diff = int(cpu.quantity - gpu.quantity)
-            price_diff = float(cpu.execution_price - gpu.execution_price)
-            cost_diff = float(cpu.total_cost - gpu.total_cost)
-            same_key = (cpu.date == gpu.date) and (cpu.ticker == gpu.ticker)
-            row["diff"] = {
-                "date_same": cpu.date == gpu.date,
-                "ticker_same": cpu.ticker == gpu.ticker,
-                "quantity_diff": qty_diff,
-                "execution_price_diff": price_diff,
-                "total_cost_diff": cost_diff,
-            }
-            row["matched"] = same_key and qty_diff == 0 and abs(price_diff) < 1e-6 and abs(cost_diff) < 1e-6
-        rows.append(row)
-    return rows
+    return _pair_bucket_events(
+        cpu_events,
+        gpu_events,
+        cpu_sort_key=lambda e: (e.quantity, e.execution_price, e.order or 0, e.trigger_price or 0.0),
+        gpu_sort_key=lambda e: (e.quantity, e.execution_price, e.split or 0, e.trigger_price or 0.0),
+        build_row=_build_buy_pair_row,
+        match_score=_buy_match_score,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -621,6 +793,78 @@ def _save_json(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
 
 
+def collect_trade_event_parity_report(
+    *,
+    config: Dict[str, Any],
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    params: Dict[str, Any],
+    candidate_source_mode: str,
+    use_weekly_alpha_gate: bool,
+    parity_mode: str,
+    universe_mode: str,
+) -> Dict[str, Any]:
+    cpu_sell_events, cpu_buy_events = _run_cpu_and_collect_trade_events(
+        config=config,
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+        params=params,
+        candidate_source_mode=candidate_source_mode,
+        use_weekly_alpha_gate=use_weekly_alpha_gate,
+        universe_mode=universe_mode,
+    )
+    gpu_sell_events, gpu_buy_events, gpu_log_text = _run_gpu_and_collect_sell_events(
+        config=config,
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+        params=params,
+        candidate_source_mode=candidate_source_mode,
+        use_weekly_alpha_gate=use_weekly_alpha_gate,
+        parity_mode=parity_mode,
+        universe_mode=universe_mode,
+    )
+
+    sell_pairs = _pair_events(cpu_sell_events, gpu_sell_events)
+    buy_pairs = _pair_buy_events(cpu_buy_events, gpu_buy_events)
+    matched_sell_pairs = sum(1 for row in sell_pairs if row["matched"])
+    matched_buy_pairs = sum(1 for row in buy_pairs if row["matched"])
+    sell_mismatched_pairs = len(sell_pairs) - matched_sell_pairs
+    buy_mismatched_pairs = len(buy_pairs) - matched_buy_pairs
+    decision_level_zero_mismatch = sell_mismatched_pairs == 0 and buy_mismatched_pairs == 0
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "params": params,
+        "candidate_source_mode": candidate_source_mode,
+        "parity_mode": parity_mode,
+        "universe_mode": universe_mode,
+        "comparison_scope": "structured_trade_events",
+        "release_decision_fields_complete": False,
+        "cpu_sell_events_count": len(cpu_sell_events),
+        "gpu_sell_events_count": len(gpu_sell_events),
+        "cpu_buy_events_count": len(cpu_buy_events),
+        "gpu_buy_events_count": len(gpu_buy_events),
+        "sell_paired_count": len(sell_pairs),
+        "sell_matched_pairs": matched_sell_pairs,
+        "sell_mismatched_pairs": sell_mismatched_pairs,
+        "buy_paired_count": len(buy_pairs),
+        "buy_matched_pairs": matched_buy_pairs,
+        "buy_mismatched_pairs": buy_mismatched_pairs,
+        "decision_level_zero_mismatch": decision_level_zero_mismatch,
+        "cpu_sell_events": [event.__dict__ for event in cpu_sell_events],
+        "gpu_sell_events": [event.__dict__ for event in gpu_sell_events],
+        "cpu_buy_events": [event.__dict__ for event in cpu_buy_events],
+        "gpu_buy_events": [event.__dict__ for event in gpu_buy_events],
+        "sell_pairs": sell_pairs,
+        "buy_pairs": buy_pairs,
+        "gpu_log_text": gpu_log_text,
+    }
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     config = load_config()
@@ -634,17 +878,7 @@ def main() -> None:
         params = _load_param_row_from_csv(args.params_csv, args.param_id)
     else:
         params = _load_param_row_from_config(config)
-    cpu_sell_events, cpu_buy_events = _run_cpu_and_collect_trade_events(
-        config=config,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        initial_cash=initial_cash,
-        params=params,
-        candidate_source_mode=args.candidate_source_mode,
-        use_weekly_alpha_gate=args.use_weekly_alpha_gate,
-        universe_mode=universe_mode,
-    )
-    gpu_sell_events, gpu_buy_events, gpu_log_text = _run_gpu_and_collect_sell_events(
+    payload = collect_trade_event_parity_report(
         config=config,
         start_date=args.start_date,
         end_date=args.end_date,
@@ -655,35 +889,7 @@ def main() -> None:
         parity_mode=args.parity_mode,
         universe_mode=universe_mode,
     )
-
-    sell_pairs = _pair_events(cpu_sell_events, gpu_sell_events)
-    buy_pairs = _pair_buy_events(cpu_buy_events, gpu_buy_events)
-    matched_sell_pairs = sum(1 for row in sell_pairs if row["matched"])
-    matched_buy_pairs = sum(1 for row in buy_pairs if row["matched"])
-    payload = {
-        "start_date": args.start_date,
-        "end_date": args.end_date,
-        "params": params,
-        "candidate_source_mode": args.candidate_source_mode,
-        "parity_mode": args.parity_mode,
-        "universe_mode": universe_mode,
-        "cpu_sell_events_count": len(cpu_sell_events),
-        "gpu_sell_events_count": len(gpu_sell_events),
-        "cpu_buy_events_count": len(cpu_buy_events),
-        "gpu_buy_events_count": len(gpu_buy_events),
-        "sell_paired_count": len(sell_pairs),
-        "sell_matched_pairs": matched_sell_pairs,
-        "sell_mismatched_pairs": len(sell_pairs) - matched_sell_pairs,
-        "buy_paired_count": len(buy_pairs),
-        "buy_matched_pairs": matched_buy_pairs,
-        "buy_mismatched_pairs": len(buy_pairs) - matched_buy_pairs,
-        "cpu_sell_events": [event.__dict__ for event in cpu_sell_events],
-        "gpu_sell_events": [event.__dict__ for event in gpu_sell_events],
-        "cpu_buy_events": [event.__dict__ for event in cpu_buy_events],
-        "gpu_buy_events": [event.__dict__ for event in gpu_buy_events],
-        "sell_pairs": sell_pairs,
-        "buy_pairs": buy_pairs,
-    }
+    gpu_log_text = payload.pop("gpu_log_text")
     _save_json(args.out, payload)
     if args.gpu_log_out:
         Path(args.gpu_log_out).parent.mkdir(parents=True, exist_ok=True)
@@ -692,13 +898,13 @@ def main() -> None:
     print(f"[sell_event_dump] report saved: {args.out}")
     print(
         "[sell_event_dump] "
-        f"cpu_sell_events={len(cpu_sell_events)}, gpu_sell_events={len(gpu_sell_events)}, "
-        f"sell_mismatched_pairs={len(sell_pairs) - matched_sell_pairs}"
+        f"cpu_sell_events={payload['cpu_sell_events_count']}, gpu_sell_events={payload['gpu_sell_events_count']}, "
+        f"sell_mismatched_pairs={payload['sell_mismatched_pairs']}"
     )
     print(
         "[sell_event_dump] "
-        f"cpu_buy_events={len(cpu_buy_events)}, gpu_buy_events={len(gpu_buy_events)}, "
-        f"buy_mismatched_pairs={len(buy_pairs) - matched_buy_pairs}"
+        f"cpu_buy_events={payload['cpu_buy_events_count']}, gpu_buy_events={payload['gpu_buy_events_count']}, "
+        f"buy_mismatched_pairs={payload['buy_mismatched_pairs']}"
     )
     if args.gpu_log_out:
         print(f"[sell_event_dump] gpu_log saved: {args.gpu_log_out}")

@@ -8,13 +8,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.data_handler import DataHandler
 from src.backtest.cpu.strategy import MagicSplitStrategy, Position
 from src.backtest.cpu.portfolio import Portfolio
-from src.backtest.gpu.data import (
-    _collect_candidate_atr_asof,
-)
-from src.backtest.gpu.utils import (
-    _resolve_signal_date_for_gpu,
-    _sort_candidates_by_atr_then_market_cap_then_ticker,
-)
 
 class TestIssue67TierUniverse(unittest.TestCase):
     def setUp(self):
@@ -29,6 +22,7 @@ class TestIssue67TierUniverse(unittest.TestCase):
         self.mock_conn = MagicMock()
         self.mock_pool.return_value.get_connection.return_value = self.mock_conn
         self.data_handler = DataHandler(self.db_config)
+        self.data_handler.universe_mode = "strict_pit"
         self.data_handler.clear_load_stock_data_cache()
 
     def tearDown(self):
@@ -82,7 +76,9 @@ class TestIssue67StrategyModes(unittest.TestCase):
         self.portfolio = MagicMock()
         self.portfolio.positions = {}
         self.portfolio.initial_cash = 1000000
+        self.portfolio.cash = 1000000
         self.portfolio.get_total_value.return_value = 1000000
+        self.data_handler.get_ohlc_data_on_date.return_value = pd.Series({"open_price": 1000.0})
         self.trading_dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")]
         
         # Base config
@@ -217,9 +213,12 @@ class TestIssue67StrategyModes(unittest.TestCase):
                 1,
             )
 
-    def test_strategy_mode_invalid_falls_back_to_weekly(self):
+    def test_strategy_mode_invalid_is_forced_to_tier_path(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="invalid_mode")
-        self.data_handler.get_filtered_stock_codes.return_value = ["A", "B"]
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
+            ["A", "B"],
+            "TIER_1_SNAPSHOT_ASOF",
+        )
         self.data_handler.get_stock_row_as_of.return_value = None
 
         strategy.generate_new_entry_signals(
@@ -230,12 +229,15 @@ class TestIssue67StrategyModes(unittest.TestCase):
             1,
         )
 
-        self.data_handler.get_filtered_stock_codes.assert_called_once()
-        self.data_handler.get_candidates_with_tier_fallback.assert_not_called()
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
+        self.data_handler.get_filtered_stock_codes.assert_not_called()
 
     def test_strategy_mode_tier_same_atr_uses_market_cap_then_ticker_tiebreak(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "C", "B"], "TIER_1")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
+            ["A", "C", "B"],
+            "TIER_1_SNAPSHOT_ASOF",
+        )
 
         candidate_rows = {
             "A": pd.Series({"atr_14_ratio": 0.10, "close_price": 1000.0, "market_cap": 100_000_000}),
@@ -263,7 +265,10 @@ class TestIssue67StrategyModes(unittest.TestCase):
             candidate_source_mode="tier",
             cooldown_period_days=5,
         )
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (["A", "B", "C"], "TIER_1")
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
+            ["A", "B", "C"],
+            "TIER_1_SNAPSHOT_ASOF",
+        )
 
         self.portfolio.positions = {"A": [MagicMock()]}
         strategy.cooldown_tracker["B"] = 0  # current_day_idx=1 이므로 아직 쿨다운
@@ -293,9 +298,9 @@ class TestIssue67StrategyModes(unittest.TestCase):
             candidate_source_mode="tier",
             tier_hysteresis_mode="strict_hysteresis_v1",
         )
-        self.data_handler.get_candidates_with_tier_fallback.return_value = (
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
             ["A", "B"],
-            "TIER_2_FALLBACK",
+            "TIER_2_FALLBACK_SNAPSHOT_ASOF",
         )
         self.data_handler.get_stock_row_as_of.return_value = pd.Series(
             {"atr_14_ratio": 0.10, "close_price": 1000.0}
@@ -310,23 +315,41 @@ class TestIssue67StrategyModes(unittest.TestCase):
         )
 
         self.assertEqual(signals, [])
-        self.data_handler.get_candidates_with_tier_fallback.assert_called_once_with(pd.Timestamp("2024-01-01"))
+        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
         self.data_handler.get_stock_row_as_of.assert_not_called()
 
 class TestIssue67GpuParityHelpers(unittest.TestCase):
+    def _load_gpu_helpers(self):
+        try:
+            from src.backtest.gpu.data import _collect_candidate_atr_asof
+            from src.backtest.gpu.utils import (
+                _resolve_signal_date_for_gpu,
+                _sort_candidates_by_atr_then_market_cap_then_ticker,
+            )
+        except Exception as exc:  # pragma: no cover - environment dependent
+            self.skipTest(f"GPU helpers unavailable: {type(exc).__name__}: {exc}")
+        return (
+            _collect_candidate_atr_asof,
+            _resolve_signal_date_for_gpu,
+            _sort_candidates_by_atr_then_market_cap_then_ticker,
+        )
+
     def test_resolve_signal_date_for_gpu_uses_previous_trading_day(self):
+        _, _resolve_signal_date_for_gpu, _ = self._load_gpu_helpers()
         trading_dates = pd.DatetimeIndex(["2024-01-01", "2024-01-02", "2024-01-03"])
         signal_date, signal_day_idx = _resolve_signal_date_for_gpu(2, trading_dates)
         self.assertEqual(signal_day_idx, 1)
         self.assertEqual(signal_date, pd.Timestamp("2024-01-02"))
 
     def test_resolve_signal_date_for_gpu_first_day_has_no_signal(self):
+        _, _resolve_signal_date_for_gpu, _ = self._load_gpu_helpers()
         trading_dates = pd.DatetimeIndex(["2024-01-01", "2024-01-02"])
         signal_date, signal_day_idx = _resolve_signal_date_for_gpu(0, trading_dates)
         self.assertIsNone(signal_date)
         self.assertEqual(signal_day_idx, -1)
 
     def test_sort_candidates_by_atr_then_market_cap_then_ticker_is_deterministic(self):
+        _, _, _sort_candidates_by_atr_then_market_cap_then_ticker = self._load_gpu_helpers()
         candidates = [
             ("005930", 1000, 100, 0.10),
             ("000660", 2000, 200, 0.20),
@@ -345,6 +368,7 @@ class TestIssue67GpuParityHelpers(unittest.TestCase):
         )
 
     def test_collect_candidate_atr_asof_uses_previous_row_when_same_day_missing(self):
+        _collect_candidate_atr_asof, _, _ = self._load_gpu_helpers()
         try:
             import cudf
         except ImportError:

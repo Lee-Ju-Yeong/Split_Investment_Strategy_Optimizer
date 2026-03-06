@@ -20,9 +20,9 @@ from src.price_policy import (
 )
 from src.universe_policy import resolve_universe_mode
 from src.optimization.gpu.data_loading import (
+    build_empty_weekly_filtered_gpu as build_empty_weekly_filtered_gpu_shared,
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
     preload_tier_data_to_tensor as preload_tier_data_to_tensor_shared,
-    preload_weekly_filtered_stocks_to_gpu as preload_weekly_filtered_stocks_to_gpu_shared,
 )
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
 from src.performance_analyzer import PerformanceAnalyzer
@@ -106,7 +106,9 @@ def preload_all_data_to_gpu(
     )
 
 def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    return preload_weekly_filtered_stocks_to_gpu_shared(engine, start_date, end_date)
+    _ = (engine, start_date, end_date)
+    print("⏭️ Skipping weekly filtered preload (tier-only runtime path).")
+    return build_empty_weekly_filtered_gpu_shared()
 
 def preload_tier_data_to_tensor(
     engine,

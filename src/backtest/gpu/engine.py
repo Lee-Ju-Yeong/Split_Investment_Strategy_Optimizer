@@ -86,13 +86,12 @@ def run_magic_split_strategy_on_gpu(
             "Forcing 'tier' (A-path) for CPU/GPU parity."
         )
     candidate_source_mode = "tier"
-    use_weekly_alpha_gate = False
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
     tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
     strict_hysteresis_enabled = tier_hysteresis_mode == "strict_hysteresis_v1"
     entry_tier1_only = strict_hysteresis_enabled
-    hold_max_tier = 2 if candidate_source_mode in {"tier", "hybrid_transition"} else 0
+    hold_max_tier = 2
     force_liquidate_tier3 = False
     if candidate_source_mode == "tier" and tier_tensor is None:
         raise ValueError(f"tier_tensor is required when candidate_source_mode='{candidate_source_mode}'")
@@ -132,8 +131,6 @@ def run_magic_split_strategy_on_gpu(
             f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
             "Fallback to zeros enabled."
         )
-    needs_weekly_candidates = False
-    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index() if needs_weekly_candidates else None
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
     progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
@@ -193,59 +190,20 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
 
             # --- [Issue #67] Candidate Selection Logic ---
-            candidate_indices_gpu = cp.array([], dtype=cp.int32)
-            
-            # (A) Tier Selection (Primary for Tier/Hybrid)
-            if candidate_source_mode in ['tier', 'hybrid_transition'] and tier_tensor is not None:
-                # 1. Select Tier 1
-                if signal_day_idx >= 0:
-                    signal_tiers = tier_tensor[signal_day_idx] # (num_tickers,)
-                    if pit_universe_mask_tensor is not None:
-                        pit_mask = pit_universe_mask_tensor[signal_day_idx] > 0
-                    else:
-                        pit_mask = cp.ones(num_tickers, dtype=cp.bool_)
-                    tier1_mask = (signal_tiers == 1) & pit_mask
-
-                    if cp.any(tier1_mask):
-                        candidate_indices = cp.where(tier1_mask)[0]
-                    elif entry_tier1_only:
-                        candidate_indices = cp.array([], dtype=cp.int32)
-                    else:
-                        # Fallback to Tier 2 (<= 2)
-                        tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2) & pit_mask
-                        candidate_indices = cp.where(tier2_mask)[0]
-                    candidate_indices_gpu = candidate_indices.astype(cp.int32, copy=False)
-            
-            # (B) Weekly Selection (Primary for Weekly, Gate for Hybrid)
-            weekly_indices_list = []
-            if needs_weekly_candidates:
-                past_or_equal_data = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] < current_date]
-                if not past_or_equal_data.empty:
-                    latest_filter_date = past_or_equal_data['date'].max()
-                    candidates_of_the_week = weekly_filtered_reset_idx[weekly_filtered_reset_idx['date'] == latest_filter_date]
-                    candidate_tickers_list = candidates_of_the_week['ticker'].to_arrow().to_pylist()
-                    weekly_indices_list = [ticker_to_idx.get(t) for t in candidate_tickers_list if t in ticker_to_idx]
-            weekly_indices_gpu = (
-                cp.asarray(weekly_indices_list, dtype=cp.int32)
-                if weekly_indices_list
-                else cp.array([], dtype=cp.int32)
-            )
-            
-            # (C) Combine
             final_candidate_indices = cp.array([], dtype=cp.int32)
-            
-            if candidate_source_mode == 'weekly':
-                final_candidate_indices = weekly_indices_gpu
-            elif candidate_source_mode == 'tier':
-                final_candidate_indices = candidate_indices_gpu
-            elif candidate_source_mode == 'hybrid_transition':
-                if use_weekly_alpha_gate:
-                    if candidate_indices_gpu.size > 0 and weekly_indices_gpu.size > 0:
-                        final_candidate_indices = candidate_indices_gpu[
-                            cp.isin(candidate_indices_gpu, weekly_indices_gpu)
-                        ]
+            if signal_day_idx >= 0 and tier_tensor is not None:
+                signal_tiers = tier_tensor[signal_day_idx]
+                if pit_universe_mask_tensor is not None:
+                    pit_mask = pit_universe_mask_tensor[signal_day_idx] > 0
                 else:
-                    final_candidate_indices = candidate_indices_gpu
+                    pit_mask = cp.ones(num_tickers, dtype=cp.bool_)
+                tier1_mask = (signal_tiers == 1) & pit_mask
+
+                if cp.any(tier1_mask):
+                    final_candidate_indices = cp.where(tier1_mask)[0].astype(cp.int32, copy=False)
+                elif not entry_tier1_only:
+                    tier2_mask = (signal_tiers > 0) & (signal_tiers <= 2) & pit_mask
+                    final_candidate_indices = cp.where(tier2_mask)[0].astype(cp.int32, copy=False)
             if final_candidate_indices.size > 1:
                 final_candidate_indices = cp.unique(final_candidate_indices)
 

@@ -26,11 +26,39 @@
   - strict 모드 동작:
     - Entry: Tier1 only, Tier1 empty면 신규진입 skip
     - Hold/Add: T-1 Tier<=2만 추가 매수 허용
-    - Sell: T-1 Tier3 강제 청산
+    - Sell: Tier3 forced liquidation 경로는 커널 지원만 남기고 runtime 기본값은 비활성
   - CPU/GPU 동시 반영:
-    - CPU: `MagicSplitStrategy`에 Tier map 기반 Hold/Add/Sell 게이트 추가
-    - GPU: candidate fallback 제거(strict), add-buy tier gate, tier3 liquidation mask 추가
+    - CPU: `MagicSplitStrategy`에 Tier map 기반 Hold/Add 게이트 추가
+    - GPU: candidate fallback 제거(strict), add-buy tier gate 반영, tier3 liquidation mask는 shadow capability로 유지
   - 검증: `conda run --no-capture-output -n rapids-env python -m unittest tests.test_issue67_tier_universe tests.test_backtest_strategy_gpu -v` 통과(25 tests)
+- 업데이트(2026-03-07, regression sync):
+  - `tests/test_issue67_tier_universe.py`를 현재 runtime 정책에 맞게 정리
+    - invalid `candidate_source_mode`는 `weekly` fallback이 아니라 `tier` 강제 경로로 검증
+    - CPU-side 테스트가 CUDA 미지원 환경에서도 돌도록 GPU helper import를 lazy-load + skip 처리
+    - strategy fixture를 PIT gated candidate API / `portfolio.cash` 경로에 맞게 보강
+  - `tests/test_data_handler_tier.py`는 `strict_pit` 전제로 재정렬해 survivor-only 추가 query로 인한 오탐을 제거
+  - `src/debug_gpu_single_run.py`, `src/parity_sell_event_dump.py`도 `WeeklyFilteredStocks` preload를 중단하고 tier-only runtime path에 맞춰 empty frame을 사용
+  - 검증: `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_issue67_tier_universe tests.test_data_handler_tier tests.test_cpu_strategy_entry_context tests.test_universe_policy` 통과(43 tests, 4 skipped)
+- 업데이트(2026-03-07, weekly gate cleanup):
+  - `src/optimization/gpu/parameter_simulation.py`는 `candidate_source_mode`를 runtime에서 `tier`로 정규화한 뒤 `WeeklyFilteredStocks` preload를 항상 skip
+  - `src/backtest/gpu/engine.py`에서도 weekly/hybrid 교집합 분기를 제거하고 Tier 후보군만 사용
+  - 의도: `use_weekly_alpha_gate`가 살아 있는 것처럼 보이는 false signal 제거
+- 업데이트(2026-03-07, coverage gate/report closeout):
+  - `src/tier_coverage_report.py`에 `required_tier12_ratio`, `coverage_gate_pass`, summary JSON, `--fail-on-gate`를 추가
+  - 단위 테스트 추가: `tests/test_tier_coverage_report.py`
+  - 의미: `DataHandler` runtime gate와 같은 기준을 구간 리포트/백필 검증에도 적용
+- 업데이트(2026-03-07, coverage report gate sync):
+  - `src/tier_coverage_report.py`에 `coverage_gate_pass`, `required_tier12_ratio`, summary JSON, `--fail-on-gate`를 추가
+  - `tests/test_tier_coverage_report.py`로 liquidity filter 반영, failed date summary, empty-row 기본값을 고정
+  - 의도: `DataHandler._enforce_tier12_coverage_gate()`와 같은 기준을 오프라인 coverage 점검 CLI에서도 동일하게 확인
+  - 추가 안전장치: `--fail-on-gate`는 `--step-days 1`에서만 허용하여 샘플링 리포트를 승격 게이트로 오해하지 않도록 제한
+- 업데이트(2026-03-07, empirical threshold fixation):
+  - 운영 기본 `min_tier12_coverage_ratio`를 `0.45`로 상향
+  - 실측 근거(as-of sampled windows):
+    - `2024-12-30..2025-01-13`: 최저 `0.456809`
+    - `2015-01-12..2015-01-26`: 최저 `0.477972`
+    - `2023-11-06..2023-11-20`: 최저 `0.487128`
+  - exact-snapshot proxy(20-snapshot step) 최저값도 약 `0.4525`로 확인되어 `0.45`를 운영 하한으로 채택
 - 남은 핵심:
   - `tier` 경로 기준 end-to-end CPU/GPU parity 하네스(#56) (`tests/test_cpu_gpu_parity_topk.py`)
     - 주의: parity 하네스의 "구현/진척 관리"는 #56에서 진행하고, #67에서는 "승격 게이트(DoD)"로만 참조한다.
@@ -61,7 +89,8 @@
 - [x] `A안` 단일 경로 고정(재확인): `weekly/hybrid_transition` 경로는 제거/비활성화가 목표이며, 실행 시 `tier`로 정규화
 - [x] Tier 커버리지 리포트/튜닝 보조 CLI 추가:
   - `src/tier_coverage_report.py`: PIT 유니버스 내부에서 `tier1/tier<=2` 커버리지 리포트(csv/table)
-  - 운영 기본값은 `min_tier12_coverage_ratio=0.0`(gate off)로 두고, 2013~ 구간 실측 리포트로 임계값을 결정
+- 운영 기본값은 `min_tier12_coverage_ratio=0.45`로 고정(2026-03-07 실측 반영)
+- parity harness(`src.cpu_gpu_parity_topk`)의 Tier coverage gate도 PIT universe count를 분모로 사용하도록 맞춰, coverage report와 같은 threshold 의미를 공유
 - [x] 장기 backfill을 위한 Tier 배치 성능 보강:
   - `src/daily_stock_tier_batch.py`: `FinancialData` 조회에 `start_date` 윈도우 + as-of seed(최신 1행) 추가
   - `src/tier_backfill_window.py`: DailyStockTier windowed backfill runner 추가(대용량 OOM 방지)
@@ -102,13 +131,14 @@
 - [x] 구간별 Tier 커버리지 리포트 추가 (`date`, `tier1_count`, `tier12_count`)
 - [x] 커버리지 미달 임계값(설정 기반) 시 fail-fast (단, 운영 기본값은 gate off)
 - [x] 후보군 커버리지/튜닝 리포트 CLI 추가(`src/tier_coverage_report.py`)
+- [x] coverage summary/fail-on-gate 추가: `--summary-out`, `--fail-on-gate`, `coverage_gate_pass`
 
 ### 3-5. 후보군 선택 강건성 규칙(결정론 baseline)
 - [x] `random-only` 후보군 선택 금지(운영/최적화 기준)
 - [x] 동일 입력일 때 동일 `Top-K`가 재현되도록 점수식/정렬 키/동점 규칙 고정
 - [x] Entry/Hold hysteresis 규칙 명문화/구현:
   - config: `tier_hysteresis_mode = legacy | strict_hysteresis_v1`
-  - strict 모드: `Entry=tier1 only`, `Hold/Add=tier<=2`, `tier3 forced liquidation`
+  - strict 모드: `Entry=tier1 only`, `Hold/Add=tier<=2`, `Tier3 forced liquidation`은 runtime 기본값에서 비활성
 - [x] 현재 구현 기준 hysteresis 동작 문서/테스트 보강(2026-02-17)
 - [ ] `Top-K` 구성 로그에 `score`, `rank`, `tie_break_key` 저장(실험 재현용)
 
@@ -123,6 +153,7 @@
 
 ## 4. 테스트 범위
 - [ ] `tests/test_data_handler_tier.py` 확장: (tier-only) 후보군 조회 + 게이트 회귀 테스트
+- [x] `tests/test_tier_coverage_report.py` 추가: sampled coverage summary/gate helper 회귀 테스트
 - [x] `tests/test_strategy.py`(또는 신규): `tier=1 -> <=2 fallback` 분기 테스트
 - [ ] `tests/test_backtest_universe_mode.py` 신규: 동일 날짜 CPU 후보군 정합성
 - [ ] `tests/test_backtest_universe_mode.py` 확장: 동일 입력/시드에서 `Top-K` 결정론 재현성 테스트

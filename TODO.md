@@ -21,6 +21,7 @@
 - [ ] 이슈 #71 범위 외 후속 백로그 분리 문서: `todos/2026_03_01-issue71-carryover-non71-backlog.md`
 - [ ] 멀티에이전트 숙의 메모(성능/안정성 재검토, 2026-03-06): `todos/2026_03_06-multi-agent-performance-stability-review.md`
 - [ ] GPU-native WFO v2 연구 트랙 초안(2026-03-06): `todos/2026_03_06-gpu-native-wfo-v2-design.md`
+- [ ] Hybrid release gate board(2026-03-06): `docs/operations/2026-03-06-hybrid-release-gate-board.md`
 - [ ] 이슈 #67 PIT 조인 확장 + A안 전환(Tier universe): `todos/2026_02_09-issue67-tier-universe-migration.md`
 - [ ] 이슈 #68 멀티팩터 + Robust WFO/Ablation: `todos/2026_02_09-issue68-robust-wfo-ablation.md`
 - [ ] 이슈 #56 CPU/GPU Parity 하네스(top-k, 부분 충족/재오픈): `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
@@ -141,11 +142,13 @@
   - [ ] `#52` 연계: GPU 후보군/신규진입 경로 host 병목 제거(Phase B/C 우선 완료, top-level 중복 이슈로 분리하지 않음)
   - [x] Entry/Hold hysteresis 규칙 반영/문서화(`tier_hysteresis_mode`):
     - `legacy`: `Entry=tier1 -> empty면 tier<=2 fallback`
-    - `strict_hysteresis_v1`: `Entry=tier1 only`, `Hold/Add=tier<=2`, `tier3` 강제청산
+    - `strict_hysteresis_v1`: `Entry=tier1 only`, `Hold/Add=tier<=2`, `Tier3 forced liquidation`은 비활성(runtime off)
   - [x] 현재 동작 기준 hysteresis 문서/테스트 보강(2026-02-17): `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`, `tests/test_issue67_tier_universe.py` (`invalid mode`, `ATR tie-break`, `T-1 호출 인자`, `T+0/T+1`)
-  - [ ] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현
-  - [ ] `WeeklyFilteredStocks`는 `use_weekly_alpha_gate`가 `true`일 때만 교집합/가중치로 사용
-  - [ ] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가
+  - [x] `TickerUniverseSnapshot/History` 기반 PIT 후보군 조회를 기본 경로로 구현(2026-03-07 재확인: `DataHandler.get_pit_universe_codes_as_of` + strategy PIT gated path)
+  - [x] core runtime tier-only 정리(2026-03-07): optimizer/engine에서 `WeeklyFilteredStocks` preload/교집합 dead branch 제거
+  - [x] `DailyStockTier` 커버리지 게이트(구간별) 미달 시 실패 처리/리포트 추가(2026-03-07): `src/tier_coverage_report.py`에 `coverage_gate_pass`, summary JSON, `--fail-on-gate` 추가 + `tests/test_tier_coverage_report.py`
+  - [x] gate 권한 제한(2026-03-07): `tier_coverage_report --fail-on-gate`는 `--step-days 1`에서만 허용해 샘플링 리포트를 release-grade gate로 오해하지 않도록 제한
+  - [x] empirical threshold 고정(2026-03-07): `min_tier12_coverage_ratio=0.45` 채택 (`2024-12-30..2025-01-13` as-of 최저 `0.456809`, `2015-01-12..2015-01-26` 최저 `0.477972`, `2023-11-06..2023-11-20` 최저 `0.487128`)
 - [ ] 유동성 필터(일평균 거래대금 하한) config 기반 적용 및 회귀 테스트 (이슈 #67 범위 포함)
 - [x] 설정 소스 표준화 및 하드코딩 경로/플래그 제거 (이슈 #53): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/53
 - [ ] 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리 (이슈 #54): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54
@@ -163,12 +166,14 @@
   - [ ] 사용자 확인 게이트 C: 배포 전 최종 승인
 - [ ] GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (이슈 #98): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98
   - [ ] Scope 고정: #97(거버넌스)와 분리 운영
-  - [ ] 실행 원칙(2026-03-06): `GPU proposes, CPU certifies finalists` 하이브리드 적용
+  - [x] 실행 원칙(2026-03-06): `GPU proposes, CPU certifies finalists` 하이브리드 구현 반영
+  - [x] lane 해석 규칙: 구현 허용과 승격 허용을 분리 (`docs/operations/2026-03-06-hybrid-release-gate-board.md`)
   - [ ] 병목 1차: batch-size fallback 정리(`src/optimization/gpu/kernel.py`, `src/optimization/gpu/parameter_simulation.py`)
   - [ ] 병목 2차: 과대 universe fallback 정리(`src/pipeline/ohlcv_batch.py`, `src/data/collectors/financial_collector.py`)
   - [ ] 성능 증적: 동일 조건 wall-time / kernel launch / GPU util 비교
   - [ ] 안정성 게이트: PIT/no-lookahead 유지 + finalist CPU certification 통과
   - [ ] Release 승격 게이트: strict parity mismatch `0` 유지
+  - [x] Release 판정 보드: `strict_pit`, `promotion_blocked=false`, `decision-level parity 0 mismatch`, `future reference=0`
 - [x] `src` 패키지 구조 재편 및 대형 모듈 브레이크다운(동작 동일 리팩터링) (이슈 #69): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/69
 - [x] Wrapper deprecation/removal 단계적 정리 (이슈 #93): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/93
   - [x] Deprecation 정책/일정 문서화
@@ -206,6 +211,12 @@
   - [x] 스냅샷 메타데이터 강화: 파라미터/기간/코드 버전/생성시각 저장
   - [x] 스냅샷 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
   - [x] 불일치 리포트 표준화: first mismatch 인덱스 + cash/positions/value 덤프
+  - [x] curve parity summary 보강(2026-03-07): `failed_indices`, `total_mismatches`, `max_abs_diff`, release-gate scope metadata
+  - [x] 증적 범위 명시(2026-03-07): `curve_level_parity_zero_mismatch`와 `decision_level_parity_zero_mismatch`를 분리하고 `decision_level_evidence_missing`를 리포트에 기록
+  - [x] decision evidence 자동수집 연결(2026-03-07): `--decision-evidence-mode` + `parity_sell_event_dump.collect_trade_event_parity_report()`로 representative/all-row structured trade-event diff 수집
+  - [x] selected-row decision evidence 자동수집(2026-03-07): `--decision-evidence-mode` + row별 detail JSON artifact 저장
+  - [x] release gate 보수화(2026-03-07): 기본 `representative` 수집은 `decision_level_evidence_partial(...)`로, 전 row를 다 모아도 `cash/positions` 미포함이면 `decision_fields_not_covered`로 승격 해제를 금지
+  - [x] parity harness curve/coverage 보수화(2026-03-07): curve 비교는 missing date를 mismatch로 계산하고 Tier coverage gate 분모를 PIT universe count와 일치시킴
   - [ ] 하드 게이트: parity mismatch `0건`만 pass (Release Gate 미충족, 5거래일 `tier top-k=5` mismatch 잔존)
   - [x] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
   - [x] 2단계 실행 경로 분리: `--pipeline-stage gpu/cpu` + snapshot replay + `--cpu-workers`

@@ -23,6 +23,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         self.mock_conn = MagicMock()
         self.mock_pool.return_value.get_connection.return_value = self.mock_conn
         self.handler = DataHandler(self.db_config)
+        self.handler.universe_mode = "strict_pit"
 
     def tearDown(self):
         self.pool_patcher.stop()

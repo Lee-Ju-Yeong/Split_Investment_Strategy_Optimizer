@@ -39,7 +39,6 @@ from .data_loading import (
     preload_all_data_to_gpu,
     preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
-    preload_weekly_filtered_stocks_to_gpu,
 )
 from .kernel import get_optimal_batch_size, run_gpu_optimization
 
@@ -90,14 +89,6 @@ def _to_cpu_array(array_like, np_module):
     return np_module.asarray(array_like)
 
 
-def _coerce_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
-
-
 def _to_positive_int(value):
     try:
         parsed = int(value)
@@ -137,20 +128,15 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
     return batch_size, "adaptive-safe-default"
 
 
-def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_gate):
-    return (
-        candidate_source_mode == "weekly"
-        or (candidate_source_mode == "hybrid_transition" and _coerce_bool(use_weekly_alpha_gate))
-    )
-
-
-def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate):
+def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate=None):
     requested_mode = str(candidate_source_mode).strip()
-    _ = _coerce_bool(use_weekly_alpha_gate)
-    if requested_mode != "tier":
+    requested_weekly_gate = bool(use_weekly_alpha_gate)
+    if requested_mode != "tier" or requested_weekly_gate:
         print(
-            f"[Warning] candidate_source_mode='{requested_mode}' is deprecated. "
-            "Forcing 'tier' (A-path) for CPU/GPU parity."
+            "[Warning] "
+            f"candidate_source_mode='{requested_mode}', "
+            f"use_weekly_alpha_gate={requested_weekly_gate} is deprecated. "
+            "Forcing tier-only (A-path) for CPU/GPU parity."
         )
     return "tier", False
 
@@ -214,19 +200,8 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    needs_weekly_candidates = _should_preload_weekly_candidates(
-        execution_params["candidate_source_mode"],
-        execution_params["use_weekly_alpha_gate"],
-    )
-    if needs_weekly_candidates:
-        weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(
-            db_connection_str,
-            start_date,
-            end_date,
-        )
-    else:
-        print("⏭️ Skipping weekly filtered preload (mode=tier, weekly gate disabled).")
-        weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
+    print("⏭️ Skipping weekly filtered preload (tier-only runtime path).")
+    weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
