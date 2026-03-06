@@ -1,13 +1,322 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from ..config_loader import load_config
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+_CPU_CERT_PARAM_KEYS = (
+    "max_stocks",
+    "order_investment_ratio",
+    "additional_buy_drop_rate",
+    "sell_profit_rate",
+    "additional_buy_priority",
+    "stop_loss_rate",
+    "max_splits_limit",
+    "max_inactivity_period",
+)
+_CPU_CERT_FLOAT_KEYS = {
+    "order_investment_ratio",
+    "additional_buy_drop_rate",
+    "sell_profit_rate",
+    "stop_loss_rate",
+}
+_CPU_CERT_INT_KEYS = {
+    "max_stocks",
+    "max_splits_limit",
+    "max_inactivity_period",
+}
+_CPU_CERT_SORT_COLUMNS = ("calmar_ratio", "cagr", "mdd")
+
+
+def _normalize_priority_for_cpu(value) -> str:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized in ("lowest_order", "highest_drop"):
+            return normalized
+    try:
+        return "highest_drop" if int(float(value)) == 1 else "lowest_order"
+    except (TypeError, ValueError):
+        return "lowest_order"
+
+
+def _normalize_param_signature(mapping: dict) -> tuple:
+    signature = []
+    for key in _CPU_CERT_PARAM_KEYS:
+        value = mapping.get(key)
+        if key == "additional_buy_priority":
+            signature.append(_normalize_priority_for_cpu(value))
+        elif key in _CPU_CERT_INT_KEYS:
+            signature.append(int(value))
+        elif key in _CPU_CERT_FLOAT_KEYS:
+            signature.append(round(float(value), 10))
+        else:
+            signature.append(value)
+    return tuple(signature)
+
+
+def _build_param_signatures(df: "pd.DataFrame") -> list[tuple]:
+    normalized_columns = []
+    for key in _CPU_CERT_PARAM_KEYS:
+        values = df[key].tolist()
+        if key == "additional_buy_priority":
+            normalized = [_normalize_priority_for_cpu(value) for value in values]
+        elif key in _CPU_CERT_INT_KEYS:
+            normalized = [int(value) for value in values]
+        elif key in _CPU_CERT_FLOAT_KEYS:
+            normalized = [round(float(value), 10) for value in values]
+        else:
+            normalized = values
+        normalized_columns.append(normalized)
+    return list(zip(*normalized_columns))
+
+
+def _sort_candidate_frame(df: "pd.DataFrame", primary_metric: str) -> "pd.DataFrame":
+    sort_cols = [primary_metric]
+    ascending = [False]
+    for column in _CPU_CERT_SORT_COLUMNS:
+        if column in df.columns and column != primary_metric:
+            sort_cols.append(column)
+            ascending.append(False)
+    return df.sort_values(sort_cols, ascending=ascending, kind="stable")
+
+
+def _get_cpu_certification_settings(wfo_settings: dict) -> dict:
+    top_n = int(wfo_settings.get("cpu_certification_top_n", 5) or 5)
+    metric = str(wfo_settings.get("cpu_certification_metric", "calmar_ratio")).strip() or "calmar_ratio"
+    return {
+        "enabled": bool(wfo_settings.get("cpu_certification_enabled", False)),
+        "top_n": max(top_n, 1),
+        "metric": metric,
+    }
+
+
+def build_gpu_finalist_shortlist(
+    simulation_results_df: "pd.DataFrame",
+    robust_params_dict: dict,
+    *,
+    top_n: int,
+    metric: str,
+) -> "pd.DataFrame":
+    import pandas as pd
+
+    if simulation_results_df.empty:
+        raise ValueError("GPU simulation results are empty; cannot build finalist shortlist.")
+    if metric not in simulation_results_df.columns:
+        raise ValueError(f"CPU certification metric '{metric}' is missing from GPU results.")
+
+    ranked = simulation_results_df.reset_index().rename(columns={"index": "gpu_result_index"}).copy()
+    ranked = _sort_candidate_frame(ranked, metric).reset_index(drop=True)
+    ranked["gpu_rank"] = ranked.index + 1
+
+    finalists = ranked.head(max(int(top_n), 1)).copy()
+    finalists["selection_reason"] = "gpu_top_n"
+    finalist_signatures = {
+        signature: idx
+        for idx, signature in enumerate(_build_param_signatures(finalists))
+    }
+    robust_signature = _normalize_param_signature(robust_params_dict)
+
+    if robust_signature in finalist_signatures:
+        row_idx = finalist_signatures[robust_signature]
+        finalists.at[row_idx, "selection_reason"] = "gpu_top_n+robust_cluster"
+        return finalists.reset_index(drop=True)
+
+    ranked_signatures = _build_param_signatures(ranked)
+    robust_match_indices = [
+        idx for idx, signature in enumerate(ranked_signatures) if signature == robust_signature
+    ]
+    robust_matches = ranked.iloc[robust_match_indices]
+    if not robust_matches.empty:
+        robust_row = robust_matches.head(1).copy()
+    else:
+        robust_row = pd.DataFrame([robust_params_dict])
+        robust_row["gpu_result_index"] = pd.NA
+        robust_row["gpu_rank"] = pd.NA
+    robust_row["selection_reason"] = "robust_cluster"
+
+    finalists = pd.concat([finalists, robust_row], ignore_index=True, sort=False)
+    return finalists.reset_index(drop=True)
+
+
+def _extract_strategy_params(candidate_row: dict, base_strategy_params: dict) -> dict:
+    params = dict(base_strategy_params)
+    for key in _CPU_CERT_PARAM_KEYS:
+        if key not in candidate_row:
+            continue
+        value = candidate_row[key]
+        if key == "additional_buy_priority":
+            params[key] = _normalize_priority_for_cpu(value)
+        elif key in _CPU_CERT_INT_KEYS:
+            params[key] = int(value)
+        elif key in _CPU_CERT_FLOAT_KEYS:
+            params[key] = float(value)
+        else:
+            params[key] = value
+    return params
+
+
+def _build_cpu_backtest_config(
+    base_config: dict,
+    *,
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    strategy_params: dict,
+) -> dict:
+    config = {
+        "database": dict(base_config["database"]),
+        "backtest_settings": dict(base_config["backtest_settings"]),
+        "strategy_params": dict(base_config["strategy_params"]),
+        "execution_params": dict(base_config["execution_params"]),
+        "paths": dict(base_config.get("paths", {})),
+    }
+    config["backtest_settings"].update(
+        {
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "initial_cash": float(initial_cash),
+            "save_full_trade_history": False,
+        }
+    )
+    config["strategy_params"].update(strategy_params)
+    return config
+
+
+def _cpu_daily_values_to_series(cpu_result: dict) -> "pd.Series":
+    import pandas as pd
+
+    if not cpu_result or not cpu_result.get("success"):
+        raise ValueError(
+            f"CPU backtest failed: {cpu_result.get('error') if cpu_result else 'empty result'}"
+        )
+    daily_values = cpu_result.get("daily_values", [])
+    if not daily_values:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(daily_values)
+    if df.empty or "x" not in df.columns or "y" not in df.columns:
+        return pd.Series(dtype=float)
+    df["x"] = pd.to_datetime(df["x"])
+    df = df.sort_values("x")
+    return pd.Series(df["y"].values, index=df["x"])
+
+
+def run_cpu_single_backtest(
+    base_config: dict,
+    *,
+    start_date: str,
+    end_date: str,
+    params_dict: dict,
+    initial_cash: float,
+) -> tuple["pd.Series", dict]:
+    from ..main_backtest import run_backtest_from_config
+
+    strategy_params = _extract_strategy_params(params_dict, base_config["strategy_params"])
+    cpu_config = _build_cpu_backtest_config(
+        base_config,
+        start_date=start_date,
+        end_date=end_date,
+        initial_cash=initial_cash,
+        strategy_params=strategy_params,
+    )
+    cpu_result = run_backtest_from_config(cpu_config, persist_artifacts=False)
+    return _cpu_daily_values_to_series(cpu_result), cpu_result
+
+
+def certify_gpu_finalists_with_cpu(
+    base_config: dict,
+    finalists_df: "pd.DataFrame",
+    *,
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    metric: str,
+    top_n_requested: int | None = None,
+) -> tuple[dict, "pd.DataFrame"]:
+    import pandas as pd
+
+    if finalists_df.empty:
+        raise ValueError("CPU certification finalists are empty.")
+    cpu_metric_col = f"cpu_{metric}"
+    records = []
+
+    for _, finalist in finalists_df.iterrows():
+        finalist_row = finalist.to_dict()
+        strategy_params = _extract_strategy_params(finalist_row, base_config["strategy_params"])
+        cpu_curve = pd.Series(dtype=float)
+        cpu_result = {"success": False, "error": None}
+        metrics = {}
+        try:
+            cpu_curve, cpu_result = run_cpu_single_backtest(
+                base_config,
+                start_date=start_date,
+                end_date=end_date,
+                params_dict=strategy_params,
+                initial_cash=initial_cash,
+            )
+            metrics = dict(cpu_result.get("metrics", {}))
+        except Exception as exc:  # pragma: no cover - defensive path
+            cpu_result = {"success": False, "error": str(exc)}
+        record = {
+            "gpu_rank": finalist_row.get("gpu_rank"),
+            "gpu_result_index": finalist_row.get("gpu_result_index"),
+            "selection_reason": finalist_row.get("selection_reason", "gpu_top_n"),
+            "cpu_success": bool(cpu_result.get("success", False)),
+            "cpu_degraded_run": bool(cpu_result.get("degraded_run", False)),
+            "cpu_promotion_blocked": bool(cpu_result.get("promotion_blocked", False)),
+            "cpu_equity_points": int(len(cpu_curve)),
+            "cpu_error": cpu_result.get("error"),
+        }
+        for key in _CPU_CERT_PARAM_KEYS:
+            record[key] = strategy_params.get(key)
+            if key in finalist_row:
+                record[f"gpu_{key}"] = finalist_row.get(key)
+        for column in _CPU_CERT_SORT_COLUMNS:
+            if column in finalist_row:
+                record[f"gpu_{column}"] = finalist_row.get(column)
+            record[f"cpu_{column}"] = metrics.get(column)
+        if metric in finalist_row and metrics.get(metric) is not None:
+            record[f"{metric}_delta_cpu_minus_gpu"] = float(metrics.get(metric)) - float(finalist_row[metric])
+        record["cpu_certified"] = record["cpu_success"] and not record["cpu_promotion_blocked"]
+        records.append(record)
+
+    certification_df = pd.DataFrame(records)
+    failed_df = certification_df[~certification_df["cpu_success"]].copy()
+    if not failed_df.empty:
+        raise RuntimeError(
+            f"CPU certification encountered {len(failed_df)} failed finalists."
+        )
+    certified_df = certification_df[certification_df["cpu_certified"]].copy()
+    if certified_df.empty:
+        raise RuntimeError("CPU certification rejected every GPU finalist.")
+    if cpu_metric_col not in certified_df.columns:
+        raise ValueError(f"CPU certification metric '{metric}' was not produced by CPU backtest.")
+
+    certified_df = certified_df.sort_values(
+        [cpu_metric_col, "cpu_cagr", "cpu_mdd", "gpu_rank"],
+        ascending=[False, False, False, True],
+        kind="stable",
+    )
+    winner = certified_df.iloc[0].to_dict()
+    winner_params = _extract_strategy_params(winner, base_config["strategy_params"])
+    winner_params.update(
+        {
+            "selection_source": "cpu_certified_finalist",
+            "cpu_certification_metric": metric,
+            "cpu_certification_top_n": int(top_n_requested or len(finalists_df)),
+            "cpu_certification_shortlist_size": int(len(finalists_df)),
+            "cpu_certification_gpu_rank": winner.get("gpu_rank"),
+            cpu_metric_col: winner.get(cpu_metric_col),
+            "cpu_cagr": winner.get("cpu_cagr"),
+            "cpu_mdd": winner.get("cpu_mdd"),
+        }
+    )
+    return winner_params, certification_df
 
 # --- Clustering Helper Function ---
 def find_robust_parameters(
@@ -159,12 +468,19 @@ def run_walk_forward_analysis():
     config = load_config()
     wfo_settings = config['walk_forward_settings']
     backtest_settings = config['backtest_settings']
-    initial_cash = backtest_settings['initial_cash'] 
+    initial_cash = backtest_settings['initial_cash']
+    cpu_cert_settings = _get_cpu_certification_settings(wfo_settings)
 
     # 2. [핵심] 모든 기간 파라미터 자동 계산
     # --------------------------------------------------------------------------
     print("\n" + "="*80)
     print("🚀 Starting Robustness-Focused Walk-Forward Optimization")
+    print(
+        "[WFO] CPU certification: "
+        f"enabled={cpu_cert_settings['enabled']} "
+        f"top_n={cpu_cert_settings['top_n']} "
+        f"metric={cpu_cert_settings['metric']}"
+    )
 
     # 사용자 설정값 추출
     total_start_date = pd.to_datetime(backtest_settings['start_date'])
@@ -250,7 +566,7 @@ def run_walk_forward_analysis():
 
     
     #  새로운 롤링 윈도우 루프
-    all_oos_curves, all_optimal_params = [], []
+    all_oos_curves, all_optimal_params, all_selection_audits = [], [], []
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     results_dir = os.path.join("results", f"wfo_run_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
@@ -285,9 +601,54 @@ def run_walk_forward_analysis():
             clustered_df.to_csv(fold_cluster_path, index=False)
             print(f"  - Fold {fold_num} clustered analysis saved.")
 
-        robust_params_dict['fold'] = fold_num
-        all_optimal_params.append(robust_params_dict)
-        print(f"  - Robust params for Fold {fold_num} selected.")
+        selected_params_dict = dict(robust_params_dict)
+
+        if cpu_cert_settings["enabled"]:
+            gpu_shortlist_df = build_gpu_finalist_shortlist(
+                is_simulation_results_df,
+                robust_params_dict,
+                top_n=cpu_cert_settings["top_n"],
+                metric=cpu_cert_settings["metric"],
+            )
+            shortlist_path = os.path.join(results_dir, f"fold_{fold_num}_gpu_shortlist.csv")
+            gpu_shortlist_df.to_csv(shortlist_path, index=False)
+            print(
+                f"  - GPU finalists for Fold {fold_num} saved "
+                f"({len(gpu_shortlist_df)} rows)."
+            )
+
+            selected_params_dict, cpu_certification_df = certify_gpu_finalists_with_cpu(
+                config,
+                gpu_shortlist_df,
+                start_date=is_start.strftime('%Y-%m-%d'),
+                end_date=is_end.strftime('%Y-%m-%d'),
+                initial_cash=initial_cash,
+                metric=cpu_cert_settings["metric"],
+                top_n_requested=cpu_cert_settings["top_n"],
+            )
+            certification_path = os.path.join(results_dir, f"fold_{fold_num}_cpu_certification.csv")
+            cpu_certification_df.to_csv(certification_path, index=False)
+            print(
+                f"  - CPU certification for Fold {fold_num} saved "
+                f"({len(cpu_certification_df)} rows)."
+            )
+            selection_audit = {
+                "fold": fold_num,
+                "selection_source": selected_params_dict.get("selection_source", "cpu_certified_finalist"),
+                "cpu_certification_metric": selected_params_dict.get("cpu_certification_metric"),
+                "cpu_certification_top_n": selected_params_dict.get("cpu_certification_top_n"),
+                "cpu_certification_shortlist_size": selected_params_dict.get("cpu_certification_shortlist_size"),
+                "cpu_certification_gpu_rank": selected_params_dict.get("cpu_certification_gpu_rank"),
+                "cpu_calmar_ratio": selected_params_dict.get("cpu_calmar_ratio"),
+                "cpu_cagr": selected_params_dict.get("cpu_cagr"),
+                "cpu_mdd": selected_params_dict.get("cpu_mdd"),
+            }
+            all_selection_audits.append(selection_audit)
+
+        reported_params_dict = _extract_strategy_params(selected_params_dict, config["strategy_params"])
+        reported_params_dict['fold'] = fold_num
+        all_optimal_params.append(reported_params_dict)
+        print(f"  - Final params for Fold {fold_num} selected.")
         
         if total_folds == 1:
             print("\n[INFO] Single fold run. OOS performance is same as IS robust parameter performance.")
@@ -298,12 +659,22 @@ def run_walk_forward_analysis():
         
         # 3. 찾은 파라미터로 OOS 기간 백테스트
         # OOS 기간의 초기 자금은 이전 OOS 기간의 최종 자금으로 연결
-        oos_equity_curve = run_single_backtest(
-             start_date=oos_start.strftime('%Y-%m-%d'),
-             end_date=oos_end.strftime('%Y-%m-%d'),
-             params_dict=robust_params_dict,
-             initial_cash=initial_cash if not all_oos_curves else all_oos_curves[-1].iloc[-1]
-         )
+        oos_initial_cash = initial_cash if not all_oos_curves else all_oos_curves[-1].iloc[-1]
+        if cpu_cert_settings["enabled"]:
+            oos_equity_curve, _ = run_cpu_single_backtest(
+                config,
+                start_date=oos_start.strftime('%Y-%m-%d'),
+                end_date=oos_end.strftime('%Y-%m-%d'),
+                params_dict=selected_params_dict,
+                initial_cash=oos_initial_cash,
+            )
+        else:
+            oos_equity_curve = run_single_backtest(
+                 start_date=oos_start.strftime('%Y-%m-%d'),
+                 end_date=oos_end.strftime('%Y-%m-%d'),
+                 params_dict=selected_params_dict,
+                 initial_cash=oos_initial_cash
+             )
         all_oos_curves.append(oos_equity_curve)    
             
     pbar.close()
@@ -334,9 +705,18 @@ def run_walk_forward_analysis():
     # 5-2. 파라미터 안정성 분석 및 결과 저장
     params_df = pd.DataFrame(all_optimal_params)
     print("\n📊 Optimal Parameter Stability Analysis (Descriptive Stats):")
-    # 문자열 타입 파라미터는 제외하고 기술 통계 출력
-    print(params_df.drop(columns=['additional_buy_priority'], errors='ignore').describe())
+    numeric_params_df = params_df.drop(columns=['fold'], errors='ignore').select_dtypes(include='number')
+    if numeric_params_df.empty:
+        print("[INFO] Numeric parameter summary is empty.")
+    else:
+        print(numeric_params_df.describe())
     
+    if all_selection_audits:
+        selection_audit_df = pd.DataFrame(all_selection_audits)
+        selection_audit_path = os.path.join(results_dir, "wfo_selection_audit.csv")
+        selection_audit_df.to_csv(selection_audit_path, index=False)
+        print(f"✅ WFO selection audit saved to: {selection_audit_path}")
+
     params_filepath = os.path.join(results_dir, "wfo_robust_parameters.csv")
     params_df.to_csv(params_filepath, index=False)
    

@@ -142,7 +142,7 @@ def _build_safety_guard(
         "reasons": reasons,
     }
 
-def run_backtest_from_config(config: dict) -> dict:
+def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) -> dict:
     # When called from non-CLI entrypoints (e.g., Flask), logging may not be configured.
     # We only auto-configure if root has no handlers to avoid duplicating external setups.
     root = logging.getLogger()
@@ -248,33 +248,36 @@ def run_backtest_from_config(config: dict) -> dict:
                 ", ".join(safety_guard.get("reasons", [])) or "unknown reason",
             )
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
-        os.makedirs(result_dir, exist_ok=True)
-        run_manifest_path = _write_run_manifest(
-            result_dir=result_dir,
-            strategy_params=strategy_params_from_config,
-            backtest_settings=backtest_settings,
-            universe_mode=universe_mode,
-            price_basis=price_basis,
-            adjusted_gate=adjusted_gate,
-            run_metrics=run_metrics,
-            candidate_lookup_summary=candidate_lookup_summary,
-            safety_guard=safety_guard,
-        )
-        logger.info("실행 메타데이터가 '%s'에 저장되었습니다.", run_manifest_path.replace('\\', '/'))
-        
-        plot_filename = "performance_report.png" # 파일 이름 변경
-        
-        analyzer.plot_equity_curve(
-            title=f"Strategy Performance ({start_date} to {end_date})",
-            save_path=os.path.join(result_dir, plot_filename)
-        )
-        
+        run_manifest_path = None
+        plot_file_path = None
         trade_df = pd.DataFrame([vars(t) for t in final_portfolio.trade_history])
         trade_filepath_for_response = None
-        
-        if not trade_df.empty and should_save_trades:
+
+        if persist_artifacts:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
+            os.makedirs(result_dir, exist_ok=True)
+            run_manifest_path = _write_run_manifest(
+                result_dir=result_dir,
+                strategy_params=strategy_params_from_config,
+                backtest_settings=backtest_settings,
+                universe_mode=universe_mode,
+                price_basis=price_basis,
+                adjusted_gate=adjusted_gate,
+                run_metrics=run_metrics,
+                candidate_lookup_summary=candidate_lookup_summary,
+                safety_guard=safety_guard,
+            )
+            logger.info("실행 메타데이터가 '%s'에 저장되었습니다.", run_manifest_path.replace('\\', '/'))
+
+            plot_filename = "performance_report.png" # 파일 이름 변경
+            plot_file_path = os.path.join(result_dir, plot_filename).replace('\\', '/')
+            analyzer.plot_equity_curve(
+                title=f"Strategy Performance ({start_date} to {end_date})",
+                save_path=os.path.join(result_dir, plot_filename)
+            )
+
+        if persist_artifacts and not trade_df.empty and should_save_trades:
             trade_filename = "full_trade_history.csv"
             trade_filepath = os.path.join(result_dir, trade_filename)
             trade_df.to_csv(trade_filepath, index=False, encoding='utf-8-sig')
@@ -301,8 +304,8 @@ def run_backtest_from_config(config: dict) -> dict:
             "promotion_blocked": bool(safety_guard.get("promotion_blocked", False)),
             "promotion_block_reasons": list(safety_guard.get("reasons", [])),
             "candidate_lookup_summary": candidate_lookup_summary,
-            "run_manifest_path": run_manifest_path.replace('\\', '/'),
-            "plot_file_path": os.path.join(result_dir, plot_filename).replace('\\', '/'),
+            "run_manifest_path": run_manifest_path.replace('\\', '/') if run_manifest_path else None,
+            "plot_file_path": plot_file_path,
             "trade_file_path": trade_filepath_for_response,
             "daily_values": daily_values_for_response.reset_index().rename(columns={'date': 'x', 'total_value': 'y'}).to_dict('records'),
             "final_positions": final_positions_list,

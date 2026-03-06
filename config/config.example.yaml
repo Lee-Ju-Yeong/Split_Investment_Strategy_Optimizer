@@ -109,3 +109,7 @@ parameter_space:
 walk_forward_settings:
   total_folds: 6
   period_length_days: 365
+  # GPU가 상위 후보를 제안한 뒤 CPU가 shortlist를 재실행해 최종 채택합니다.
+  cpu_certification_enabled: true
+  cpu_certification_top_n: 5
+  cpu_certification_metric: "calmar_ratio"
