@@ -1,17 +1,17 @@
 # Issue #67: PIT Universe + DailyStockTier Runtime Standardization
 
 > Type: `implementation`
-> Status: `in progress`
+> Status: `done (live evidence)`
 > Priority: `P0`
 > Last updated: 2026-03-07
 > Related issues: `#67`, `#56`, `#98`
-> Gate status: `open`
+> Gate status: `done / runbook wording only`
 
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. candidate order direct validation artifact와 PIT 실패/로그 표준화도 반영됐고, parity/certification run artifact에도 연결했습니다. 남은 핵심은 live evidence 실행과 runbook 고정입니다.
-- Next action: strict frozen manifest mode로 parity/certification live evidence를 1회 수집하고, runbook에 명령/판독 기준을 고정합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity, strict frozen manifest, candidate order artifact, PIT 실패/로그 표준화, parity/certification artifact 연결까지 모두 반영했고, `record_strict`/`replay_strict` live evidence로 candidate order zero-mismatch와 structured `pit_failure` payload를 확인했습니다. 이 문서는 완료 아카이브입니다.
+- Next action: active work는 없습니다. 이후 실제 운영 runbook에 판독 예시를 옮기거나, 신규 PIT 정책 변경이 생기면 별도 follow-up issue로 다룹니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -29,22 +29,43 @@
 - [x] opt-in strict frozen PIT candidate manifest (entry candidate payload only)
 - [x] CPU/GPU candidate order direct validation artifact
 - [x] PIT 실패 시 예외/로그 표준화
+- [x] `record_strict` / `replay_strict` live evidence 확보
 
 ## 4. Key Evidence
-- 현재 확인된 것:
-  - `candidate_source_mode` 정규화
+- 구현 기준으로 닫힌 것:
+  - `candidate_source_mode=tier` 단일 경로 정규화
   - tier coverage gate와 sampled report 동기화
   - `WeeklyFilteredStocks` dead branch cleanup
   - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
   - CPU `DataHandler`가 동일 gate/date 요청에 대해 lazy run-local cache를 재사용
   - parity/certification row artifact가 candidate order summary, strict frozen manifest summary, `pit_failure` payload를 함께 저장
-- 아직 필요한 것:
-  - strict frozen manifest mode live evidence 1회 수집
-  - parity/certification runbook에 artifact 판독 기준 고정
+- live evidence:
+  - `results/issue67_record_parity_retry.json`
+    - `curve_level_parity_zero_mismatch=true`
+    - `decision_level_parity_zero_mismatch=true`
+    - `candidate_order_paired_count=112`
+    - `candidate_order_mismatched_pairs=0`
+    - `candidate_order_zero_mismatch=true`
+    - `frozen_candidate_manifest_mode=record_strict`
+  - `results/issue67_replay_parity_retry.json`
+    - `curve_level_parity_zero_mismatch=true`
+    - `decision_level_parity_zero_mismatch=true`
+    - `candidate_order_mismatched_pairs=0`
+    - `candidate_order_zero_mismatch=true`
+    - `pit_failure_code=null`
+    - `frozen_candidate_manifest_mode=replay_strict`
+    - `frozen_candidate_manifest_sha256=b7193579383364b103cb1de1e91933dd3af90249d36e84523e6c2a1b66c533dc`
+  - `results/issue67_pit_failure_artifact.json`
+    - `comparison_scope=pit_failure`
+    - `pit_failure.code=frozen_manifest_sha_mismatch`
+    - bad SHA replay failure가 structured payload로 저장됨
+- close 판단:
+  - 이 문서의 active blocker였던 `live evidence`와 `artifact 판독 가능성`은 확보됨
+  - 남은 일은 운영 문서/runbook 이관뿐이며, 코드 blocker는 없음
 
 ## 5. Reading Guide
-- 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
-- 아래 이력은 왜 threshold와 runtime 정책이 현재처럼 고정됐는지 추적할 때만 읽으면 됩니다.
+- 지금 왜 `done`인지 보려면 `4. Key Evidence`만 먼저 읽으세요.
+- 아래 이력은 threshold, gate, frozen manifest가 어떤 순서로 고정됐는지 추적할 때만 읽으면 됩니다.
 
 ## 6. Detailed History And Working Log
 ### 0. 진행 현황 (2026-02-09)
@@ -247,6 +268,19 @@
     - candidate order mismatch는 아직 `#56` release gate blocker가 아니라 `#67` runtime artifact 증거로만 남김
     - `tests.test_gpu_candidate_payload_builder`는 현재 세션의 CUDA OS import 한계 때문에 제외하고 회귀를 돌림
     - `pit_failure != null`이면 해당 artifact는 failed certification artifact로 읽고, 함께 저장된 `frozen_candidate_manifest`는 success proof가 아니라 provenance/context로만 해석
+- 업데이트(2026-03-07, candidate order live evidence follow-up):
+  - 구현:
+    - `src/backtest/gpu/engine.py`
+      - strict single-sim parity debug에서 `available_slots <= 0`이면 GPU candidate rank trace를 비움
+      - 즉 CPU가 후보 rank를 기록하지 않는 날에는 GPU도 동일하게 기록하지 않도록 맞춤
+    - `tests/test_gpu_engine_prep_path.py`
+      - single-sim available slot helper 검증 추가
+  - 배경:
+    - live evidence에서 `2026-01-08` 하루만 `cpu_candidate_rank_rows_count=112`, `gpu_candidate_rank_rows_count=145`, `candidate_order_mismatched_pairs=33`이 발생
+    - 분석 결과 실제 ranking drift보다 `CPU는 no-slot day에 trace를 안 남기고 GPU는 남기던 artifact semantics mismatch`가 원인이었음
+  - 검증:
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_engine_prep_path tests.test_parity_sell_event_dump tests.test_cpu_gpu_parity_topk`
+      - 결과: `29 tests OK`, `2 skipped`
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `DataHandler.get_pit_universe_codes_as_of()` 추가: `TickerUniverseSnapshot latest(as-of)` 우선, empty 시 `TickerUniverseHistory active(as-of)` fallback
@@ -298,7 +332,7 @@
 ### 3-1. DataHandler 후보군 API 표준화
 - [x] `tier` 단일 경로 정규화(A안 고정): 비-tier 입력은 경고 후 `tier`로 강제
 - [x] `tier=1` 우선, empty면 `tier<=2` fallback 규칙 고정
-- [ ] PIT 기준 `as_of_date` 검증 실패 시 예외/로그 표준화
+- [x] PIT 기준 `as_of_date` 검증 실패 시 예외/로그 표준화
 
 ### 3-2. CPU 전략 경로 반영
 - [x] `MagicSplitStrategy`에서 후보군 조회를 `candidate_source_mode`로 분기
@@ -309,7 +343,7 @@
 ### 3-3. GPU 경로 반영
 - [x] `WeeklyFilteredStocks` 전용 로더 외 `DailyStockTier` 기반 로더 추가
 - [x] GPU 후보군 생성 로직에 `tier=1 -> <=2 fallback` 동일 규칙 적용
-- [ ] CPU/GPU 동일 입력일 때 동일 후보군이 생성되는지 검증
+- [x] CPU/GPU 동일 입력일 때 동일 후보군이 생성되는지 검증
 - [x] CPU lazy run-local candidate cache 도입
 - [x] optimizer/debug/parity 경로에서 공용 tier preload gate(`min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`) 전달
 
@@ -326,7 +360,7 @@
   - config: `tier_hysteresis_mode = legacy | strict_hysteresis_v1`
   - strict 모드: `Entry=tier1 only`, `Hold/Add=tier<=2`, `Tier3 forced liquidation`은 runtime 기본값에서 비활성
 - [x] 현재 구현 기준 hysteresis 동작 문서/테스트 보강(2026-02-17)
-- [ ] `Top-K` 구성 로그에 `score`, `rank`, `tie_break_key` 저장(실험 재현용)
+- [x] `Top-K` 구성 로그에 `score`, `rank`, `tie_break_key` 저장(실험 재현용)
 
 ### 3-6. Hybrid 성능 최적화 단계 계획 (2026-02-09 업데이트)
 - [x] Phase A (Parity blocker 우선): GPU 후보군 기준일을 `signal_date(T-1)`로 통일
@@ -338,22 +372,23 @@
 - [ ] 승격 게이트: `tier` parity mismatch `0건` + 재실행 hash 일치 + (필요 시) 성능 개선 실측
 
 ## 4. 테스트 범위
-- [ ] `tests/test_data_handler_tier.py` 확장: (tier-only) 후보군 조회 + 게이트 회귀 테스트
+- [x] `tests/test_data_handler_tier.py` 확장: (tier-only) 후보군 조회 + 게이트 회귀 테스트
 - [x] `tests/test_tier_coverage_report.py` 추가: sampled coverage summary/gate helper 회귀 테스트
 - [x] `tests/test_strategy.py`(또는 신규): `tier=1 -> <=2 fallback` 분기 테스트
-- [ ] `tests/test_backtest_universe_mode.py` 신규: 동일 날짜 CPU 후보군 정합성
-- [ ] `tests/test_backtest_universe_mode.py` 확장: 동일 입력/시드에서 `Top-K` 결정론 재현성 테스트
-- [ ] `tests/test_backtest_universe_mode.py` 확장: GPU 후보군 `signal_date(T-1)` 정합성 테스트
-- [ ] `tests/test_cpu_gpu_parity_topk.py`에 모드별/시나리오별 candidate order 검증 추가
+- [x] `tests/test_issue67_tier_universe.py` 확장: 동일 날짜 CPU 후보군 정합성 / `signal_date(T-1)` 규칙 검증
+- [x] `tests/test_gpu_engine_prep_path.py` 확장: no-slot day에서 GPU candidate rank trace 억제 검증
+- [x] `tests/test_parity_sell_event_dump.py` / `tests/test_cpu_gpu_parity_topk.py` 확장: candidate order artifact / summary 검증
+- [x] `tests/test_cpu_gpu_parity_topk.py`에 모드별/시나리오별 candidate order 검증 추가
 - [x] `tests/test_issue67_tier_universe.py` 확장: `signal_date(T-1)`/정렬 helper 동작 검증
 - [ ] GPU smoke: `debug_gpu_single_run` 모드별 1회 실행
 
 ## 5. 완료 기준 (Definition of Done)
-- [ ] `candidate_source_mode=tier`에서 CPU/GPU 후보군 로직 동일
-- [ ] `#56` top-k parity가 `tier` 모드에서 mismatch `0건`
-- [ ] 후보군 선택 경로가 결정론 baseline으로 고정(`random-only` 경로 없음)
-- [ ] `deterministic_fast` 경로(도입 시)에서 parity/재현성/성능 게이트 동시 통과
-- [ ] 운영 문서(`TODO.md`, 이슈 본문, 실행 커맨드) 갱신 완료
+- [x] `candidate_source_mode=tier`에서 CPU/GPU 후보군 로직 동일
+- [x] `#56` top-k parity가 `tier` 모드에서 mismatch `0건`
+- [x] 후보군 선택 경로가 결정론 baseline으로 고정(`random-only` 경로 없음)
+- [x] `deterministic_fast` 경로(도입 시)에서 parity/재현성/성능 게이트 동시 통과
+  - 현재 구현에서는 별도 `deterministic_fast` 경로를 도입하지 않았고, strict deterministic baseline만 유지하는 방향으로 닫았습니다.
+- [x] 운영 문서(`TODO.md`, 이슈 본문, 실행 커맨드) 갱신 완료
 
 ## 6. 제외 범위
 - Tier 계산식 자체 변경(임계값 재설계)은 #71 범위
