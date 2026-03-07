@@ -58,8 +58,9 @@
     - release gate 의미는 그대로 보수적으로 유지:
       - 일부 row만 확인한 경우 `decision_level_evidence_partial(...)`
       - 아무 row도 수집하지 않으면 `decision_level_evidence_missing`
-      - 현재 helper 비교 범위는 `structured_trade_events(date/ticker/qty/fill_price/net_or_total_cost/reason/trigger_price/order_semantics)`까지 확장
-      - 단, `cash/positions`는 아직 미포함이므로 전체 row를 모두 커버하고 event mismatch가 `0`이어도 `decision_fields_not_covered`를 남기고 release gate는 계속 차단
+      - helper 비교 범위는 `structured_trade_events(...)` + 일별 `cash/total_value/stock_count` + `date,ticker`별 positions snapshot으로 확장
+      - 따라서 `release_decision_fields_complete`는 더 이상 상수 `False`가 아니라 snapshot evidence 수집 여부로 계산
+      - 남은 blocker는 `decision_fields_not_covered` 고정값이 아니라, `all-row` coverage와 실제 `decision_level_zero_mismatch=0` 증적 확보 여부
     - curve parity는 missing date를 `mismatch`로 계산해 `inner join`에 의한 false-zero 가능성을 제거
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)

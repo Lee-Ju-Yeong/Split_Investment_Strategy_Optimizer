@@ -133,5 +133,29 @@ class TestPortfolio(unittest.TestCase):
         self.assertEqual(len(self.portfolio.daily_snapshot_history), 2)
         self.assertEqual(self.portfolio.daily_snapshot_history[1]['total_value'], 101000)
 
+    def test_record_positions_snapshot_stores_normalized_rows(self):
+        positions_df = pd.DataFrame(
+            [
+                {
+                    "Ticker": "005930",
+                    "Holdings": 2,
+                    "Quantity": 15,
+                    "Avg Buy Price": 68000.0,
+                    "Current Price": 70000.0,
+                    "Total Value": 1_050_000.0,
+                    "Weight": 0.5,
+                }
+            ]
+        )
+
+        self.portfolio.record_positions_snapshot(date(2022, 3, 5), positions_df)
+
+        self.assertEqual(len(self.portfolio.daily_positions_snapshot_history), 1)
+        snapshot = self.portfolio.daily_positions_snapshot_history[0]
+        self.assertEqual(snapshot["date"], pd.Timestamp("2022-03-05"))
+        self.assertEqual(snapshot["positions"][0]["Ticker"], "005930")
+        self.assertEqual(snapshot["positions"][0]["Quantity"], 15)
+        self.assertEqual(snapshot["positions"][0]["Holdings"], 2)
+
 if __name__ == '__main__':
     unittest.main()

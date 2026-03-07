@@ -166,6 +166,18 @@ class BacktestEngine:
             # --- 2. 일별 포트폴리오 가치 및 상태 기록 ---
             total_value = self.portfolio.get_total_value(current_date, self.data_handler)
             self.portfolio.record_daily_snapshot(current_date, total_value)
+            capture_positions_snapshot = bool(
+                getattr(self.portfolio, "capture_daily_positions_snapshot", False)
+            )
+            positions_df = None
+            if capture_positions_snapshot or self.logger.isEnabledFor(logging.DEBUG):
+                positions_df = self.portfolio.get_positions_snapshot(
+                    current_date,
+                    self.data_handler,
+                    total_value,
+                )
+                if capture_positions_snapshot:
+                    self.portfolio.record_positions_snapshot(current_date, positions_df)
 
             # --- 3. [신규 로직] 당일 발생한 모든 거래에 최종 포트폴리오 가치 업데이트 ---
             num_trades_after = len(self.portfolio.trade_history)
@@ -196,7 +208,12 @@ class BacktestEngine:
 
                 log_message = header + summary_str
 
-                positions_df = self.portfolio.get_positions_snapshot(current_date, self.data_handler, total_value)
+                if positions_df is None:
+                    positions_df = self.portfolio.get_positions_snapshot(
+                        current_date,
+                        self.data_handler,
+                        total_value,
+                    )
                 if not positions_df.empty:
                     positions_df["Avg Buy Price"] = positions_df["Avg Buy Price"].map("{:,.0f}".format)
                     positions_df["Current Price"] = positions_df["Current Price"].map("{:,.0f}".format)

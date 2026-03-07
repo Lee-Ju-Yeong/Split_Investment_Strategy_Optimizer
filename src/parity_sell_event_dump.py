@@ -73,6 +73,27 @@ class BuyEvent:
     gross_cost: Optional[float] = None
 
 
+@dataclass
+class DailySnapshot:
+    source: str
+    date: str
+    total_value: float
+    cash: float
+    stock_count: int
+
+
+@dataclass
+class PositionSnapshot:
+    source: str
+    date: str
+    ticker: str
+    holdings: int
+    quantity: int
+    avg_buy_price: float
+    current_price: float
+    total_value: float
+
+
 def _normalize_priority_for_cpu(value: Any) -> str:
     if isinstance(value, str):
         key = value.strip().lower()
@@ -170,6 +191,41 @@ def _build_exec_params(
     return execution_params
 
 
+def _build_cpu_daily_snapshots(final_portfolio: Portfolio) -> List[DailySnapshot]:
+    snapshots: List[DailySnapshot] = []
+    for raw in list(getattr(final_portfolio, "daily_snapshot_history", [])):
+        snapshots.append(
+            DailySnapshot(
+                source="cpu",
+                date=str(raw["date"].strftime("%Y-%m-%d")),
+                total_value=float(raw["total_value"]),
+                cash=float(raw["cash"]),
+                stock_count=int(raw["stock_count"]),
+            )
+        )
+    return snapshots
+
+
+def _build_cpu_position_snapshots(final_portfolio: Portfolio) -> List[PositionSnapshot]:
+    snapshots: List[PositionSnapshot] = []
+    for raw in list(getattr(final_portfolio, "daily_positions_snapshot_history", [])):
+        date_str = str(raw["date"].strftime("%Y-%m-%d"))
+        for position in raw.get("positions", []):
+            snapshots.append(
+                PositionSnapshot(
+                    source="cpu",
+                    date=date_str,
+                    ticker=str(position["Ticker"]),
+                    holdings=int(position["Holdings"]),
+                    quantity=int(position["Quantity"]),
+                    avg_buy_price=float(position["Avg Buy Price"]),
+                    current_price=float(position["Current Price"]),
+                    total_value=float(position["Total Value"]),
+                )
+            )
+    return snapshots
+
+
 def _run_cpu_and_collect_trade_events(
     *,
     config: Dict[str, Any],
@@ -180,7 +236,7 @@ def _run_cpu_and_collect_trade_events(
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
     universe_mode: str,
-) -> Tuple[List[SellEvent], List[BuyEvent]]:
+) -> Tuple[List[SellEvent], List[BuyEvent], List[DailySnapshot], List[PositionSnapshot]]:
     strategy_params = dict(config["strategy_params"])
     strategy_params.update(
         {
@@ -220,7 +276,12 @@ def _run_cpu_and_collect_trade_events(
         universe_mode=universe_mode,
     )
     strategy = MagicSplitStrategy(**strategy_params)
-    portfolio = Portfolio(initial_cash=float(initial_cash), start_date=start_date, end_date=end_date)
+    portfolio = Portfolio(
+        initial_cash=float(initial_cash),
+        start_date=start_date,
+        end_date=end_date,
+        capture_daily_positions_snapshot=True,
+    )
     execution_handler = BasicExecutionHandler(**execution_params)
     engine = BacktestEngine(
         start_date=start_date,
@@ -266,7 +327,12 @@ def _run_cpu_and_collect_trade_events(
                     gross_cost=float(trade.quantity * trade.buy_price),
                 )
             )
-    return sell_events, buy_events
+    return (
+        sell_events,
+        buy_events,
+        _build_cpu_daily_snapshots(final_portfolio),
+        _build_cpu_position_snapshots(final_portfolio),
+    )
 
 
 def _run_gpu_and_collect_sell_events(
@@ -280,7 +346,7 @@ def _run_gpu_and_collect_sell_events(
     use_weekly_alpha_gate: bool,
     parity_mode: str,
     universe_mode: str,
-) -> Tuple[List[SellEvent], List[BuyEvent], str]:
+) -> Tuple[List[SellEvent], List[BuyEvent], List[DailySnapshot], List[PositionSnapshot], str]:
     cp, _, create_engine, run_magic_split_strategy_on_gpu = _ensure_gpu_deps()
     _, pd = _ensure_core_deps()
 
@@ -376,7 +442,65 @@ def _run_gpu_and_collect_sell_events(
         trading_dates=[dt.strftime("%Y-%m-%d") for dt in trading_dates_pd],
         buy_commission_rate=float(config["execution_params"]["buy_commission_rate"]),
     )
-    return sell_events, buy_events, gpu_log_text
+    daily_snapshots = _parse_gpu_daily_snapshots(gpu_log_text)
+    position_snapshots = _parse_gpu_position_snapshots(gpu_log_text)
+    return sell_events, buy_events, daily_snapshots, position_snapshots, gpu_log_text
+
+
+def _parse_gpu_daily_snapshots(log_text: str) -> List[DailySnapshot]:
+    daily_re = re.compile(
+        r"^\[PARITY_SNAPSHOT_DAILY\]\s+"
+        r"date=(?P<date>\d{4}-\d{2}-\d{2})\|"
+        r"total_value=(?P<total_value>[-\d\.]+)\|"
+        r"cash=(?P<cash>[-\d\.]+)\|"
+        r"stock_count=(?P<stock_count>\d+)$"
+    )
+    snapshots: List[DailySnapshot] = []
+    for raw_line in log_text.splitlines():
+        match = daily_re.match(raw_line.strip())
+        if not match:
+            continue
+        snapshots.append(
+            DailySnapshot(
+                source="gpu",
+                date=match.group("date"),
+                total_value=float(match.group("total_value")),
+                cash=float(match.group("cash")),
+                stock_count=int(match.group("stock_count")),
+            )
+        )
+    return snapshots
+
+
+def _parse_gpu_position_snapshots(log_text: str) -> List[PositionSnapshot]:
+    position_re = re.compile(
+        r"^\[PARITY_SNAPSHOT_POSITION\]\s+"
+        r"date=(?P<date>\d{4}-\d{2}-\d{2})\|"
+        r"ticker=(?P<ticker>\S+)\|"
+        r"holdings=(?P<holdings>\d+)\|"
+        r"quantity=(?P<quantity>\d+)\|"
+        r"avg_buy_price=(?P<avg_buy_price>[-\d\.]+)\|"
+        r"current_price=(?P<current_price>[-\d\.]+)\|"
+        r"total_value=(?P<total_value>[-\d\.]+)$"
+    )
+    snapshots: List[PositionSnapshot] = []
+    for raw_line in log_text.splitlines():
+        match = position_re.match(raw_line.strip())
+        if not match:
+            continue
+        snapshots.append(
+            PositionSnapshot(
+                source="gpu",
+                date=match.group("date"),
+                ticker=match.group("ticker"),
+                holdings=int(match.group("holdings")),
+                quantity=int(match.group("quantity")),
+                avg_buy_price=float(match.group("avg_buy_price")),
+                current_price=float(match.group("current_price")),
+                total_value=float(match.group("total_value")),
+            )
+        )
+    return snapshots
 
 
 def _parse_gpu_sell_events(log_text: str, sell_commission_rate: float, sell_tax_rate: float) -> List[SellEvent]:
@@ -772,6 +896,121 @@ def _pair_buy_events(cpu_events: List[BuyEvent], gpu_events: List[BuyEvent]) -> 
     )
 
 
+def _pair_keyed_rows(
+    cpu_rows: List[Any],
+    gpu_rows: List[Any],
+    *,
+    key_fn,
+    build_row,
+) -> List[Dict[str, Any]]:
+    cpu_map = {key_fn(row): row for row in cpu_rows}
+    gpu_map = {key_fn(row): row for row in gpu_rows}
+    keys = sorted(set(cpu_map.keys()) | set(gpu_map.keys()))
+    return [build_row(index, cpu_map.get(key), gpu_map.get(key)) for index, key in enumerate(keys)]
+
+
+def _build_daily_snapshot_pair_row(
+    pair_index: int,
+    cpu: Optional[DailySnapshot],
+    gpu: Optional[DailySnapshot],
+) -> Dict[str, Any]:
+    row = {
+        "pair_index": pair_index,
+        "cpu": None if cpu is None else cpu.__dict__,
+        "gpu": None if gpu is None else gpu.__dict__,
+        "matched": False,
+        "diff": {},
+    }
+    if cpu is None or gpu is None:
+        return row
+
+    total_value_diff = float(cpu.total_value - gpu.total_value)
+    cash_diff = float(cpu.cash - gpu.cash)
+    stock_count_diff = int(cpu.stock_count - gpu.stock_count)
+    row["diff"] = {
+        "date_same": cpu.date == gpu.date,
+        "total_value_diff": total_value_diff,
+        "cash_diff": cash_diff,
+        "stock_count_diff": stock_count_diff,
+    }
+    row["matched"] = (
+        cpu.date == gpu.date
+        and abs(total_value_diff) < 1e-6
+        and abs(cash_diff) < 1e-6
+        and stock_count_diff == 0
+    )
+    return row
+
+
+def _build_position_snapshot_pair_row(
+    pair_index: int,
+    cpu: Optional[PositionSnapshot],
+    gpu: Optional[PositionSnapshot],
+) -> Dict[str, Any]:
+    row = {
+        "pair_index": pair_index,
+        "cpu": None if cpu is None else cpu.__dict__,
+        "gpu": None if gpu is None else gpu.__dict__,
+        "matched": False,
+        "diff": {},
+    }
+    if cpu is None or gpu is None:
+        return row
+
+    quantity_diff = int(cpu.quantity - gpu.quantity)
+    holdings_diff = int(cpu.holdings - gpu.holdings)
+    avg_buy_price_diff = float(cpu.avg_buy_price - gpu.avg_buy_price)
+    current_price_diff = float(cpu.current_price - gpu.current_price)
+    total_value_diff = float(cpu.total_value - gpu.total_value)
+    row["diff"] = {
+        "date_same": cpu.date == gpu.date,
+        "ticker_same": cpu.ticker == gpu.ticker,
+        "holdings_diff": holdings_diff,
+        "quantity_diff": quantity_diff,
+        "avg_buy_price_diff": avg_buy_price_diff,
+        "current_price_diff": current_price_diff,
+        "total_value_diff": total_value_diff,
+    }
+    row["matched"] = (
+        cpu.date == gpu.date
+        and cpu.ticker == gpu.ticker
+        and holdings_diff == 0
+        and quantity_diff == 0
+        and abs(avg_buy_price_diff) < 1e-6
+        and abs(current_price_diff) < 1e-6
+        and abs(total_value_diff) < 1e-6
+    )
+    return row
+
+
+def _pair_daily_snapshots(
+    cpu_rows: List[DailySnapshot],
+    gpu_rows: List[DailySnapshot],
+) -> List[Dict[str, Any]]:
+    return _pair_keyed_rows(
+        cpu_rows,
+        gpu_rows,
+        key_fn=lambda row: str(row.date),
+        build_row=_build_daily_snapshot_pair_row,
+    )
+
+
+def _pair_position_snapshots(
+    cpu_rows: List[PositionSnapshot],
+    gpu_rows: List[PositionSnapshot],
+) -> List[Dict[str, Any]]:
+    return _pair_keyed_rows(
+        cpu_rows,
+        gpu_rows,
+        key_fn=lambda row: (str(row.date), str(row.ticker)),
+        build_row=_build_position_snapshot_pair_row,
+    )
+
+
+def _snapshots_have_required_fields(rows: List[Any], required_fields: Tuple[str, ...]) -> bool:
+    return all(getattr(row, field, None) is not None for row in rows for field in required_fields)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CPU/GPU sell-event 1:1 dump comparator")
     parser.add_argument("--start-date", required=True)
@@ -805,7 +1044,7 @@ def collect_trade_event_parity_report(
     parity_mode: str,
     universe_mode: str,
 ) -> Dict[str, Any]:
-    cpu_sell_events, cpu_buy_events = _run_cpu_and_collect_trade_events(
+    cpu_sell_events, cpu_buy_events, cpu_daily_snapshots, cpu_position_snapshots = _run_cpu_and_collect_trade_events(
         config=config,
         start_date=start_date,
         end_date=end_date,
@@ -815,7 +1054,7 @@ def collect_trade_event_parity_report(
         use_weekly_alpha_gate=use_weekly_alpha_gate,
         universe_mode=universe_mode,
     )
-    gpu_sell_events, gpu_buy_events, gpu_log_text = _run_gpu_and_collect_sell_events(
+    gpu_sell_events, gpu_buy_events, gpu_daily_snapshots, gpu_position_snapshots, gpu_log_text = _run_gpu_and_collect_sell_events(
         config=config,
         start_date=start_date,
         end_date=end_date,
@@ -829,11 +1068,59 @@ def collect_trade_event_parity_report(
 
     sell_pairs = _pair_events(cpu_sell_events, gpu_sell_events)
     buy_pairs = _pair_buy_events(cpu_buy_events, gpu_buy_events)
+    daily_snapshot_pairs = _pair_daily_snapshots(cpu_daily_snapshots, gpu_daily_snapshots)
+    position_snapshot_pairs = _pair_position_snapshots(cpu_position_snapshots, gpu_position_snapshots)
     matched_sell_pairs = sum(1 for row in sell_pairs if row["matched"])
     matched_buy_pairs = sum(1 for row in buy_pairs if row["matched"])
+    matched_daily_snapshot_pairs = sum(1 for row in daily_snapshot_pairs if row["matched"])
+    matched_position_snapshot_pairs = sum(1 for row in position_snapshot_pairs if row["matched"])
     sell_mismatched_pairs = len(sell_pairs) - matched_sell_pairs
     buy_mismatched_pairs = len(buy_pairs) - matched_buy_pairs
-    decision_level_zero_mismatch = sell_mismatched_pairs == 0 and buy_mismatched_pairs == 0
+    daily_snapshot_mismatched_pairs = len(daily_snapshot_pairs) - matched_daily_snapshot_pairs
+    position_snapshot_mismatched_pairs = len(position_snapshot_pairs) - matched_position_snapshot_pairs
+    snapshot_level_zero_mismatch = (
+        daily_snapshot_mismatched_pairs == 0 and position_snapshot_mismatched_pairs == 0
+    )
+    decision_level_zero_mismatch = (
+        sell_mismatched_pairs == 0
+        and buy_mismatched_pairs == 0
+        and snapshot_level_zero_mismatch
+    )
+    snapshot_scope_collected = any(
+        [
+            cpu_daily_snapshots,
+            gpu_daily_snapshots,
+            cpu_position_snapshots,
+            gpu_position_snapshots,
+        ]
+    )
+    daily_snapshot_fields_complete = (
+        len(cpu_daily_snapshots) > 0
+        and len(cpu_daily_snapshots) == len(gpu_daily_snapshots)
+        and _snapshots_have_required_fields(
+            cpu_daily_snapshots,
+            ("date", "total_value", "cash", "stock_count"),
+        )
+        and _snapshots_have_required_fields(
+            gpu_daily_snapshots,
+            ("date", "total_value", "cash", "stock_count"),
+        )
+    )
+    position_snapshot_fields_complete = (
+        _snapshots_have_required_fields(
+            cpu_position_snapshots,
+            ("date", "ticker", "holdings", "quantity", "avg_buy_price", "current_price", "total_value"),
+        )
+        and _snapshots_have_required_fields(
+            gpu_position_snapshots,
+            ("date", "ticker", "holdings", "quantity", "avg_buy_price", "current_price", "total_value"),
+        )
+    )
+    comparison_scope = (
+        "structured_trade_and_state_snapshots"
+        if snapshot_scope_collected
+        else "structured_trade_events"
+    )
 
     return {
         "start_date": start_date,
@@ -842,25 +1129,45 @@ def collect_trade_event_parity_report(
         "candidate_source_mode": candidate_source_mode,
         "parity_mode": parity_mode,
         "universe_mode": universe_mode,
-        "comparison_scope": "structured_trade_events",
-        "release_decision_fields_complete": False,
+        "comparison_scope": comparison_scope,
+        "release_decision_fields_complete": bool(
+            daily_snapshot_fields_complete and position_snapshot_fields_complete
+        ),
         "cpu_sell_events_count": len(cpu_sell_events),
         "gpu_sell_events_count": len(gpu_sell_events),
         "cpu_buy_events_count": len(cpu_buy_events),
         "gpu_buy_events_count": len(gpu_buy_events),
+        "cpu_daily_snapshots_count": len(cpu_daily_snapshots),
+        "gpu_daily_snapshots_count": len(gpu_daily_snapshots),
+        "cpu_position_snapshots_count": len(cpu_position_snapshots),
+        "gpu_position_snapshots_count": len(gpu_position_snapshots),
         "sell_paired_count": len(sell_pairs),
         "sell_matched_pairs": matched_sell_pairs,
         "sell_mismatched_pairs": sell_mismatched_pairs,
         "buy_paired_count": len(buy_pairs),
         "buy_matched_pairs": matched_buy_pairs,
         "buy_mismatched_pairs": buy_mismatched_pairs,
+        "daily_snapshot_paired_count": len(daily_snapshot_pairs),
+        "daily_snapshot_matched_pairs": matched_daily_snapshot_pairs,
+        "daily_snapshot_mismatched_pairs": daily_snapshot_mismatched_pairs,
+        "position_snapshot_paired_count": len(position_snapshot_pairs),
+        "position_snapshot_matched_pairs": matched_position_snapshot_pairs,
+        "position_snapshot_mismatched_pairs": position_snapshot_mismatched_pairs,
+        "daily_snapshot_fields_complete": bool(daily_snapshot_fields_complete),
+        "position_snapshot_fields_complete": bool(position_snapshot_fields_complete),
         "decision_level_zero_mismatch": decision_level_zero_mismatch,
         "cpu_sell_events": [event.__dict__ for event in cpu_sell_events],
         "gpu_sell_events": [event.__dict__ for event in gpu_sell_events],
         "cpu_buy_events": [event.__dict__ for event in cpu_buy_events],
         "gpu_buy_events": [event.__dict__ for event in gpu_buy_events],
+        "cpu_daily_snapshots": [row.__dict__ for row in cpu_daily_snapshots],
+        "gpu_daily_snapshots": [row.__dict__ for row in gpu_daily_snapshots],
+        "cpu_position_snapshots": [row.__dict__ for row in cpu_position_snapshots],
+        "gpu_position_snapshots": [row.__dict__ for row in gpu_position_snapshots],
         "sell_pairs": sell_pairs,
         "buy_pairs": buy_pairs,
+        "daily_snapshot_pairs": daily_snapshot_pairs,
+        "position_snapshot_pairs": position_snapshot_pairs,
         "gpu_log_text": gpu_log_text,
     }
 

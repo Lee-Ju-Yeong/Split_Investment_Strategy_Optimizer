@@ -56,6 +56,45 @@ def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
         return filled
 
 
+def _build_parity_snapshot_lines(
+    *,
+    current_date,
+    capital_snapshot: float,
+    total_val_snapshot: float,
+    current_prices_gpu: cp.ndarray,
+    positions_state: cp.ndarray,
+    all_tickers: list[str],
+) -> list[str]:
+    date_str = current_date.strftime("%Y-%m-%d")
+    holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
+    lines = [
+        "[PARITY_SNAPSHOT_DAILY] "
+        f"date={date_str}|total_value={float(total_val_snapshot):.6f}|cash={float(capital_snapshot):.6f}|"
+        f"stock_count={int(len(holding_indices))}"
+    ]
+    if holding_indices.size == 0:
+        return lines
+
+    positions_cpu = cp.asnumpy(positions_state[0, holding_indices])
+    current_prices_cpu = cp.asnumpy(current_prices_gpu[holding_indices])
+    for local_idx, stock_idx in enumerate(holding_indices.tolist()):
+        split_state = positions_cpu[local_idx]
+        valid_mask = split_state[:, 0] > 0
+        quantities = split_state[valid_mask, 0]
+        if quantities.size == 0:
+            continue
+        total_quantity = int(round(float(quantities.sum())))
+        avg_buy_price = float((quantities * split_state[valid_mask, 1]).sum() / quantities.sum())
+        current_price = float(current_prices_cpu[local_idx])
+        lines.append(
+            "[PARITY_SNAPSHOT_POSITION] "
+            f"date={date_str}|ticker={all_tickers[stock_idx]}|holdings={int(valid_mask.sum())}|"
+            f"quantity={total_quantity}|avg_buy_price={avg_buy_price:.6f}|"
+            f"current_price={current_price:.6f}|total_value={float(total_quantity * current_price):.6f}"
+        )
+    return lines
+
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -344,14 +383,23 @@ def run_magic_split_strategy_on_gpu(
                     f"Stocks: {stock_val_snapshot:,.0f} ({stock_ratio:.1f}%)\n"
                     f"Holdings Count: {num_pos_snapshot} Stocks"
                 )
-                
+
                 log_message = header + summary_str
-                
+                parity_snapshot_lines = _build_parity_snapshot_lines(
+                    current_date=current_date,
+                    capital_snapshot=float(capital_snapshot),
+                    total_val_snapshot=float(total_val_snapshot),
+                    current_prices_gpu=current_prices_gpu,
+                    positions_state=positions_state,
+                    all_tickers=all_tickers,
+                )
+
                 holding_indices = cp.where(cp.any(positions_state[0, :, :, 0] > 0, axis=1))[0].get()
                 if holding_indices.size > 0:
                     holdings_str = ", ".join([f"{idx}({all_tickers[idx]})" for idx in holding_indices])
                     log_message += f"\n[Current Holdings]\n{holdings_str}"
 
+                log_message += "\n" + "\n".join(parity_snapshot_lines)
                 log_message += footer
                 print(log_message)
             processed_days += 1
