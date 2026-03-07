@@ -1,5 +1,6 @@
 import unittest
 import pandas as pd
+from unittest.mock import MagicMock
 
 from src.backtest.cpu.backtester import BacktestEngine
 
@@ -24,6 +25,10 @@ class _DummyPortfolio:
 class _DummyDataHandler:
     def __init__(self, trading_dates):
         self._trading_dates = pd.DatetimeIndex(trading_dates)
+        self.clear_lazy_tier_candidate_cache = MagicMock()
+        self.clear_frozen_tier_candidate_manifest = MagicMock()
+        self.freeze_tier_candidate_manifest = MagicMock()
+        self.get_candidates_with_tier_fallback_pit_gated = MagicMock()
 
     def get_trading_dates(self, _start_date, _end_date):
         return self._trading_dates
@@ -37,6 +42,9 @@ class _DummyExecutionHandler:
 class _ScriptedStrategy:
     def __init__(self, contexts):
         self.max_stocks = 5
+        self.candidate_source_mode = "tier"
+        self.min_liquidity_20d_avg_value = 123
+        self.min_tier12_coverage_ratio = 0.45
         self._contexts = list(contexts)
         self._idx = 0
         self.last_entry_context = {}
@@ -54,6 +62,25 @@ class _ScriptedStrategy:
 
 
 class TestBacktesterEntryMetrics(unittest.TestCase):
+    def test_run_clears_lazy_tier_candidate_cache_once(self):
+        dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+        data_handler = _DummyDataHandler(dates)
+        strategy = _ScriptedStrategy([{}, {}])
+        engine = BacktestEngine(
+            start_date=dates[0],
+            end_date=dates[-1],
+            portfolio=_DummyPortfolio(),
+            strategy=strategy,
+            data_handler=data_handler,
+            execution_handler=_DummyExecutionHandler(),
+        )
+
+        engine.run()
+
+        data_handler.clear_lazy_tier_candidate_cache.assert_called_once()
+        data_handler.clear_frozen_tier_candidate_manifest.assert_not_called()
+        data_handler.freeze_tier_candidate_manifest.assert_not_called()
+
     def test_entry_metrics_tracks_source_breakdown(self):
         dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
         strategy = _ScriptedStrategy(

@@ -1,5 +1,6 @@
 import pandas as pd
 import warnings
+import logging
 from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
@@ -33,6 +34,7 @@ except ImportError:  # pragma: no cover
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
+logger = logging.getLogger(__name__)
 
 
 class PointInTimeViolation(ValueError):
@@ -69,6 +71,10 @@ class DataHandler:
         self.use_adjusted_prices = is_adjusted_price_basis(self.price_basis)
         self.universe_mode = normalize_universe_mode(resolved_universe_mode)
         self._eventual_delisted_codes_cache = None
+        self._frozen_tier_candidate_manifest = None
+        self._frozen_tier_candidate_manifest_key = None
+        self._lazy_tier_candidate_cache = None
+        self._lazy_tier_candidate_cache_key = None
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
@@ -178,6 +184,29 @@ class DataHandler:
     @staticmethod
     def _normalize_date_key(value):
         return pd.to_datetime(value).strftime('%Y-%m-%d')
+
+    def _build_tier_manifest_key(
+        self,
+        min_liquidity_20d_avg_value,
+        min_tier12_coverage_ratio,
+    ):
+        liquidity_gate = None
+        if min_liquidity_20d_avg_value is not None:
+            liquidity_gate = int(min_liquidity_20d_avg_value)
+
+        coverage_gate = None
+        if min_tier12_coverage_ratio is not None:
+            coverage_gate = float(min_tier12_coverage_ratio)
+
+        return self.universe_mode, liquidity_gate, coverage_gate
+
+    def clear_frozen_tier_candidate_manifest(self):
+        self._frozen_tier_candidate_manifest = None
+        self._frozen_tier_candidate_manifest_key = None
+
+    def clear_lazy_tier_candidate_cache(self):
+        self._lazy_tier_candidate_cache = None
+        self._lazy_tier_candidate_cache_key = None
 
     def clear_load_stock_data_cache(self):
         self._load_stock_data_cached.cache_clear()
@@ -629,7 +658,7 @@ class DataHandler:
         return filtered
 
     def _enforce_tier12_coverage_gate(self, date, pit_size, tier1_count, tier12_count, min_tier12_coverage_ratio):
-        print(
+        logger.debug(
             f"[TierCoverage] date={pd.to_datetime(date).date()} "
             f"tier1_count={tier1_count} tier12_count={tier12_count} universe_count={pit_size}"
         )
@@ -646,24 +675,41 @@ class DataHandler:
                 f"(tier12_count={tier12_count}, universe_count={pit_size})"
             )
 
-    def get_candidates_with_tier_fallback_pit_gated(
+    def _store_lazy_tier_candidate_payload(
+        self,
+        date,
+        payload,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if (
+            self._lazy_tier_candidate_cache is None
+            or manifest_key != self._lazy_tier_candidate_cache_key
+        ):
+            self._lazy_tier_candidate_cache = {}
+            self._lazy_tier_candidate_cache_key = manifest_key
+
+        self._lazy_tier_candidate_cache[self._normalize_date_key(date)] = payload
+
+    def _resolve_tier_candidate_payload(
         self,
         date,
         min_liquidity_20d_avg_value=None,
         min_tier12_coverage_ratio=None,
     ):
-        """
-        Issue #67 Phase2:
-        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
-        Optional gates:
-            - min_liquidity_20d_avg_value
-            - min_tier12_coverage_ratio
-        Returns:
-            (candidates_list, source)
-        """
         pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
         if not pit_codes:
-            return [], f"NO_CANDIDATES_{pit_source}"
+            return {
+                "candidate_codes": [],
+                "source": f"NO_CANDIDATES_{pit_source}",
+                "pit_size": 0,
+                "tier1_count": 0,
+                "tier12_count": 0,
+            }
 
         tier1_map = self.get_tiers_as_of(
             as_of_date=date,
@@ -688,8 +734,134 @@ class DataHandler:
         )
 
         if tier1_map:
-            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
+            candidate_codes = [code for code in pit_codes if code in tier1_map]
+            source = f"TIER_1_{pit_source}"
+        elif tier12_map:
+            candidate_codes = [code for code in pit_codes if code in tier12_map]
+            source = f"TIER_2_FALLBACK_{pit_source}"
+        else:
+            candidate_codes = []
+            source = f"NO_CANDIDATES_{pit_source}"
 
-        if tier12_map:
-            return [code for code in pit_codes if code in tier12_map], f"TIER_2_FALLBACK_{pit_source}"
-        return [], f"NO_CANDIDATES_{pit_source}"
+        return {
+            "candidate_codes": candidate_codes,
+            "source": source,
+            "pit_size": len(pit_codes),
+            "tier1_count": len(tier1_map),
+            "tier12_count": len(tier12_map),
+        }
+
+    def _get_frozen_tier_candidate_payload(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        if self._frozen_tier_candidate_manifest is None:
+            return None
+
+        key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if key != self._frozen_tier_candidate_manifest_key:
+            return None
+
+        return self._frozen_tier_candidate_manifest.get(self._normalize_date_key(date))
+
+    def _get_lazy_tier_candidate_payload(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        if self._lazy_tier_candidate_cache is None:
+            return None
+
+        key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if key != self._lazy_tier_candidate_cache_key:
+            return None
+
+        return self._lazy_tier_candidate_cache.get(self._normalize_date_key(date))
+
+    def freeze_tier_candidate_manifest(
+        self,
+        trading_dates,
+        *,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        self.clear_frozen_tier_candidate_manifest()
+        manifest = {}
+        normalized_dates = pd.to_datetime(list(trading_dates))
+        for trading_date in normalized_dates:
+            payload = self._resolve_tier_candidate_payload(
+                trading_date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+            manifest[self._normalize_date_key(trading_date)] = payload
+
+        self._frozen_tier_candidate_manifest = manifest
+        self._frozen_tier_candidate_manifest_key = manifest_key
+
+        if not manifest:
+            return {"days": 0}
+
+        manifest_dates = sorted(manifest.keys())
+        return {
+            "days": len(manifest_dates),
+            "first_date": manifest_dates[0],
+            "last_date": manifest_dates[-1],
+            "universe_mode": manifest_key[0],
+            "min_liquidity_20d_avg_value": manifest_key[1],
+            "min_tier12_coverage_ratio": manifest_key[2],
+        }
+
+    def get_candidates_with_tier_fallback_pit_gated(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        """
+        Issue #67 Phase2:
+        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
+        Optional gates:
+            - min_liquidity_20d_avg_value
+            - min_tier12_coverage_ratio
+        Returns:
+            (candidates_list, source)
+        """
+        payload = self._get_frozen_tier_candidate_payload(
+            date=date,
+            min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+        )
+        if payload is None:
+            payload = self._get_lazy_tier_candidate_payload(
+                date=date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+        if payload is None:
+            payload = self._resolve_tier_candidate_payload(
+                date=date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+            self._store_lazy_tier_candidate_payload(
+                date=date,
+                payload=payload,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+
+        return list(payload["candidate_codes"]), str(payload["source"])

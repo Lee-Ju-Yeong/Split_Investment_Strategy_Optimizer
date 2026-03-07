@@ -207,6 +207,145 @@ class TestDataHandlerTierApis(unittest.TestCase):
                     min_tier12_coverage_ratio=0.6,
                 )
 
+    def test_freeze_tier_candidate_manifest_reuses_cached_payload(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B", "C"], "SNAPSHOT_ASOF"),
+        ) as pit_mock, patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 120},
+                    "B": {"tier": 2, "liquidity_20d_avg_value": 140},
+                },
+            ],
+        ) as tier_mock:
+            summary = self.handler.freeze_tier_candidate_manifest(
+                [pd.Timestamp("2024-01-04")],
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+            self.assertEqual(summary["days"], 1)
+            self.assertEqual(summary["universe_mode"], "strict_pit")
+            self.assertEqual(summary["min_liquidity_20d_avg_value"], 100)
+            self.assertAlmostEqual(summary["min_tier12_coverage_ratio"], 0.3, places=6)
+            pit_mock.reset_mock()
+            tier_mock.reset_mock()
+
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+        self.assertEqual(codes, ["A"])
+        self.assertEqual(source, "TIER_1_SNAPSHOT_ASOF")
+        pit_mock.assert_not_called()
+        tier_mock.assert_not_called()
+
+    def test_live_tier_candidate_lookup_is_cached_per_run(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B", "C"], "SNAPSHOT_ASOF"),
+        ) as pit_mock, patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {
+                    "A": {"tier": 1, "liquidity_20d_avg_value": 120},
+                    "B": {"tier": 2, "liquidity_20d_avg_value": 140},
+                },
+            ],
+        ) as tier_mock:
+            codes1, source1 = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+            codes2, source2 = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+        self.assertEqual(codes1, ["A"])
+        self.assertEqual(codes2, ["A"])
+        self.assertEqual(source1, "TIER_1_SNAPSHOT_ASOF")
+        self.assertEqual(source2, "TIER_1_SNAPSHOT_ASOF")
+        pit_mock.assert_called_once()
+        self.assertEqual(tier_mock.call_count, 2)
+
+    def test_frozen_tier_candidate_manifest_is_bypassed_when_gate_changes(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B"], "SNAPSHOT_ASOF"),
+        ) as pit_mock, patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+            ],
+        ) as tier_mock:
+            self.handler.freeze_tier_candidate_manifest(
+                [pd.Timestamp("2024-01-04")],
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=None,
+            )
+            pit_mock.reset_mock()
+            tier_mock.reset_mock()
+
+            self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=200,
+                min_tier12_coverage_ratio=None,
+            )
+
+        pit_mock.assert_called_once()
+        self.assertEqual(tier_mock.call_count, 2)
+
+    def test_frozen_tier_candidate_manifest_is_bypassed_when_universe_mode_changes(self):
+        with patch.object(
+            self.handler,
+            "get_pit_universe_codes_as_of",
+            return_value=(["A", "B"], "SNAPSHOT_ASOF"),
+        ) as pit_mock, patch.object(
+            self.handler,
+            "get_tiers_as_of",
+            side_effect=[
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
+            ],
+        ) as tier_mock:
+            self.handler.freeze_tier_candidate_manifest(
+                [pd.Timestamp("2024-01-04")],
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=None,
+            )
+            self.handler.universe_mode = "optimistic_survivor"
+            pit_mock.reset_mock()
+            tier_mock.reset_mock()
+
+            self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=None,
+            )
+
+        pit_mock.assert_called_once()
+        self.assertEqual(tier_mock.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

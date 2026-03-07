@@ -36,10 +36,22 @@ class BacktestEngine:
         self.logger = logger or logging.getLogger(__name__)
         self.debug_ticker = debug_ticker
 
+    def _clear_tier_candidate_cache_if_supported(self):
+        clear_manifest = getattr(
+            self.data_handler,
+            "clear_lazy_tier_candidate_cache",
+            None,
+        )
+        if not callable(clear_manifest):
+            return
+
+        clear_manifest()
+
     def run(self):
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
+        self._clear_tier_candidate_cache_if_supported()
         entry_stats = {
             "entry_opportunity_days": 0,
             "candidate_eval_days": 0,
