@@ -228,7 +228,7 @@ def _process_sell_signals_gpu(
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
                         f"Reason: {reason} | "
-                        f"Target: {target_price:.2f} -> Exec: {exec_price} | "
+                        f"Target: {target_price:.6f} -> Exec: {exec_price} | "
                         f"High: {high_price}"
                     )
 
@@ -289,7 +289,7 @@ def _process_sell_signals_gpu(
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
                         f"(Split {split_idx}) Reason: Profit-Taking | "
-                        f"Target: {target_price:.2f} -> Exec: {exec_price} | "
+                        f"Target: {target_price:.6f} -> Exec: {exec_price} | "
                         f"High: {high_price}"
                     )
 
@@ -598,7 +598,7 @@ def _process_additional_buy_signals_gpu(
                 print(
                     f"  └─ Stock {stock_idx}({ticker_code}) | "
                     f"Split: {split_idx} | "
-                    f"Target: {target_price:,.2f} | "
+                    f"Target: {target_price:,.6f} | "
                     f"Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}"
                 )
 
@@ -747,7 +747,7 @@ def _process_new_entry_signals_gpu(
 
                     print(
                         f"[GPU_NEW_BUY_CALC] {current_day_idx}, Sim 0, Stock {stock_idx}({ticker_code}) | "
-                        f"Target: {trigger_price_val:,.2f} | "
+                        f"Target: {trigger_price_val:,.6f} | "
                         f"Invest: {investment_per_order[0].item():,.0f} / ExecPrice: {buy_price_val:,.0f} = Qty: {expected_quantity:,.0f}"
                     )
                     print(f"  └─ Executed Buy Price Saved to State: {buy_price_val:,.0f}")
