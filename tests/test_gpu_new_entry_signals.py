@@ -27,7 +27,7 @@ class TestGpuNewEntrySignals(unittest.TestCase):
             dtype=cp.float32,
         )
 
-    def test_new_entry_preserves_sequential_capital_semantics(self):
+    def test_new_entry_stops_when_cash_falls_below_order_budget(self):
         portfolio_state = cp.asarray([[150.0, 100.0]], dtype=cp.float32)
         positions_state = cp.zeros((1, 3, 3, 3), dtype=cp.float32)
         cooldown_state = cp.full((1, 3), -1, dtype=cp.int32)
@@ -52,13 +52,13 @@ class TestGpuNewEntrySignals(unittest.TestCase):
             all_tickers=["A", "B", "C"],
         )
 
-        self.assertEqual(float(portfolio_state_after[0, 0].item()), 0.0)
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 60.0)
         self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 3.0)
         self.assertEqual(float(positions_after[0, 1, 0, 0].item()), 0.0)
-        self.assertEqual(float(positions_after[0, 2, 0, 0].item()), 1.0)
+        self.assertEqual(float(positions_after[0, 2, 0, 0].item()), 0.0)
         self.assertEqual(int(last_trade_after[0, 0].item()), 1)
         self.assertEqual(int(last_trade_after[0, 1].item()), -1)
-        self.assertEqual(int(last_trade_after[0, 2].item()), 1)
+        self.assertEqual(int(last_trade_after[0, 2].item()), -1)
 
     def test_new_entry_skips_holding_and_cooldown_candidates(self):
         portfolio_state = cp.asarray([[300.0, 100.0]], dtype=cp.float32)

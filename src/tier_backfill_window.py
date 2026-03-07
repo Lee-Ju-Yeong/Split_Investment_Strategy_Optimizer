@@ -16,9 +16,17 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timedelta
+from pathlib import Path
+import sys
 import time
 
 import pymysql
+
+# BOOTSTRAP: allow direct execution (`python src/tier_backfill_window.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 from .config_loader import load_config
 from .pipeline.daily_stock_tier_batch import run_daily_stock_tier_batch

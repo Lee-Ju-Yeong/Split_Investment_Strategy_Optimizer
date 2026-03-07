@@ -6,8 +6,8 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.financial_collector import normalize_fundamental_df
-from src.investor_trading_collector import normalize_investor_df
+from src.data.collectors.financial_collector import normalize_fundamental_df
+from src.data.collectors.investor_trading_collector import normalize_investor_df
 from src.market_cap_collector import normalize_market_cap_df
 from src.short_selling_collector import normalize_short_selling_df
 

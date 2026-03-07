@@ -9,14 +9,22 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 import random
 import threading
 import time
+import sys
 
 import numpy as np
 import pandas as pd
 import requests
 import json
+
+# BOOTSTRAP: allow direct execution (`python src/market_cap_collector.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 
 # Suppress FutureWarning: Downcasting behavior in `replace` is deprecated

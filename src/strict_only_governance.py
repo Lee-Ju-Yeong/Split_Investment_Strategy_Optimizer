@@ -9,7 +9,14 @@ import glob
 import json
 from pathlib import Path
 from statistics import median
+import sys
 from typing import Iterable, Mapping, Sequence
+
+# BOOTSTRAP: allow direct execution (`python src/strict_only_governance.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 
 REQUIRED_FROZEN_MANIFEST_MODES = frozenset({"record_strict", "replay_strict"})

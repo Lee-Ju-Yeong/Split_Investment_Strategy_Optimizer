@@ -1,9 +1,9 @@
 # Issue #98: GPU Throughput Refactor
 
 > Type: `implementation`
-> Status: `ready`
+> Status: `in_progress`
 > Priority: `P1`
-> Last updated: 2026-03-07
+> Last updated: 2026-03-08
 > Related issues: `#98`, `#56`, `#67`, `#97`
 > Gate status: `runtime governance approved; waiting on #98 evidence`
 
@@ -218,6 +218,34 @@
 - 측정 결과 누락 시 Gate B 미통과 처리
 
 ## 10. PR-98A 반영 내역 (2026-02-18)
+
+## 11. PR-98C slice 1 반영 내역 (2026-03-08)
+- What:
+  - `DataHandler` runtime lookup cache 추가
+  - CPU strategy의 신규 진입/추가 매수에서 tier batch query + cached multi-ticker row access path 추가
+  - `Portfolio`의 cached multi-ticker latest-price access path 지원
+  - GPU engine의 zero signal tensor 재사용
+- Why:
+  - 같은 날 같은 종목에 대한 `asof`/OHLC/price lookup 중복을 줄이고, 보유 종목별 tier query를 batch로 바꿔 CPU 경로의 Python/DB 오버헤드를 줄이기 위함
+  - row/price lookup은 새 set-based SQL이 아니라 runtime cache 위의 multi-ticker access path 정리다
+  - GPU 쪽은 루프 내부 `cp.zeros` 재할당을 없애 allocator churn을 줄이기 위함
+- Files:
+  - `src/data_handler.py`
+  - `src/backtest/cpu/strategy.py`
+  - `src/backtest/cpu/portfolio.py`
+  - `src/backtest/cpu/backtester.py`
+  - `src/backtest/gpu/engine.py`
+  - `tests/test_data_handler_runtime_cache.py`
+  - `tests/test_cpu_candidate_priority.py`
+  - `tests/test_portfolio.py`
+  - `tests/test_backtester_entry_metrics.py`
+- Verification:
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_runtime_cache tests.test_cpu_candidate_priority tests.test_portfolio tests.test_backtester_entry_metrics tests.test_point_in_time tests.test_gpu_engine_prep_path -v`
+- Notes:
+  - 아직 `PR-98C` 전체 완료는 아님
+  - 이 slice는 correctness-safe perf-only 정리이며, throughput improvement는 별도 before/after 계측으로 확정해야 한다
+  - `tests.test_gpu_engine_prep_path`는 CUDA/OS 제약 환경에서 skip 될 수 있다
+  - 다음 큰 GPU 개선 후보는 batch별 market-data prep 재사용(`prepared_market_data` bundle)이다
 - `src/optimization/gpu/kernel.py`
   - 가용 GPU 메모리 조회 경로를 `nvidia-smi` -> `cupy.runtime.memGetInfo` 순서로 확장
   - 메모리 조회 불가/부족 원인을 배치 크기 계산 로그에 명확히 출력

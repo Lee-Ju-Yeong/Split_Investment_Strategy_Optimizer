@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from data_handler import DataHandler, PitRuntimeError
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from src.data_handler import DataHandler, PitRuntimeError
 
 
 class TestDataHandlerTierApis(unittest.TestCase):

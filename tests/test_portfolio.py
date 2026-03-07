@@ -93,6 +93,27 @@ class TestPortfolio(unittest.TestCase):
         expected_market_value_with_none = 10 * 75000 # ticker2는 가격이 없어 제외
         self.assertEqual(total_value_with_none, expected_cash + expected_market_value_with_none)
 
+    def test_get_total_value_prefers_batch_price_lookup_when_available(self):
+        ticker1 = '005930'
+        ticker2 = '000660'
+        pos1 = Position(buy_price=70000, quantity=10, order=1, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
+        pos2 = Position(buy_price=100000, quantity=5, order=1, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
+        self.portfolio.add_position(ticker1, pos1, date(2022, 1, 10), 0)
+        self.portfolio.add_position(ticker2, pos2, date(2022, 1, 10), 0)
+        self.portfolio.update_cash(-(70000 * 10 + 100000 * 5))
+
+        self.mock_data_handler.get_latest_prices.return_value = {
+            ticker1: 75000,
+            ticker2: 110000,
+        }
+
+        total_value = self.portfolio.get_total_value(date(2022, 6, 15), self.mock_data_handler)
+
+        expected_market_value = (10 * 75000) + (5 * 110000)
+        expected_cash = self.initial_cash - (70000 * 10 + 100000 * 5)
+        self.assertEqual(total_value, expected_cash + expected_market_value)
+        self.mock_data_handler.get_latest_price.assert_not_called()
+
 
     def test_record_trade_and_daily_value(self):
         """거래 및 일별 가치 기록 기능 검증"""
@@ -156,6 +177,23 @@ class TestPortfolio(unittest.TestCase):
         self.assertEqual(snapshot["positions"][0]["Ticker"], "005930")
         self.assertEqual(snapshot["positions"][0]["Quantity"], 15)
         self.assertEqual(snapshot["positions"][0]["Holdings"], 2)
+
+    def test_get_positions_snapshot_prefers_batch_price_lookup_when_available(self):
+        ticker = '005930'
+        pos = Position(buy_price=70000, quantity=10, order=1, additional_buy_drop_rate=0.05, sell_profit_rate=0.1)
+        self.portfolio.add_position(ticker, pos, date(2022, 1, 10), 0)
+        self.mock_data_handler.get_latest_prices.return_value = {ticker: 75000}
+        self.mock_data_handler.get_name_from_ticker.return_value = '삼성전자'
+
+        snapshot = self.portfolio.get_positions_snapshot(
+            date(2022, 6, 15),
+            self.mock_data_handler,
+            total_portfolio_value=850000,
+        )
+
+        self.assertEqual(snapshot.iloc[0]["Ticker"], ticker)
+        self.assertEqual(snapshot.iloc[0]["Current Price"], 75000)
+        self.mock_data_handler.get_latest_price.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

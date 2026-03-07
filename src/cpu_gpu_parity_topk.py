@@ -26,10 +26,18 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 import os
+from pathlib import Path
 import urllib.parse
+import sys
 
 import pandas as pd
 from sqlalchemy import create_engine
+
+# BOOTSTRAP: allow direct execution (`python src/cpu_gpu_parity_topk.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 from .backtest.cpu.backtester import BacktestEngine
 from .backtest.cpu.execution import BasicExecutionHandler
