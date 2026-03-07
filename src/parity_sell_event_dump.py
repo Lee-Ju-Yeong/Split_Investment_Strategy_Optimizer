@@ -31,7 +31,7 @@ from .backtest.cpu.execution import BasicExecutionHandler
 from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
-from .data_handler import DataHandler
+from .data_handler import DataHandler, build_pit_failure_record
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
     build_empty_weekly_filtered_gpu,
@@ -264,6 +264,21 @@ def _build_cpu_candidate_rank_rows(strategy: MagicSplitStrategy) -> List[Candida
     return rows
 
 
+def _build_cpu_artifact_bundle(
+    *,
+    strategy: MagicSplitStrategy,
+    final_portfolio: Portfolio,
+    data_handler: DataHandler,
+) -> Dict[str, Any]:
+    summary_getter = getattr(strategy, "get_candidate_lookup_error_summary", None)
+    manifest_getter = getattr(data_handler, "get_frozen_candidate_manifest_summary", None)
+    return {
+        "candidate_lookup_summary": summary_getter() if callable(summary_getter) else {},
+        "run_metrics": dict(getattr(final_portfolio, "run_metrics", {}) or {}),
+        "frozen_candidate_manifest": manifest_getter() if callable(manifest_getter) else {},
+    }
+
+
 def _run_cpu_and_collect_trade_events(
     *,
     config: Dict[str, Any],
@@ -274,7 +289,14 @@ def _run_cpu_and_collect_trade_events(
     candidate_source_mode: str,
     use_weekly_alpha_gate: bool,
     universe_mode: str,
-) -> Tuple[List[SellEvent], List[BuyEvent], List[DailySnapshot], List[PositionSnapshot], List[CandidateRankRow]]:
+) -> Tuple[
+    List[SellEvent],
+    List[BuyEvent],
+    List[DailySnapshot],
+    List[PositionSnapshot],
+    List[CandidateRankRow],
+    Dict[str, Any],
+]:
     strategy_params = dict(config["strategy_params"])
     strategy_params.update(
         {
@@ -372,6 +394,11 @@ def _run_cpu_and_collect_trade_events(
         _build_cpu_daily_snapshots(final_portfolio),
         _build_cpu_position_snapshots(final_portfolio),
         _build_cpu_candidate_rank_rows(strategy),
+        _build_cpu_artifact_bundle(
+            strategy=strategy,
+            final_portfolio=final_portfolio,
+            data_handler=data_handler,
+        ),
     )
 
 
@@ -1149,13 +1176,115 @@ def _pair_candidate_rank_rows(
     )
 
 
+def _build_candidate_order_artifact(candidate_order_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    matched_pairs = sum(1 for row in candidate_order_pairs if row["matched"])
+    mismatched_pairs = len(candidate_order_pairs) - matched_pairs
+    return {
+        "paired_count": len(candidate_order_pairs),
+        "matched_pairs": matched_pairs,
+        "mismatched_pairs": mismatched_pairs,
+        "zero_mismatch": mismatched_pairs == 0,
+    }
+
+
+def _build_pit_failure_parity_payload(
+    *,
+    start_date: str,
+    end_date: str,
+    params: Dict[str, Any],
+    candidate_source_mode: str,
+    parity_mode: str,
+    universe_mode: str,
+    pit_failure: Dict[str, Any],
+    cpu_artifacts: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    cpu_artifacts = dict(cpu_artifacts or {})
+    candidate_order_artifact = _build_candidate_order_artifact([])
+    frozen_candidate_manifest = dict(cpu_artifacts.get("frozen_candidate_manifest") or {})
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "params": params,
+        "candidate_source_mode": candidate_source_mode,
+        "parity_mode": parity_mode,
+        "universe_mode": universe_mode,
+        "comparison_scope": "pit_failure",
+        "release_decision_fields_complete": False,
+        "decision_level_zero_mismatch": False,
+        "pit_failure": pit_failure,
+        "cpu_candidate_lookup_summary": dict(cpu_artifacts.get("candidate_lookup_summary") or {}),
+        "cpu_run_metrics": dict(cpu_artifacts.get("run_metrics") or {}),
+        "frozen_candidate_manifest": frozen_candidate_manifest,
+        "cpu_sell_events_count": 0,
+        "gpu_sell_events_count": 0,
+        "cpu_buy_events_count": 0,
+        "gpu_buy_events_count": 0,
+        "cpu_daily_snapshots_count": 0,
+        "gpu_daily_snapshots_count": 0,
+        "cpu_position_snapshots_count": 0,
+        "gpu_position_snapshots_count": 0,
+        "cpu_candidate_rank_rows_count": 0,
+        "gpu_candidate_rank_rows_count": 0,
+        "sell_paired_count": 0,
+        "sell_matched_pairs": 0,
+        "sell_mismatched_pairs": 0,
+        "buy_paired_count": 0,
+        "buy_matched_pairs": 0,
+        "buy_mismatched_pairs": 0,
+        "daily_snapshot_paired_count": 0,
+        "daily_snapshot_matched_pairs": 0,
+        "daily_snapshot_mismatched_pairs": 0,
+        "position_snapshot_paired_count": 0,
+        "position_snapshot_matched_pairs": 0,
+        "position_snapshot_mismatched_pairs": 0,
+        "candidate_order_paired_count": 0,
+        "candidate_order_matched_pairs": 0,
+        "candidate_order_mismatched_pairs": 0,
+        "candidate_order_zero_mismatch": False,
+        "daily_snapshot_fields_complete": False,
+        "position_snapshot_fields_complete": False,
+        "cpu_sell_events": [],
+        "gpu_sell_events": [],
+        "cpu_buy_events": [],
+        "gpu_buy_events": [],
+        "cpu_daily_snapshots": [],
+        "gpu_daily_snapshots": [],
+        "cpu_position_snapshots": [],
+        "gpu_position_snapshots": [],
+        "cpu_candidate_rank_rows": [],
+        "gpu_candidate_rank_rows": [],
+        "sell_pairs": [],
+        "buy_pairs": [],
+        "daily_snapshot_pairs": [],
+        "position_snapshot_pairs": [],
+        "candidate_order_pairs": [],
+        "candidate_order_artifact": candidate_order_artifact,
+        "certification_artifact": {
+            "candidate_order": candidate_order_artifact,
+            "frozen_candidate_manifest": frozen_candidate_manifest,
+            "pit_failure": pit_failure,
+        },
+        "gpu_log_text": "",
+    }
+
+
 def _unpack_cpu_runner_result(
     result: tuple,
-) -> Tuple[List[SellEvent], List[BuyEvent], List[DailySnapshot], List[PositionSnapshot], List[CandidateRankRow]]:
+) -> Tuple[
+    List[SellEvent],
+    List[BuyEvent],
+    List[DailySnapshot],
+    List[PositionSnapshot],
+    List[CandidateRankRow],
+    Dict[str, Any],
+]:
     if len(result) == 4:
         sell_events, buy_events, daily_snapshots, position_snapshots = result
-        return sell_events, buy_events, daily_snapshots, position_snapshots, []
+        return sell_events, buy_events, daily_snapshots, position_snapshots, [], {}
     if len(result) == 5:
+        sell_events, buy_events, daily_snapshots, position_snapshots, candidate_rank_rows = result
+        return sell_events, buy_events, daily_snapshots, position_snapshots, candidate_rank_rows, {}
+    if len(result) == 6:
         return result
     raise ValueError(f"Unexpected CPU parity runner result size={len(result)}")
 
@@ -1208,35 +1337,67 @@ def collect_trade_event_parity_report(
     parity_mode: str,
     universe_mode: str,
 ) -> Dict[str, Any]:
-    cpu_sell_events, cpu_buy_events, cpu_daily_snapshots, cpu_position_snapshots, cpu_candidate_rank_rows = (
-        _unpack_cpu_runner_result(
-            _run_cpu_and_collect_trade_events(
-                config=config,
-                start_date=start_date,
-                end_date=end_date,
-                initial_cash=initial_cash,
-                params=params,
-                candidate_source_mode=candidate_source_mode,
-                use_weekly_alpha_gate=use_weekly_alpha_gate,
-                universe_mode=universe_mode,
+    cpu_artifacts: Dict[str, Any] = {}
+    try:
+        cpu_sell_events, cpu_buy_events, cpu_daily_snapshots, cpu_position_snapshots, cpu_candidate_rank_rows, cpu_artifacts = (
+            _unpack_cpu_runner_result(
+                _run_cpu_and_collect_trade_events(
+                    config=config,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=initial_cash,
+                    params=params,
+                    candidate_source_mode=candidate_source_mode,
+                    use_weekly_alpha_gate=use_weekly_alpha_gate,
+                    universe_mode=universe_mode,
+                )
             )
         )
-    )
-    gpu_sell_events, gpu_buy_events, gpu_daily_snapshots, gpu_position_snapshots, gpu_candidate_rank_rows, gpu_log_text = (
-        _unpack_gpu_runner_result(
-            _run_gpu_and_collect_sell_events(
-                config=config,
-                start_date=start_date,
-                end_date=end_date,
-                initial_cash=initial_cash,
-                params=params,
-                candidate_source_mode=candidate_source_mode,
-                use_weekly_alpha_gate=use_weekly_alpha_gate,
-                parity_mode=parity_mode,
-                universe_mode=universe_mode,
+    except Exception as exc:
+        pit_failure = build_pit_failure_record(exc)
+        if pit_failure is None:
+            raise
+        return _build_pit_failure_parity_payload(
+            start_date=start_date,
+            end_date=end_date,
+            params=params,
+            candidate_source_mode=candidate_source_mode,
+            parity_mode=parity_mode,
+            universe_mode=universe_mode,
+            pit_failure=pit_failure,
+            cpu_artifacts=cpu_artifacts,
+        )
+
+    try:
+        gpu_sell_events, gpu_buy_events, gpu_daily_snapshots, gpu_position_snapshots, gpu_candidate_rank_rows, gpu_log_text = (
+            _unpack_gpu_runner_result(
+                _run_gpu_and_collect_sell_events(
+                    config=config,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=initial_cash,
+                    params=params,
+                    candidate_source_mode=candidate_source_mode,
+                    use_weekly_alpha_gate=use_weekly_alpha_gate,
+                    parity_mode=parity_mode,
+                    universe_mode=universe_mode,
+                )
             )
         )
-    )
+    except Exception as exc:
+        pit_failure = build_pit_failure_record(exc)
+        if pit_failure is None:
+            raise
+        return _build_pit_failure_parity_payload(
+            start_date=start_date,
+            end_date=end_date,
+            params=params,
+            candidate_source_mode=candidate_source_mode,
+            parity_mode=parity_mode,
+            universe_mode=universe_mode,
+            pit_failure=pit_failure,
+            cpu_artifacts=cpu_artifacts,
+        )
 
     sell_pairs = _pair_events(cpu_sell_events, gpu_sell_events)
     buy_pairs = _pair_buy_events(cpu_buy_events, gpu_buy_events)
@@ -1250,12 +1411,12 @@ def collect_trade_event_parity_report(
     matched_buy_pairs = sum(1 for row in buy_pairs if row["matched"])
     matched_daily_snapshot_pairs = sum(1 for row in daily_snapshot_pairs if row["matched"])
     matched_position_snapshot_pairs = sum(1 for row in position_snapshot_pairs if row["matched"])
-    matched_candidate_order_pairs = sum(1 for row in candidate_order_pairs if row["matched"])
     sell_mismatched_pairs = len(sell_pairs) - matched_sell_pairs
     buy_mismatched_pairs = len(buy_pairs) - matched_buy_pairs
     daily_snapshot_mismatched_pairs = len(daily_snapshot_pairs) - matched_daily_snapshot_pairs
     position_snapshot_mismatched_pairs = len(position_snapshot_pairs) - matched_position_snapshot_pairs
-    candidate_order_mismatched_pairs = len(candidate_order_pairs) - matched_candidate_order_pairs
+    candidate_order_artifact = _build_candidate_order_artifact(candidate_order_pairs)
+    frozen_candidate_manifest = dict(cpu_artifacts.get("frozen_candidate_manifest") or {})
     snapshot_level_zero_mismatch = (
         daily_snapshot_mismatched_pairs == 0 and position_snapshot_mismatched_pairs == 0
     )
@@ -1333,13 +1494,17 @@ def collect_trade_event_parity_report(
         "position_snapshot_paired_count": len(position_snapshot_pairs),
         "position_snapshot_matched_pairs": matched_position_snapshot_pairs,
         "position_snapshot_mismatched_pairs": position_snapshot_mismatched_pairs,
-        "candidate_order_paired_count": len(candidate_order_pairs),
-        "candidate_order_matched_pairs": matched_candidate_order_pairs,
-        "candidate_order_mismatched_pairs": candidate_order_mismatched_pairs,
-        "candidate_order_zero_mismatch": candidate_order_mismatched_pairs == 0,
+        "candidate_order_paired_count": int(candidate_order_artifact["paired_count"]),
+        "candidate_order_matched_pairs": int(candidate_order_artifact["matched_pairs"]),
+        "candidate_order_mismatched_pairs": int(candidate_order_artifact["mismatched_pairs"]),
+        "candidate_order_zero_mismatch": bool(candidate_order_artifact["zero_mismatch"]),
         "daily_snapshot_fields_complete": bool(daily_snapshot_fields_complete),
         "position_snapshot_fields_complete": bool(position_snapshot_fields_complete),
         "decision_level_zero_mismatch": decision_level_zero_mismatch,
+        "pit_failure": None,
+        "cpu_candidate_lookup_summary": dict(cpu_artifacts.get("candidate_lookup_summary") or {}),
+        "cpu_run_metrics": dict(cpu_artifacts.get("run_metrics") or {}),
+        "frozen_candidate_manifest": frozen_candidate_manifest,
         "cpu_sell_events": [event.__dict__ for event in cpu_sell_events],
         "gpu_sell_events": [event.__dict__ for event in gpu_sell_events],
         "cpu_buy_events": [event.__dict__ for event in cpu_buy_events],
@@ -1355,6 +1520,12 @@ def collect_trade_event_parity_report(
         "daily_snapshot_pairs": daily_snapshot_pairs,
         "position_snapshot_pairs": position_snapshot_pairs,
         "candidate_order_pairs": candidate_order_pairs,
+        "candidate_order_artifact": candidate_order_artifact,
+        "certification_artifact": {
+            "candidate_order": candidate_order_artifact,
+            "frozen_candidate_manifest": frozen_candidate_manifest,
+            "pit_failure": None,
+        },
         "gpu_log_text": gpu_log_text,
     }
 
