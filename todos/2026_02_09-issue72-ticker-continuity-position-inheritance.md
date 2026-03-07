@@ -19,8 +19,46 @@
 ## 4. 관련 리소스 및 의존성
 - pykrx: `stock.get_stock_major_changes`
 - 관련 이슈: #70 (상폐 포함 PIT 유니버스) - 계보 데이터가 유니버스 히스토리에 통합되어야 함.
+- 운영 메모:
+  - `get_stock_major_changes` 원천은 현재 장기간 empty 응답 이슈가 있어, 자동 추출 경로는 `external_blocked` 가능성을 전제로 설계해야 함.
 
 ## 5. 할 일 (Initial Tasks)
 - [ ] 티커 변경 및 기업 구조 개편 대표 사례(우리은행, SK 등) 데이터 샘플링
 - [ ] **[설계 논의]** 멀티 에이전트 기반의 포지션 승계 로직 아키텍처 워크샵 수행
 - [ ] 계보 관리용 매핑 테이블(`TickerAncestry`) 스키마 설계
+
+## 6. 2026-03-07 보강 체크리스트 초안
+- [ ] `TODO.md` P1 항목으로 승격
+- [ ] continuity 적용 범위 고정
+  - 단순 사명 변경
+  - 티커 변경
+  - 합병/분할
+  - 주식교환/지주사 전환
+- [ ] 대표 사례 데이터셋 확보
+  - 우리은행/우리금융지주
+  - SK 계열 사례
+  - 최소 3개 이상 historical sample
+- [ ] `TickerAncestry` 스키마 초안 작성
+  - `ancestor_code`
+  - `descendant_code`
+  - `effective_date`
+  - `event_type`
+  - `exchange_ratio`
+  - `confidence/manual_override`
+- [ ] CPU carryover 규칙 정의
+  - 보유 수량 승계
+  - 평단가/차수 승계
+  - cooldown/inactivity 승계 여부
+- [ ] GPU carryover 규칙 정의
+  - ticker index remap 방식
+  - continuity mapping tensor 또는 lookup layer 설계
+- [ ] acceptance fixture 초안 작성
+  - rename-only 케이스
+  - exchange-ratio 케이스
+  - continuity 적용 전/후 equity curve 비교
+
+## 7. Acceptance Criteria (초안)
+- [ ] continuity 대상 이벤트에서 CPU/GPU가 동일한 승계 규칙을 사용한다.
+- [ ] continuity 적용 후 `ticker changed = forced liquidation + new listing` 식의 잘못된 해석을 제거한다.
+- [ ] representative fixture에서 position quantity / avg buy price / split order continuity가 유지된다.
+- [ ] source가 `external_blocked`일 때도 manual seed 또는 보조 테이블로 재현 가능한 경로를 남긴다.

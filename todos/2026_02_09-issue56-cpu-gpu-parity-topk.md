@@ -356,3 +356,10 @@ python -m src.cpu_gpu_parity_topk \
 - PIT/as-of/tier/data loading 경로(`src/optimization/gpu/data_loading.py`, `src/data_handler.py`) 변경
 - 후보군/정렬/top-k/candidate source 모드 규칙 변경
 - PR 빠른 게이트에서 mismatch 1건 이상 발생
+
+## 12. 2026-03-07 release artifact follow-up 초안
+- [ ] release-grade parity artifact에 `mode_source(config/env/default)` 저장
+- [ ] release-grade parity run은 `strict_pit` 미지정 시 fail-close
+- [ ] parity artifact에 `future_reference_count=0` 또는 동등한 temporal integrity summary 명시
+- [ ] `run manifest + parity diff + CPU certification + PIT coverage`를 동일 run bundle로 연결
+- [ ] config/data/env/git hash가 빠진 결과는 release evidence로 사용하지 않도록 문서/코드 가드 추가
