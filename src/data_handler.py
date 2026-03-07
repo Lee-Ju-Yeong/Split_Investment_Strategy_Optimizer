@@ -41,8 +41,76 @@ STOCK_CODE_TO_NAME_CACHE = {}
 logger = logging.getLogger(__name__)
 
 
-class PointInTimeViolation(ValueError):
+class PitRuntimeError(ValueError):
+    """Structured PIT/runtime failure used by #67 artifacts and run manifests."""
+
+    def __init__(self, code, message, *, stage, details=None):
+        super().__init__(message)
+        self.pit_code = str(code)
+        self.pit_stage = str(stage)
+        self.pit_details = dict(details or {})
+
+
+class PointInTimeViolation(PitRuntimeError):
     """Raised when a data row later than the requested as-of date is returned."""
+
+    def __init__(self, row_date, as_of_date):
+        row_ts = pd.to_datetime(row_date)
+        as_of_ts = pd.to_datetime(as_of_date)
+        super().__init__(
+            "pit_row_newer_than_as_of",
+            f"PIT violation: row_date({row_ts.date()}) is newer than as_of_date({as_of_ts.date()}).",
+            stage="pit_as_of_validation",
+            details={
+                "row_date": row_ts.strftime("%Y-%m-%d"),
+                "as_of_date": as_of_ts.strftime("%Y-%m-%d"),
+            },
+        )
+
+
+def _normalize_failure_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (pd.Timestamp,)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_failure_value(inner)
+            for key, inner in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_failure_value(item) for item in value]
+    return str(value)
+
+
+def build_pit_failure_record(
+    error,
+    *,
+    trade_date=None,
+    signal_date=None,
+    fallback_code=None,
+    fallback_stage=None,
+):
+    code = getattr(error, "pit_code", None) or fallback_code
+    stage = getattr(error, "pit_stage", None) or fallback_stage
+    if code is None and stage is None:
+        return None
+
+    details = _normalize_failure_value(getattr(error, "pit_details", None) or {})
+    record = {
+        "code": str(code) if code is not None else None,
+        "stage": str(stage) if stage is not None else None,
+        "exception_type": type(error).__name__,
+        "message": str(error)[:240],
+        "details": details,
+    }
+    if trade_date is not None:
+        record["trade_date"] = pd.to_datetime(trade_date).strftime("%Y-%m-%d")
+    if signal_date is not None:
+        record["signal_date"] = pd.to_datetime(signal_date).strftime("%Y-%m-%d")
+    return record
 
 
 class DataHandler:
@@ -132,9 +200,12 @@ class DataHandler:
         raw_mode = (strategy_params or {}).get("frozen_candidate_manifest_mode", "off")
         mode = str(raw_mode).strip().lower()
         if mode not in {"off", "record_strict", "replay_strict"}:
-            raise ValueError(
+            raise PitRuntimeError(
+                "frozen_manifest_mode_invalid",
                 "Unsupported frozen_candidate_manifest_mode="
-                f"{raw_mode!r}. supported=[off, record_strict, replay_strict]"
+                f"{raw_mode!r}. supported=[off, record_strict, replay_strict]",
+                stage="strict_frozen_manifest_config",
+                details={"frozen_candidate_manifest_mode": raw_mode},
             )
         return mode
 
@@ -155,8 +226,11 @@ class DataHandler:
         if not sha:
             return None
         if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
-            raise ValueError(
-                "frozen_candidate_manifest_expected_sha256 must be a 64-char hex digest"
+            raise PitRuntimeError(
+                "frozen_manifest_expected_sha_invalid",
+                "frozen_candidate_manifest_expected_sha256 must be a 64-char hex digest",
+                stage="strict_frozen_manifest_config",
+                details={"frozen_candidate_manifest_expected_sha256": str(raw_sha)},
             )
         return sha
 
@@ -219,9 +293,7 @@ class DataHandler:
         row_ts = pd.to_datetime(row_date)
         as_of_ts = pd.to_datetime(as_of_date)
         if row_ts > as_of_ts:
-            raise PointInTimeViolation(
-                f"PIT violation: row_date({row_ts.date()}) is newer than as_of_date({as_of_ts.date()})."
-            )
+            raise PointInTimeViolation(row_date=row_ts, as_of_date=as_of_ts)
 
     @staticmethod
     def get_previous_trading_date(trading_dates, current_day_idx):
@@ -724,10 +796,20 @@ class DataHandler:
         ratio = float(tier12_count) / float(pit_size)
         threshold = float(min_tier12_coverage_ratio)
         if ratio < threshold:
-            raise ValueError(
+            raise PitRuntimeError(
+                "tier12_coverage_gate_failed",
                 f"Tier coverage gate failed on {pd.to_datetime(date).date()}: "
                 f"tier12_ratio={ratio:.4f} < threshold={threshold:.4f} "
-                f"(tier12_count={tier12_count}, universe_count={pit_size})"
+                f"(tier12_count={tier12_count}, universe_count={pit_size})",
+                stage="tier12_coverage_gate",
+                details={
+                    "date": pd.to_datetime(date).strftime("%Y-%m-%d"),
+                    "tier12_ratio": round(ratio, 6),
+                    "threshold": round(threshold, 6),
+                    "tier1_count": int(tier1_count),
+                    "tier12_count": int(tier12_count),
+                    "universe_count": int(pit_size),
+                },
             )
 
     def _begin_snapshot_connection(self):
@@ -950,8 +1032,14 @@ class DataHandler:
         if mode == "off":
             return {}
         if str(candidate_lookup_error_policy).strip().lower() != "raise":
-            raise ValueError(
-                "strict frozen candidate manifest requires candidate_lookup_error_policy='raise'"
+            raise PitRuntimeError(
+                "strict_frozen_requires_raise_policy",
+                "strict frozen candidate manifest requires candidate_lookup_error_policy='raise'",
+                stage="strict_frozen_manifest_prepare",
+                details={
+                    "candidate_lookup_error_policy": str(candidate_lookup_error_policy),
+                    "mode": mode,
+                },
             )
 
         manifest_key = self._build_tier_manifest_key(
@@ -961,24 +1049,67 @@ class DataHandler:
         signal_dates = self._iter_signal_dates(trading_dates)
         if mode == "replay_strict":
             if not self.frozen_candidate_manifest_path:
-                raise ValueError("replay_strict requires frozen_candidate_manifest_path")
+                raise PitRuntimeError(
+                    "frozen_manifest_path_missing",
+                    "replay_strict requires frozen_candidate_manifest_path",
+                    stage="strict_frozen_manifest_replay",
+                    details={"mode": mode},
+                )
             if not self.frozen_candidate_manifest_expected_sha256:
-                raise ValueError(
-                    "replay_strict requires frozen_candidate_manifest_expected_sha256"
+                raise PitRuntimeError(
+                    "frozen_manifest_expected_sha_missing",
+                    "replay_strict requires frozen_candidate_manifest_expected_sha256",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "mode": mode,
+                        "path": self.frozen_candidate_manifest_path,
+                    },
                 )
             actual_sha256 = self._hash_file(self.frozen_candidate_manifest_path)
             if actual_sha256 != self.frozen_candidate_manifest_expected_sha256:
-                raise ValueError("Frozen candidate manifest sha256 mismatch.")
+                raise PitRuntimeError(
+                    "frozen_manifest_sha_mismatch",
+                    "Frozen candidate manifest sha256 mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_sha256": self.frozen_candidate_manifest_expected_sha256,
+                        "actual_sha256": actual_sha256,
+                    },
+                )
             payload = self._load_frozen_candidate_manifest_file(
                 self.frozen_candidate_manifest_path
             )
             meta = payload.get("meta", {})
             if tuple(meta.get("manifest_key", ())) != manifest_key:
-                raise ValueError("Frozen candidate manifest key mismatch.")
+                raise PitRuntimeError(
+                    "frozen_manifest_key_mismatch",
+                    "Frozen candidate manifest key mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_manifest_key": list(manifest_key),
+                        "actual_manifest_key": list(meta.get("manifest_key", ())),
+                    },
+                )
             manifest = payload.get("manifest", {})
             manifest_dates = sorted(str(key) for key in manifest.keys())
             if manifest_dates != signal_dates:
-                raise ValueError("Frozen candidate manifest signal-date set mismatch.")
+                sample_size = 3
+                raise PitRuntimeError(
+                    "frozen_manifest_signal_date_set_mismatch",
+                    "Frozen candidate manifest signal-date set mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_signal_dates_count": len(signal_dates),
+                        "actual_signal_dates_count": len(manifest_dates),
+                        "expected_signal_dates_head": signal_dates[:sample_size],
+                        "expected_signal_dates_tail": signal_dates[-sample_size:],
+                        "actual_signal_dates_head": manifest_dates[:sample_size],
+                        "actual_signal_dates_tail": manifest_dates[-sample_size:],
+                    },
+                )
             self._frozen_tier_candidate_manifest = manifest
             self._frozen_tier_candidate_manifest_key = manifest_key
             self._strict_frozen_candidate_manifest_required = True
@@ -1058,8 +1189,16 @@ class DataHandler:
             min_tier12_coverage_ratio=min_tier12_coverage_ratio,
         )
         if payload is None and self._strict_frozen_candidate_manifest_required:
-            raise ValueError(
-                f"Frozen candidate manifest miss for {self._normalize_date_key(date)}"
+            normalized_date = self._normalize_date_key(date)
+            raise PitRuntimeError(
+                "frozen_manifest_miss",
+                f"Frozen candidate manifest miss for {normalized_date}",
+                stage="candidate_payload_lookup",
+                details={
+                    "date": normalized_date,
+                    "manifest_mode": self.frozen_candidate_manifest_mode,
+                    "manifest_key": list(self._frozen_tier_candidate_manifest_key or ()),
+                },
             )
         if payload is None:
             payload = self._get_lazy_tier_candidate_payload(

@@ -11,6 +11,11 @@ import pandas as pd
 import numpy as np
 import uuid
 
+try:
+    from ...data_handler import build_pit_failure_record
+except ImportError:  # pragma: no cover
+    from data_handler import build_pit_failure_record  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 class Position:
@@ -66,6 +71,7 @@ class MagicSplitStrategy(Strategy):
         tier_hysteresis_mode="legacy",
         candidate_lookup_error_policy="raise",
         buy_commission_rate=0.00015,
+        enable_candidate_rank_trace=False,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -92,6 +98,7 @@ class MagicSplitStrategy(Strategy):
                 f"{candidate_lookup_error_policy!r}. supported=[raise, skip]"
             )
         self.buy_commission_rate = float(buy_commission_rate)
+        self.enable_candidate_rank_trace = bool(enable_candidate_rank_trace)
         self.strict_hysteresis_enabled = (
             self.tier_hysteresis_mode == "strict_hysteresis_v1"
             and self.candidate_source_mode in {"tier", "hybrid_transition"}
@@ -109,8 +116,11 @@ class MagicSplitStrategy(Strategy):
             "selected_count": 0,
             "strategy_candidate_mode": self._resolve_candidate_mode(),
         }
+        self.candidate_rank_history = []
         self.candidate_lookup_error_count = 0
         self.first_candidate_lookup_error = None
+        self.last_candidate_lookup_error = None
+        self.candidate_lookup_error_counts_by_code = {}
 
     @classmethod
     def _normalize_additional_buy_priority(cls, value):
@@ -147,6 +157,8 @@ class MagicSplitStrategy(Strategy):
         active_candidate_count=0,
         ranked_candidate_count=0,
         selected_count=0,
+        pit_failure_code=None,
+        pit_failure_stage=None,
     ):
         return {
             "signal_date": signal_date,
@@ -156,7 +168,42 @@ class MagicSplitStrategy(Strategy):
             "ranked_candidate_count": int(ranked_candidate_count),
             "selected_count": int(selected_count),
             "strategy_candidate_mode": strategy_candidate_mode,
+            "pit_failure_code": pit_failure_code,
+            "pit_failure_stage": pit_failure_stage,
         }
+
+    def _record_candidate_lookup_error(self, failure_record):
+        if not failure_record:
+            return
+        self.candidate_lookup_error_count += 1
+        if self.first_candidate_lookup_error is None:
+            self.first_candidate_lookup_error = dict(failure_record)
+        self.last_candidate_lookup_error = dict(failure_record)
+        code = str(failure_record.get("code") or "unknown_candidate_lookup_error")
+        self.candidate_lookup_error_counts_by_code[code] = (
+            int(self.candidate_lookup_error_counts_by_code.get(code, 0)) + 1
+        )
+
+    @staticmethod
+    def _build_candidate_rank_rows(current_date, signal_date, sorted_candidates):
+        trade_date_str = pd.to_datetime(current_date).strftime("%Y-%m-%d")
+        signal_date_str = pd.to_datetime(signal_date).strftime("%Y-%m-%d")
+        rows = []
+        for rank, candidate in enumerate(sorted_candidates, start=1):
+            rows.append(
+                {
+                    "trade_date": trade_date_str,
+                    "signal_date": signal_date_str,
+                    "rank": int(rank),
+                    "ticker": str(candidate["ticker"]),
+                    "entry_composite_score_q": int(candidate["entry_composite_score_q"]),
+                    "flow_score_q": int(candidate["flow_score_q"]),
+                    "atr_score_q": int(candidate["atr_score_q"]),
+                    "market_cap_q": int(candidate["market_cap_q"]),
+                    "atr_14_ratio": float(candidate["atr_14_ratio"]),
+                }
+            )
+        return rows
 
     @staticmethod
     def _coerce_tier_value(tier_info):
@@ -286,29 +333,40 @@ class MagicSplitStrategy(Strategy):
                             f"Fallback: Tier 1 (0) -> Tier 2 ({raw_candidate_count}){blocked_suffix}"
                         )
                 except Exception as exc:
+                    failure_record = build_pit_failure_record(
+                        exc,
+                        trade_date=current_date,
+                        signal_date=signal_date,
+                        fallback_code="candidate_lookup_runtime_error",
+                        fallback_stage="candidate_lookup",
+                    )
+                    self._record_candidate_lookup_error(failure_record)
+                    self.last_entry_context = self._build_entry_context(
+                        signal_date,
+                        "CANDIDATE_LOOKUP_ERROR",
+                        strategy_candidate_mode=resolved_mode,
+                        pit_failure_code=(failure_record or {}).get("code"),
+                        pit_failure_stage=(failure_record or {}).get("stage"),
+                    )
                     if self.candidate_lookup_error_policy == "raise":
                         logger.exception(
-                            "Tier candidate lookup failed (%s). "
-                            "Aborting run by candidate_lookup_error_policy=raise.",
-                            type(exc).__name__,
+                            "[PITCandidateFailure] code=%s stage=%s policy=raise trade_date=%s signal_date=%s "
+                            "message=%s",
+                            (failure_record or {}).get("code"),
+                            (failure_record or {}).get("stage"),
+                            (failure_record or {}).get("trade_date"),
+                            (failure_record or {}).get("signal_date"),
+                            (failure_record or {}).get("message"),
                         )
                         raise
-                    self.candidate_lookup_error_count += 1
-                    if self.first_candidate_lookup_error is None:
-                        self.first_candidate_lookup_error = {
-                            "trade_date": str(pd.to_datetime(current_date).date()),
-                            "signal_date": (
-                                str(pd.to_datetime(signal_date).date())
-                                if signal_date is not None
-                                else None
-                            ),
-                            "exception_type": type(exc).__name__,
-                            "message": str(exc)[:240],
-                        }
                     logger.warning(
-                        "Tier candidate lookup failed (%s). "
-                        "Returning empty candidate set by candidate_lookup_error_policy=skip.",
-                        type(exc).__name__,
+                        "[PITCandidateFailure] code=%s stage=%s policy=skip trade_date=%s signal_date=%s "
+                        "message=%s. Returning empty candidate set.",
+                        (failure_record or {}).get("code"),
+                        (failure_record or {}).get("stage"),
+                        (failure_record or {}).get("trade_date"),
+                        (failure_record or {}).get("signal_date"),
+                        (failure_record or {}).get("message"),
                     )
                     candidate_codes = []
                     raw_candidate_count = 0
@@ -318,6 +376,12 @@ class MagicSplitStrategy(Strategy):
                     used_tier,
                     strategy_candidate_mode=resolved_mode,
                     raw_candidate_count=raw_candidate_count,
+                    pit_failure_code=(self.last_candidate_lookup_error or {}).get("code")
+                    if used_tier == "CANDIDATE_LOOKUP_ERROR"
+                    else None,
+                    pit_failure_stage=(self.last_candidate_lookup_error or {}).get("stage")
+                    if used_tier == "CANDIDATE_LOOKUP_ERROR"
+                    else None,
                 )
             else:
                 logger.warning("get_candidates_with_tier_fallback missing. Returning empty candidate set.")
@@ -397,11 +461,13 @@ class MagicSplitStrategy(Strategy):
                     .rank(method="average", pct=True, ascending=True)
                     .fillna(0.0)
                 )
+                ranked_df["flow_score_q"] = (ranked_df["flow_score"] * 10000.0).round().astype(int)
                 ranked_df["atr_score"] = (
                     pd.to_numeric(ranked_df["atr_14_ratio"], errors="coerce")
                     .rank(method="average", pct=True, ascending=True)
                     .fillna(0.0)
                 )
+                ranked_df["atr_score_q"] = (ranked_df["atr_score"] * 10000.0).round().astype(int)
                 ranked_df["entry_composite_score"] = (
                     (0.50 * ranked_df["cheap_effective"])
                     + (0.30 * ranked_df["flow_score"])
@@ -416,6 +482,10 @@ class MagicSplitStrategy(Strategy):
                     inplace=True,
                 )
                 sorted_candidates = ranked_df.to_dict("records")
+                if self.enable_candidate_rank_trace:
+                    self.candidate_rank_history.extend(
+                        self._build_candidate_rank_rows(current_date, signal_date, sorted_candidates)
+                    )
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
             temp_cash = float(portfolio.cash)
@@ -565,6 +635,8 @@ class MagicSplitStrategy(Strategy):
         return {
             "error_count": int(self.candidate_lookup_error_count),
             "first_error": self.first_candidate_lookup_error,
+            "last_error": self.last_candidate_lookup_error,
+            "failure_counts": dict(sorted(self.candidate_lookup_error_counts_by_code.items())),
             "policy": self.candidate_lookup_error_policy,
         }
 

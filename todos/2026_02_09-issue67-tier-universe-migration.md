@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. 남은 핵심은 candidate order direct validation과 PIT 실패/로그 표준화입니다.
-- Next action: CPU/GPU candidate order를 직접 비교하는 증적을 추가하고, strict frozen manifest 산출물과 PIT failure/log를 운영 문서에 연결합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. candidate order direct validation artifact와 PIT 실패/로그 표준화도 반영됐고, 남은 핵심은 live evidence 연결입니다.
+- Next action: candidate order artifact를 실제 parity/certification run에 연결하고, strict frozen manifest / PIT failure payload를 runbook에 고정합니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -27,8 +27,8 @@
 - [x] runtime candidate gate parity
 - [x] CPU lazy run-local candidate cache
 - [x] opt-in strict frozen PIT candidate manifest (entry candidate payload only)
-- [ ] CPU/GPU candidate order direct validation
-- [ ] PIT 실패 시 예외/로그 표준화
+- [x] CPU/GPU candidate order direct validation artifact
+- [x] PIT 실패 시 예외/로그 표준화
 
 ## 4. Key Evidence
 - 현재 확인된 것:
@@ -38,9 +38,8 @@
   - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
   - CPU `DataHandler`가 동일 gate/date 요청에 대해 lazy run-local cache를 재사용
 - 아직 필요한 것:
-  - CPU/GPU candidate order direct validation artifact
-  - PIT 실패 시 예외/로그 표준화
   - strict frozen manifest artifact를 parity/certification runbook에 연결
+  - candidate order artifact의 live evidence 수집
 
 ## 5. Reading Guide
 - 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
@@ -166,6 +165,62 @@
     - 현재 HW(Ryzen 7 1700 / 32GB / RTX 5060)에서 startup 비용은 certification/parity 전용으로는 감수 가능
     - throughput 개선책은 아니며, default/general run을 lazy cache로 유지한 판단이 합리적
     - replay artifact integrity는 SHA/date-set 선검증 추가 후 stop-the-line 해소
+- 업데이트(2026-03-07, candidate order direct validation artifact):
+  - 구현:
+    - `src/backtest/cpu/strategy.py`
+      - `enable_candidate_rank_trace` opt-in 추가
+      - `candidate_rank_history`는 parity/certification run에서만 수집
+      - CPU ranking 결과(`entry_composite_score_q`, `flow_score_q`, `atr_score_q`, `market_cap_q`, `atr_14_ratio`)를 trade/signal date + rank 기준으로 기록
+    - `src/backtest/gpu/engine.py`
+      - parity/debug run에서 최종 ranked candidate order를 `[GPU_CANDIDATE_RANK]` 라인으로 출력
+      - strict single-sim re-rank 이후의 최종 순서를 그대로 기록해 CPU semantics와 비교 가능하게 정리
+    - `src/parity_sell_event_dump.py`
+      - CPU/GPU candidate rank row 수집/파싱/페어링 추가
+      - `candidate_order_pairs`, `candidate_order_mismatched_pairs`, `candidate_order_zero_mismatch`를 payload에 포함
+      - 주의: 아직 `#56` decision-level gate에는 연결하지 않고 `#67` artifact로만 유지
+  - 검증:
+    - `tests/test_cpu_strategy_entry_context.py`
+      - CPU strategy가 ranked candidate trace를 기록하는지 확인
+    - `tests/test_parity_sell_event_dump.py`
+      - GPU candidate rank marker parser
+      - candidate order match / mismatch payload
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump tests.test_main_backtest_artifact_mode tests.test_gpu_candidate_payload_builder`
+      - 결과: `77 tests OK`
+  - 범위 한정:
+    - unit/integration 수준 artifact는 구현됐지만, real parity/certification run artifact 수집은 다음 단계로 남음
+    - CPU candidate rank trace는 일반 run 기본값이 아니라 opt-in parity/certification 경로에서만 활성
+- 업데이트(2026-03-07, PIT failure/log standardization):
+  - 구현:
+    - `src/data_handler.py`
+      - `PitRuntimeError(code, stage, details)` 추가
+      - `PointInTimeViolation`을 structured PIT 예외로 승격
+      - coverage gate / strict frozen manifest prepare / replay / miss 실패를 모두 `code + stage + details`로 표준화
+      - `build_pit_failure_record()` 추가
+    - `src/backtest/cpu/strategy.py`
+      - candidate lookup 실패 시 `first_error`, `last_error`, `failure_counts`를 code 기준으로 누적
+      - `last_entry_context`에 `pit_failure_code`, `pit_failure_stage` 저장
+      - 로그를 `[PITCandidateFailure] code=... stage=... policy=...` 형식으로 통일
+    - `src/backtest/cpu/backtester.py`
+      - `run_metrics`에 `pit_failure_days_by_code`, `pit_failure_days_by_stage` 추가
+    - `src/main_backtest.py`
+      - structured PIT 예외를 잡으면 `error_type`, `pit_failure` payload를 response에 포함
+      - `logger.exception`도 동일 `code/stage/details` 형식으로 남김
+      - 실패 run도 `run_manifest.json(status=failed)`를 남겨 certification evidence가 사라지지 않게 보강
+  - 검증:
+    - `tests/test_data_handler_tier.py`
+      - coverage gate / strict manifest miss / replay strict expected SHA / signal-date mismatch가 `PitRuntimeError`와 code로 검증됨
+    - `tests/test_cpu_strategy_entry_context.py`
+      - skip/raise 모두 `candidate_lookup_runtime_error` code와 summary 집계 확인
+    - `tests/test_backtester_entry_metrics.py`
+      - `pit_failure_days_by_code`, `pit_failure_days_by_stage` 집계 확인
+    - `tests/test_main_backtest_artifact_mode.py`
+      - structured PIT failure response 확인
+      - 실패 시 `run_manifest(status=failed)` 저장 확인
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump tests.test_main_backtest_artifact_mode tests.test_gpu_candidate_payload_builder`
+      - 결과: `78 tests OK`
+  - 범위 한정:
+    - GPU/CPU hot loop 계산식은 건드리지 않았고, failure path와 artifact 직렬화만 구조화
+    - real parity/certification run artifact 수집은 아직 별도 단계로 남음
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `DataHandler.get_pit_universe_codes_as_of()` 추가: `TickerUniverseSnapshot latest(as-of)` 우선, empty 시 `TickerUniverseHistory active(as-of)` fallback

@@ -100,6 +100,8 @@ class BacktestEngine:
             "active_candidate_count_sum": 0,
             "ranked_candidate_count_sum": 0,
             "selected_signal_count_sum": 0,
+            "pit_failure_days_by_code": {},
+            "pit_failure_days_by_stage": {},
         }
 
         debug_ticker = self.debug_ticker
@@ -177,6 +179,16 @@ class BacktestEngine:
                     entry_stats["no_signal_date_days"] += 1
                 elif tier_source.startswith("CANDIDATE_LOOKUP_ERROR"):
                     entry_stats["lookup_error_days"] += 1
+                    failure_code = str(entry_context.get("pit_failure_code") or "").strip()
+                    failure_stage = str(entry_context.get("pit_failure_stage") or "").strip()
+                    if failure_code:
+                        entry_stats["pit_failure_days_by_code"][failure_code] = (
+                            int(entry_stats["pit_failure_days_by_code"].get(failure_code, 0)) + 1
+                        )
+                    if failure_stage:
+                        entry_stats["pit_failure_days_by_stage"][failure_stage] = (
+                            int(entry_stats["pit_failure_days_by_stage"].get(failure_stage, 0)) + 1
+                        )
                 elif tier_source.startswith("CANDIDATE_SOURCE_MISSING"):
                     entry_stats["source_missing_days"] += 1
                 elif tier_source.startswith("NO_AVAILABLE_SLOTS"):
@@ -359,6 +371,8 @@ class BacktestEngine:
             "avg_active_candidates": round(avg_active_candidates, 2),
             "avg_ranked_candidates": round(avg_ranked_candidates, 2),
             "avg_selected_signals": round(avg_selected_signals, 2),
+            "pit_failure_days_by_code": dict(sorted(entry_stats["pit_failure_days_by_code"].items())),
+            "pit_failure_days_by_stage": dict(sorted(entry_stats["pit_failure_days_by_stage"].items())),
         }
         setattr(self.portfolio, "run_metrics", self.last_run_metrics)
         self.logger.info("[EntryMetrics] %s", self.last_run_metrics)
