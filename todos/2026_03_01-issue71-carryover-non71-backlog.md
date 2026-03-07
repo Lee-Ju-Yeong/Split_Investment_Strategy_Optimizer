@@ -10,6 +10,9 @@
 - [ ] P0 테이블 DDL/인덱스 잔여 확정 항목 정리
 - [ ] 수집 배치 엔트리(`pipeline_batch`) 일/주/월 운영 시나리오 확장
 - [ ] `MarketCapDaily` 적재 시 Common Stock only 제외 규칙 고정(ETF/ETN/ELW/SPAC 제외)
+- [ ] `MarketCapDaily` gap-audit/checkpoint 또는 replay command 추가
+  - 목표: `MIN/MAX(date)`만으로 놓치는 중간 hole 검출
+  - 산출물: coverage summary 또는 재실행 대상 window 추출
 - [ ] 거래정지/비정상 거래일 파생 플래그(`halt`, `zero-volume`) 정책 정의
 - [ ] (선택) `FundamentalDaily` 병행 수집 여부 결정 (`get_market_fundamental(date)`)
 - [ ] `SectorClassificationHistory` 스냅샷 + SCD Type2 적재 워커 추가
@@ -18,6 +21,7 @@
 ## 2) Tier/Ranking 고도화 및 연구 트랙
 - [ ] Tier v2 read-only shadow 실험 스크립트/리포트 파이프라인 정리
 - [ ] 공매도 랭킹 반영(`shadow -> gated -> default`, 런타임 재조인 금지)
+- [ ] `ShortSellingDaily` publication lag 보정 이후 `sbv_ratio` shadow/backfill 재검증
 - [ ] `DailyStockTier` 계산 경로의 shadow 결과 검증(분포/이동률/안정성)
 - [ ] MVP 파생변수 8~10개 `DailyStockTier` 저장
 - [ ] Tier 행동 규칙 반영 정리(Tier1=신규, Tier2=추매 가능, Tier3=추매 유보)

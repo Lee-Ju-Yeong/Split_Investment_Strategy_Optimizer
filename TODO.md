@@ -19,6 +19,8 @@
   - [x] 2026-02-28 2차 의사결정: `flow20_mcap` 임계치, Tier3 조합 규칙, 랭킹축, raw/adjusted 지표 기준 확정
   - [ ] 브리프 참고: `docs/operations/2026-02-28-tier-derived-features-decision-brief.md`
 - [ ] 이슈 #71 범위 외 후속 백로그 분리 문서: `todos/2026_03_01-issue71-carryover-non71-backlog.md`
+- [ ] 공매도 공시 시차(PIT lag) 검증/보정 메모(2026-03-07): `todos/2026_03_07-short-selling-publication-lag-pit.md`
+- [ ] 이슈 #72 Ticker Continuity & Position Inheritance: `todos/2026_02_09-issue72-ticker-continuity-position-inheritance.md`
 - [ ] 멀티에이전트 숙의 메모(성능/안정성 재검토, 2026-03-06): `todos/2026_03_06-multi-agent-performance-stability-review.md`
 - [ ] GPU-native WFO v2 연구 트랙 초안(2026-03-06): `todos/2026_03_06-gpu-native-wfo-v2-design.md`
 - [ ] Hybrid release gate board(2026-03-06): `docs/operations/2026-03-06-hybrid-release-gate-board.md`
@@ -88,6 +90,10 @@
     - `DailyStockTier`: `rows_total=1,329,758`, `tickers_total=2,721`, `min_date=2024-01-02`, `max_date=2026-02-06`
     - `CalculatedIndicators`: `rows_total=14,748,703`, `tickers_total=4,792`, `min_date=1995-05-08`, `max_date=2026-02-06`
     - `duplicates=0`, `future_rows=0` (All tables ok)
+- [ ] `ShortSellingDaily` 공시 시차(PIT lag) 검증 및 `DailyStockTier` 반영 보정
+  - 상세 메모: `todos/2026_03_07-short-selling-publication-lag-pit.md`
+  - 배경: 수집기는 `lag_trading_days`를 적용하지만 Tier batch는 `ShortSellingDaily.date`를 same-date join으로 `sbv_ratio`에 반영 중
+  - 초안 범위: `date` 의미(거래일 vs 공시일) 고정, `publication_lag_trading_days` 정책 도입, `D vs D+lag` 회귀 테스트, backfill/recompute 계획 수립
 
 ### P1 (실행 경로/운영 안정화)
 - [ ] 데이터 플로우 의사결정(2026-02-09): 최종 `A안(KRX PIT + DailyStockTier)`로 전환
@@ -134,6 +140,10 @@
   - [ ] Optuna run manifest 저장(`config hash`, `data hash`, `env fingerprint`, `git sha`)
   - [ ] mode 전환(`hybrid_transition` -> `tier`) 시 study 분리 강제(혼합 비교 금지)
   - [ ] `docs/database/schema.md` 및 `TODO.md` 동기화
+- [ ] Ticker Continuity & Position Inheritance (이슈 #72)
+  - 상세 메모: `todos/2026_02_09-issue72-ticker-continuity-position-inheritance.md`
+  - 목적: 합병/분할/지주사 전환/티커 변경 시 포지션, Tier, 유니버스 continuity 확보
+  - 초안 범위: 대표 케이스 샘플링, `TickerAncestry` 스키마, CPU/GPU carryover acceptance fixture, exchange-ratio 보정 규칙 정의
 - [ ] `DataHandler` PIT 조인 확장 + `tier=1 -> tier<=2` fallback 조회 적용 (이슈 #67): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67
   - [x] 후보군 조회 정책 플래그 도입: `weekly | tier | hybrid_transition`
   - [x] `tier=1` 우선, 빈 경우 `tier<=2` fallback 규칙을 CPU/GPU 동일 로직으로 고정

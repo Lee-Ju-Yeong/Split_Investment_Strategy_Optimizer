@@ -109,3 +109,19 @@
   - 문서/설정 예시(`legacy` 모드 표기)
 - 산출물:
   - 제거 PR + 롤백 메모 + 운영 반영 기록
+
+## 9. 2026-03-07 후속 체크리스트 초안 (retained wrapper contract)
+- [ ] retained entrypoint wrapper drift 재점검
+  - `src.pipeline_batch.py`
+  - `src.ohlcv_batch.py`
+  - `src.ticker_universe_batch.py`
+- [ ] wrapper는 thin forwarder만 허용하도록 기준 명문화
+  - canonical 구현 모듈만 import
+  - CLI/help/argparse는 canonical과 동일 동작 유지
+- [ ] real entrypoint regression test 보강
+  - `python -m src.pipeline_batch --help`
+  - `python -m src.ohlcv_batch --help`
+  - wrapper import/export뿐 아니라 canonical delegation까지 검증
+- [ ] `src.pipeline_batch.py`와 `src.pipeline.batch`의 SSOT 위치 재확정
+  - 테스트 경로와 운영 경로가 다른 파일을 보지 않도록 정리
+- [ ] thin wrapper 유지 항목은 삭제 대상이 아니라 drift 방지 대상으로 분류 업데이트
