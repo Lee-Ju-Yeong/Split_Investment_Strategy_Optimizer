@@ -893,6 +893,20 @@ class TestParitySellEventDump(unittest.TestCase):
             "results/frozen_manifest.json",
         )
 
+    def test_collect_trade_event_parity_report_rejects_legacy_candidate_policy(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            collect_trade_event_parity_report(
+                config={"execution_params": {}, "strategy_params": {}, "database": {}},
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                initial_cash=1_000_000.0,
+                params={"max_stocks": 10},
+                candidate_source_mode="weekly",
+                use_weekly_alpha_gate=False,
+                parity_mode="strict",
+                universe_mode="strict_pit",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

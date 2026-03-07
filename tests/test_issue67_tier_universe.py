@@ -91,21 +91,9 @@ class TestIssue67StrategyModes(unittest.TestCase):
             "backtest_end_date": "2024-01-31",
         }
 
-    def test_strategy_mode_weekly_is_forced_to_tier_path(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="weekly")
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["A", "B"], "TIER_1")
-        self.data_handler.get_stock_row_as_of.return_value = None
-
-        strategy.generate_new_entry_signals(
-            pd.Timestamp("2024-01-02"),
-            self.portfolio,
-            self.data_handler,
-            self.trading_dates,
-            1,
-        )
-
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
-        self.data_handler.get_filtered_stock_codes.assert_not_called()
+    def test_strategy_rejects_weekly_candidate_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            MagicSplitStrategy(**self.base_config, candidate_source_mode="weekly")
 
     def test_strategy_mode_tier(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
@@ -159,25 +147,21 @@ class TestIssue67StrategyModes(unittest.TestCase):
         self.assertEqual(kwargs["min_liquidity_20d_avg_value"], 123)
         self.assertAlmostEqual(kwargs["min_tier12_coverage_ratio"], 0.45, places=6)
 
-    def test_strategy_mode_hybrid_is_forced_to_tier_path(self):
-        strategy = MagicSplitStrategy(
-            **self.base_config,
-            candidate_source_mode="hybrid_transition",
-            use_weekly_alpha_gate=True,
-        )
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (["A", "B"], "TIER_1")
-        self.data_handler.get_stock_row_as_of.return_value = None
+    def test_strategy_rejects_hybrid_candidate_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            MagicSplitStrategy(
+                **self.base_config,
+                candidate_source_mode="hybrid_transition",
+                use_weekly_alpha_gate=True,
+            )
 
-        strategy.generate_new_entry_signals(
-            pd.Timestamp("2024-01-02"),
-            self.portfolio,
-            self.data_handler,
-            self.trading_dates,
-            1,
-        )
-
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
-        self.data_handler.get_filtered_stock_codes.assert_not_called()
+    def test_strategy_rejects_weekly_alpha_gate_even_with_tier_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            MagicSplitStrategy(
+                **self.base_config,
+                candidate_source_mode="tier",
+                use_weekly_alpha_gate=True,
+            )
 
     def test_strategy_mode_tier_returns_empty_on_tier_exception(self):
         strategy = MagicSplitStrategy(
@@ -213,24 +197,9 @@ class TestIssue67StrategyModes(unittest.TestCase):
                 1,
             )
 
-    def test_strategy_mode_invalid_is_forced_to_tier_path(self):
-        strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="invalid_mode")
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
-            ["A", "B"],
-            "TIER_1_SNAPSHOT_ASOF",
-        )
-        self.data_handler.get_stock_row_as_of.return_value = None
-
-        strategy.generate_new_entry_signals(
-            pd.Timestamp("2024-01-02"),
-            self.portfolio,
-            self.data_handler,
-            self.trading_dates,
-            1,
-        )
-
-        self.data_handler.get_candidates_with_tier_fallback_pit_gated.assert_called_once()
-        self.data_handler.get_filtered_stock_codes.assert_not_called()
+    def test_strategy_rejects_invalid_candidate_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            MagicSplitStrategy(**self.base_config, candidate_source_mode="invalid_mode")
 
     def test_strategy_mode_tier_same_atr_uses_market_cap_then_ticker_tiebreak(self):
         strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")

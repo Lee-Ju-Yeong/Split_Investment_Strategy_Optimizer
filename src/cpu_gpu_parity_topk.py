@@ -37,6 +37,7 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
+from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
     preload_pit_universe_mask_to_tensor,
@@ -670,7 +671,9 @@ def main() -> None:
     exec_params["cooldown_period_days"] = config.get("strategy_params", {}).get("cooldown_period_days", 5)
     exec_params["candidate_source_mode"] = "tier"
     exec_params["parity_mode"] = str(args.parity_mode).strip().lower()
-    exec_params["tier_hysteresis_mode"] = config.get("strategy_params", {}).get("tier_hysteresis_mode", "legacy")
+    exec_params["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
+        config.get("strategy_params", {}).get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
     gpu_curves: list = []
     if exec_params["parity_mode"] == "strict":
         # Strict parity mode favors semantic equivalence over throughput.

@@ -57,7 +57,7 @@
 ## 7. 현재 미충족 항목
 - `#56` synthetic/research parity gate는 종결되었고, 실제 optimizer/WFO CSV가 생기면 spot revalidation만 남음
 - `#67` runtime PIT candidate policy는 live evidence까지 종결되었고, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact 증적을 확보함
-- `#97` strict-only cleanup 미완료
+- `#97` strict-only cleanup은 `tier_hysteresis_mode` strict-only까지만 확정됐고, candidate policy(`candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`)의 runtime shim 제거와 retained wrapper drift / approval gate / step 2 운영 관찰이 남음
 - release-safe / research-only example 분리는 반영됐지만, 운영 승인 판단은 여전히 별도 증적이 필요
 
 ## 8. 현재 예시 config 해석
@@ -65,7 +65,8 @@
 - 더 정확한 해석은:
   - 기본 strategy example은 `strict_pit + tier + strict_hysteresis_v1 + raise`
   - `cpu_certification_*`는 hybrid 기능 예시
-  - `optimistic_survivor` / `legacy`는 연구/비승격 트랙 예시
+  - `optimistic_survivor`는 연구/비승격 트랙 예시
+  - `tier_hysteresis_mode=legacy`, `candidate_source_mode!=tier`, `use_weekly_alpha_gate=true`는 strict-only spec상 미지원
 - 즉 example config만으로 운영 승인 결론을 내리면 안 되고, 여전히 parity/PIT/future reference 증적이 함께 있어야 한다.
 
 ## 9. TODO 해석 규칙

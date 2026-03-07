@@ -9,6 +9,8 @@ import cudf
 import cupy as cp
 import pandas as pd
 
+from ...candidate_runtime_policy import normalize_runtime_candidate_policy
+from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .data import (
     _collect_candidate_rank_metrics_asof,
     build_ranked_candidate_payload,
@@ -22,14 +24,6 @@ from .logic import (
     _process_sell_signals_gpu,
 )
 from .utils import _resolve_signal_date_for_gpu
-
-
-def _coerce_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
 
 
 def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
@@ -141,19 +135,16 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    requested_candidate_source_mode = str(
-        execution_params.get("candidate_source_mode", "tier")
-    ).strip()
-    if requested_candidate_source_mode != "tier":
-        print(
-            f"[Warning] candidate_source_mode='{requested_candidate_source_mode}' is deprecated. "
-            "Forcing 'tier' (A-path) for CPU/GPU parity."
-        )
-    candidate_source_mode = "tier"
+    candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
+        execution_params.get("candidate_source_mode", "tier"),
+        execution_params.get("use_weekly_alpha_gate", False),
+    )
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
-    tier_hysteresis_mode = str(execution_params.get("tier_hysteresis_mode", "legacy")).strip().lower()
-    strict_hysteresis_enabled = tier_hysteresis_mode == "strict_hysteresis_v1"
+    tier_hysteresis_mode = normalize_tier_hysteresis_mode(
+        execution_params.get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
+    strict_hysteresis_enabled = True
     entry_tier1_only = strict_hysteresis_enabled
     hold_max_tier = 2
     force_liquidate_tier3 = False
@@ -195,7 +186,10 @@ def run_magic_split_strategy_on_gpu(
             f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
             "Fallback to zeros enabled."
         )
-    print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
+    print(
+        "Data prepared for GPU backtest. "
+        f"Mode: {candidate_source_mode}, weekly_gate={use_weekly_alpha_gate}"
+    )
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
     progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
     run_start_ts = time.time()

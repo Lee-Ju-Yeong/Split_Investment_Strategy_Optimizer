@@ -30,8 +30,10 @@ from .backtest.cpu.backtester import BacktestEngine
 from .backtest.cpu.execution import BasicExecutionHandler
 from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
+from .candidate_runtime_policy import normalize_runtime_candidate_policy
 from .config_loader import load_config
 from .data_handler import DataHandler, build_pit_failure_record
+from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
     build_empty_weekly_filtered_gpu,
@@ -201,11 +203,17 @@ def _build_exec_params(
 ) -> Dict[str, Any]:
     strategy_params = dict(config["strategy_params"])
     execution_params = dict(config["execution_params"])
+    normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
+        candidate_source_mode,
+        use_weekly_alpha_gate,
+    )
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
-    execution_params["candidate_source_mode"] = candidate_source_mode
-    execution_params["use_weekly_alpha_gate"] = bool(use_weekly_alpha_gate)
+    execution_params["candidate_source_mode"] = normalized_mode
+    execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
     execution_params["parity_mode"] = str(parity_mode).strip().lower()
-    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
+    execution_params["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
+        strategy_params.get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
     return execution_params
 
 
@@ -1310,9 +1318,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--params-csv", default=None)
     parser.add_argument("--param-id", type=int, default=None, help="Optional param_id filter in CSV")
-    parser.add_argument("--candidate-source-mode", choices=["weekly", "hybrid_transition", "tier"], default="tier")
+    parser.add_argument("--candidate-source-mode", choices=["tier"], default="tier")
     parser.add_argument("--parity-mode", choices=["fast", "strict"], default="strict")
-    parser.add_argument("--use-weekly-alpha-gate", action="store_true", default=False)
     parser.add_argument("--out", required=True, help="Output JSON path")
     parser.add_argument("--gpu-log-out", default=None, help="Optional raw GPU debug log path")
     return parser
@@ -1337,6 +1344,10 @@ def collect_trade_event_parity_report(
     parity_mode: str,
     universe_mode: str,
 ) -> Dict[str, Any]:
+    candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
+        candidate_source_mode,
+        use_weekly_alpha_gate,
+    )
     cpu_artifacts: Dict[str, Any] = {}
     try:
         cpu_sell_events, cpu_buy_events, cpu_daily_snapshots, cpu_position_snapshots, cpu_candidate_rank_rows, cpu_artifacts = (
@@ -1550,7 +1561,7 @@ def main() -> None:
         initial_cash=initial_cash,
         params=params,
         candidate_source_mode=args.candidate_source_mode,
-        use_weekly_alpha_gate=args.use_weekly_alpha_gate,
+        use_weekly_alpha_gate=False,
         parity_mode=args.parity_mode,
         universe_mode=universe_mode,
     )
