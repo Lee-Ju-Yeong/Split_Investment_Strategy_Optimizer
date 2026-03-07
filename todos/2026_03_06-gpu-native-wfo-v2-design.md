@@ -1,12 +1,34 @@
-# design: GPU-native WFO v2 연구 트랙 초안
+# GPU-native WFO v2 Design Note
 
-> 작성일: 2026-03-06
-> 상태: Draft
-> 성격: Research Track
-> 목적: `CPU=SSOT` 전제를 그대로 유지한 채, 별도 엔진으로 `GPU-native WFO v2`를 설계하고 승격 기준을 정의한다.
-> 주의: 이 문서는 기존 `#56`, `#67`, `#98`을 대체하지 않는다. 현재 운영 공식 경로는 여전히 CPU/hybrid 기준이다.
+> Type: `research`
+> Status: `draft`
+> Priority: `P2`
+> Last updated: 2026-03-07
+> Related issues: `#56`, `#67`, `#98`
+> Gate status: `shadow only`
 
-## 0. 이 문서가 답하려는 질문
+## 1. One-Page Summary
+- What: CPU를 최대한 흉내 내는 GPU 경로가 아니라, WFO 자체를 GPU에 맞게 다시 설계하는 별도 연구 문서입니다.
+- Why: 진짜 속도 개선은 fold별 재로딩 제거, ranked candidate precompute, device-side metric reduction 같은 구조적 변화에서 나올 가능성이 큽니다.
+- Current status: 설계 초안 단계입니다. 공식 경로 승격 대상이 아닙니다.
+- Next action: `fold manifest`, `super-range tensor cache`, `shadow acceptance` 같은 연구 전제부터 고정합니다.
+
+## 2. Important Warning
+- 이 문서는 현재 공식 경로를 대체하지 않습니다.
+- official path는 여전히 CPU/hybrid 기준입니다.
+- `#56 -> #67 -> #97 -> #98` 선행 조건 없이 승격하지 않습니다.
+
+## 3. What This Note Is For
+- GPU-native WFO가 실제로 가치가 있는지 판단
+- 어떤 검증 계약이 CPU parity 대신 필요한지 정리
+- Research -> Shadow -> Official 승격 단계를 설계
+
+## 4. Reading Guide
+- 지금 공식 경로를 고치는 중이라면 이 문서는 바로 읽지 않아도 됩니다.
+- `#56/#67/#98`가 정리된 뒤 “별도 엔진 프로젝트”를 검토할 때 읽으면 됩니다.
+
+## 5. Detailed Design Notes
+### 0. 이 문서가 답하려는 질문
 - 질문 1: `CPU에 최대한 맞추는 GPU`가 아니라, `GPU에 맞게 처음부터 다시 설계한 WFO 엔진`이 필요한가?
 - 질문 2: 그 엔진이 지금 하드웨어(`Ryzen 7 1700`, `32GB RAM`, `RTX 5060`)에서 실제로 더 빠를 가능성이 있는가?
 - 질문 3: CPU parity 없이도 믿을 수 있는 결과를 내는지 무엇으로 검증할 것인가?

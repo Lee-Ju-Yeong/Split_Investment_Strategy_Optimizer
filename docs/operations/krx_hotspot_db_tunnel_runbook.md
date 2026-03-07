@@ -152,6 +152,10 @@ SELECT MIN(date), MAX(date) FROM ShortSellingDaily;
 관측 시점:
 - 최초 차단 확인 시점(레포 증적 기준): `2026-02-11` (`TODO.md`의 `external_blocked` 운영 결정 기록)
 - 오늘 재시도 시점: `2026-02-28 18:12:54 KST` (`market_cap`, `short_selling` probe 모두 HTTP 403 재확인)
+- 최신 재시도 시점: `2026-03-07 11:26:39 KST`
+  - direct KRX probe: `market_cap http=403`, `short_selling http=403`
+  - pykrx 실호출(`rapids-env`): `get_market_ticker_list(20260206/20260224/20260306)=0`, `get_market_cap/get_market_fundamental -> KeyError(empty columns)`, `get_shorting_status_by_date(..., 005930)=shape(0, 0)`, `get_stock_major_changes(005930/000660/035420)=shape(0, 0)`
+  - 판정: 서버 egress 기준 차단 미해제. public 문서에는 실 egress IP를 남기지 않고, 로컬 운영 로그에만 기록
 
 민감값을 제외하고 아래 항목만 이슈/로그에 남깁니다.
 

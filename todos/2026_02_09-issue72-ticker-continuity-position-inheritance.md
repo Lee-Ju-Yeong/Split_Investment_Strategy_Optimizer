@@ -1,64 +1,47 @@
 # Issue #72: Ticker Continuity & Position Inheritance
 
-## 1. 개요 (Background)
-현재 시스템은 '종목코드(Ticker)'를 독립적인 식별자로 취급합니다. 이로 인해 우리은행(000030) → 우리금융지주(316140)와 같이 기업 구조 개편으로 티커가 변경되는 경우, 백테스터는 이를 '기존 종목의 상장폐지'와 '새로운 종목의 상장'으로 인식하여 포지션이 단절되는 문제가 발생합니다.
+> Type: `implementation`
+> Status: `planned`
+> Priority: `P1`
+> Last updated: 2026-03-07
+> Related issues: `#72`, `#70`, `#67`
+> Gate status: `not started`
 
-## 2. 핵심 문제 (Core Problem)
-- **전략적 연속성 파괴**: 매직스플릿은 분할 매수 차수와 평단가 유지가 수익률의 핵심이나, 티커 변경 시 모든 상태가 리셋되어 시뮬레이션의 신뢰도가 훼손됨.
-- **데이터 불연속성**: 신규 티커 초기 단계에서 과거 이력 부재로 인해 유동성 Tier가 오판정(예: 신규 종목으로 간주되어 Tier 3 할당)될 리스크가 있음.
+## 1. Summary
+- What: 합병, 분할, 지주사 전환, 티커 변경이 있어도 포지션과 tier/universe 판단을 끊기지 않게 만드는 작업입니다.
+- Why: 지금은 ticker를 완전히 독립된 자산으로 보기 때문에, 실질적으로 같은 경제적 실체여도 포지션이 강제로 끊깁니다.
+- Current status: 문제 정의만 되어 있고, 실제 데이터 모델과 acceptance fixture는 아직 없습니다.
+- Next action: 대표 케이스를 수집하고 `TickerAncestry` 수준의 데이터 모델 초안을 고정합니다.
 
-## 3. 다각도 논의 필요 사항 (Multi-agent Discussion Points)
-*본 이슈의 해결 방안은 추후 **멀티 에이전트의 다각도 관점**에서 논의되어야 합니다.*
+## 2. Scope And Constraints
+- In scope:
+  - 대표 이벤트 샘플링
+  - continuity 데이터 모델 설계
+  - CPU/GPU acceptance fixture 정의
+- Out of scope:
+  - 모든 기업 이벤트의 자동 완전 추론
+  - 우선순위가 낮은 특수 케이스의 즉시 구현
+- Constraints:
+  - 포지션 연속성은 수량, 평단, tier 판단에 모두 영향을 줍니다.
+  - 단순 티커 치환이 아니라 exchange ratio 같은 수학적 보정 규칙이 필요할 수 있습니다.
 
-- **[Data Perspective] 계보 정의 및 추출**: `get_stock_major_changes` 데이터를 기반으로 합병, 분할, 지주사 전환 등 복잡한 기업 이벤트를 어디까지 '동일 경제적 실체'로 정의하고 자동 추출할 것인가?
-- **[Engine Perspective] 아키텍처 대응**: 
-    - CPU: `Portfolio` 내부의 티커 매핑 로직 도입 시 객체 참조 무결성 확보 방안.
-    - GPU: 텐서 구조에서 불연속적인 티커 데이터를 논리적으로 연결할 때 발생하는 성능 저하 및 메모리 레이아웃 설계.
-- **[Strategy Perspective] 수학적 정합성**: 단순 티커 변경이 아닌 '주식 교환' 발생 시, 교환 비율에 따른 수량/가격 보정 로직이 전략 수익률에 미치는 영향 분석.
+## 3. Current Plan
+- [ ] 대표 케이스 5~10개 수집
+  - 예: 티커 변경, 합병, 분할, 지주사 전환
+- [ ] continuity 데이터 모델 초안 작성
+  - 후보: `TickerAncestry`
+- [ ] 포지션 carryover acceptance fixture 설계
+  - CPU
+  - GPU
+- [ ] exchange ratio 보정 규칙 정의
+- [ ] tier / universe continuity 규칙 정의
 
-## 4. 관련 리소스 및 의존성
-- pykrx: `stock.get_stock_major_changes`
-- 관련 이슈: #70 (상폐 포함 PIT 유니버스) - 계보 데이터가 유니버스 히스토리에 통합되어야 함.
-- 운영 메모:
-  - `get_stock_major_changes` 원천은 현재 장기간 empty 응답 이슈가 있어, 자동 추출 경로는 `external_blocked` 가능성을 전제로 설계해야 함.
+## 4. Gate And Evidence
+- Acceptance criteria:
+  - continuity 적용 전후 차이를 설명할 샘플 fixture가 존재
+  - carryover 후에도 cash/quantity/avg price accounting이 깨지지 않음
+  - tier/universe continuity가 PIT 규칙을 위반하지 않음
 
-## 5. 할 일 (Initial Tasks)
-- [ ] 티커 변경 및 기업 구조 개편 대표 사례(우리은행, SK 등) 데이터 샘플링
-- [ ] **[설계 논의]** 멀티 에이전트 기반의 포지션 승계 로직 아키텍처 워크샵 수행
-- [ ] 계보 관리용 매핑 테이블(`TickerAncestry`) 스키마 설계
-
-## 6. 2026-03-07 보강 체크리스트 초안
-- [ ] `TODO.md` P1 항목으로 승격
-- [ ] continuity 적용 범위 고정
-  - 단순 사명 변경
-  - 티커 변경
-  - 합병/분할
-  - 주식교환/지주사 전환
-- [ ] 대표 사례 데이터셋 확보
-  - 우리은행/우리금융지주
-  - SK 계열 사례
-  - 최소 3개 이상 historical sample
-- [ ] `TickerAncestry` 스키마 초안 작성
-  - `ancestor_code`
-  - `descendant_code`
-  - `effective_date`
-  - `event_type`
-  - `exchange_ratio`
-  - `confidence/manual_override`
-- [ ] CPU carryover 규칙 정의
-  - 보유 수량 승계
-  - 평단가/차수 승계
-  - cooldown/inactivity 승계 여부
-- [ ] GPU carryover 규칙 정의
-  - ticker index remap 방식
-  - continuity mapping tensor 또는 lookup layer 설계
-- [ ] acceptance fixture 초안 작성
-  - rename-only 케이스
-  - exchange-ratio 케이스
-  - continuity 적용 전/후 equity curve 비교
-
-## 7. Acceptance Criteria (초안)
-- [ ] continuity 대상 이벤트에서 CPU/GPU가 동일한 승계 규칙을 사용한다.
-- [ ] continuity 적용 후 `ticker changed = forced liquidation + new listing` 식의 잘못된 해석을 제거한다.
-- [ ] representative fixture에서 position quantity / avg buy price / split order continuity가 유지된다.
-- [ ] source가 `external_blocked`일 때도 manual seed 또는 보조 테이블로 재현 가능한 경로를 남긴다.
+## 5. Notes
+- 이 문서는 아직 설계 초안입니다.
+- 실제 구현을 시작하기 전까지는 `대표 케이스`, `보정 규칙`, `acceptance fixture` 3가지를 먼저 확정해야 합니다.
