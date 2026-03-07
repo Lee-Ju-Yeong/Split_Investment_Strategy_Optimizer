@@ -424,5 +424,5 @@ fold manifest
 ## 17. 후속 문서/이슈 연결
 - `TODO.md`
 - `todos/2026_03_06-multi-agent-performance-stability-review.md`
-- `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`
+- `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md`
 - `todos/2026_02_17-issue98-gpu-throughput-refactor.md`

@@ -1,17 +1,17 @@
 # Issue #56: CPU/GPU Parity Release Gate
 
 > Type: `implementation`
-> Status: `closed (synthetic harness)`
+> Status: `done (synthetic harness)`
 > Priority: `P0`
 > Last updated: 2026-03-07
 > Related issues: `#56`, `#67`, `#98`
-> Gate status: `synthetic/research close / real optimizer-WFO CSV spot revalidation only`
+> Gate status: `done / real optimizer-WFO CSV spot revalidation only`
 
 ## 1. One-Page Summary
 - What: GPU 후보 실행 결과를 release-grade로 믿기 위해 CPU SSOT와의 parity를 닫는 문서입니다.
 - Why: GPU가 빨라도 CPU와 다른 결정을 내리면 승격할 수 없습니다.
-- Current status: `config single-row`, 2개월 single-row, synthetic `top-k=5`, synthetic `top-k=20` 범위까지 decision-level parity evidence를 확보했고, 이 범위에서는 실무적으로 close 가능합니다.
-- Next action: 실제 optimizer/WFO 결과 CSV가 생기면 spot revalidation 1회만 수행합니다.
+- Current status: `config single-row`, 2개월 single-row, synthetic `top-k=5`, synthetic `top-k=20` 범위까지 decision-level parity evidence를 확보했고, 이 범위 기준으로 이슈를 종료했습니다.
+- Next action: active work는 없습니다. 실제 optimizer/WFO 결과 CSV가 생기면 별도 신규 작업으로 spot revalidation 1회만 수행합니다.
 
 ## 2. Non-Negotiable Rules
 - `CPU=SSOT`
@@ -21,6 +21,7 @@
 - PIT/no-lookahead 위반 금지
 
 ## 3. Current Plan
+- 아래 미체크 항목은 `#56` close blocker가 아니라, 실제 optimizer/WFO CSV가 생겼을 때 보강할 수 있는 후속 운영/CI 정리 항목입니다.
 - [x] top-k parity harness 추가
 - [x] scenario pack parity 추가
 - [x] decision evidence wiring 추가
@@ -219,8 +220,8 @@
   - 2개월 `top-k=1` decision-level pass
   - 2개월 synthetic `top-k=5` decision-level all-pass
   - 2개월 synthetic `top-k=20`는 lone float residue 1건만 확인했고, helper tolerance patch로 종결 판단
-- `Issue #56 전체`: **synthetic harness close / monitoring only**
-  - 이유: 실제 optimizer/WFO 결과 CSV는 아직 없으므로, future spot revalidation만 남긴다
+- `Issue #56 전체`: **done (synthetic harness close / archive)**
+  - 이유: 실제 optimizer/WFO 결과 CSV는 아직 없으므로, future spot revalidation은 신규 follow-up으로만 남긴다
 
 ## 6. Tier v2 매핑/정렬 정책 (2026-02-17 합의안)
 목표: `tier` 경로의 decision-level parity 안정화와 ATR 영향 완화.
