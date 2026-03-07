@@ -28,6 +28,7 @@ class _DummyDataHandler:
         self.clear_lazy_tier_candidate_cache = MagicMock()
         self.clear_frozen_tier_candidate_manifest = MagicMock()
         self.freeze_tier_candidate_manifest = MagicMock()
+        self.prepare_strict_frozen_candidate_manifest = MagicMock(return_value={})
         self.get_candidates_with_tier_fallback_pit_gated = MagicMock()
 
     def get_trading_dates(self, _start_date, _end_date):
@@ -43,6 +44,7 @@ class _ScriptedStrategy:
     def __init__(self, contexts):
         self.max_stocks = 5
         self.candidate_source_mode = "tier"
+        self.candidate_lookup_error_policy = "raise"
         self.min_liquidity_20d_avg_value = 123
         self.min_tier12_coverage_ratio = 0.45
         self._contexts = list(contexts)
@@ -62,7 +64,7 @@ class _ScriptedStrategy:
 
 
 class TestBacktesterEntryMetrics(unittest.TestCase):
-    def test_run_clears_lazy_tier_candidate_cache_once(self):
+    def test_run_prepares_strict_manifest_and_clears_lazy_cache_once(self):
         dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
         data_handler = _DummyDataHandler(dates)
         strategy = _ScriptedStrategy([{}, {}])
@@ -78,6 +80,12 @@ class TestBacktesterEntryMetrics(unittest.TestCase):
         engine.run()
 
         data_handler.clear_lazy_tier_candidate_cache.assert_called_once()
+        data_handler.prepare_strict_frozen_candidate_manifest.assert_called_once()
+        call_args, call_kwargs = data_handler.prepare_strict_frozen_candidate_manifest.call_args
+        self.assertTrue(call_args[0].equals(dates))
+        self.assertEqual(call_kwargs["candidate_lookup_error_policy"], "raise")
+        self.assertEqual(call_kwargs["min_liquidity_20d_avg_value"], 123)
+        self.assertEqual(call_kwargs["min_tier12_coverage_ratio"], 0.45)
         data_handler.clear_frozen_tier_candidate_manifest.assert_not_called()
         data_handler.freeze_tier_candidate_manifest.assert_not_called()
 
