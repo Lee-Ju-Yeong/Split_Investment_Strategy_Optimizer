@@ -2,14 +2,24 @@ import os
 import sys
 import unittest
 
-import cupy as cp
-
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.backtest.gpu.logic import _process_new_entry_signals_gpu
+
+try:
+    import cupy as cp
+    from src.backtest.gpu.logic import _process_new_entry_signals_gpu
+    _GPU_IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - depends on local CUDA runtime
+    cp = None
+    _process_new_entry_signals_gpu = None
+    _GPU_IMPORT_ERROR = exc
 
 
 class TestGpuNewEntrySignals(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if _GPU_IMPORT_ERROR is not None:
+            raise unittest.SkipTest(f"GPU runtime unavailable: {_GPU_IMPORT_ERROR}")
+
     @staticmethod
     def _params(max_stocks: float):
         return cp.asarray(
@@ -32,6 +42,7 @@ class TestGpuNewEntrySignals(unittest.TestCase):
             cooldown_period_days=5,
             param_combinations=self._params(max_stocks=3),
             current_prices=cp.asarray([30.0, 50.0, 60.0], dtype=cp.float32),
+            signal_close_prices=cp.asarray([31.0, 51.0, 61.0], dtype=cp.float32),
             candidate_tickers_for_day=cp.asarray([0, 1, 2], dtype=cp.int32),
             candidate_atrs_for_day=cp.asarray([0.3, 0.2, 0.1], dtype=cp.float32),
             buy_commission_rate=0.0,
@@ -67,6 +78,7 @@ class TestGpuNewEntrySignals(unittest.TestCase):
             cooldown_period_days=5,
             param_combinations=self._params(max_stocks=3),
             current_prices=cp.asarray([20.0, 25.0, 40.0], dtype=cp.float32),
+            signal_close_prices=cp.asarray([21.0, 26.0, 41.0], dtype=cp.float32),
             candidate_tickers_for_day=cp.asarray([0, 1, 2], dtype=cp.int32),
             candidate_atrs_for_day=cp.asarray([0.3, 0.2, 0.1], dtype=cp.float32),
             buy_commission_rate=0.0,

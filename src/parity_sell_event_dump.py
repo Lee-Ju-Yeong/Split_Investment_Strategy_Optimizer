@@ -43,6 +43,9 @@ from .price_policy import is_adjusted_price_basis, resolve_price_policy
 from .universe_policy import resolve_universe_mode
 
 
+_TRIGGER_PRICE_TOLERANCE = 1e-4
+
+
 @dataclass
 class SellEvent:
     source: str
@@ -582,6 +585,7 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
     new_buy_re = re.compile(
         r"^\[GPU_NEW_BUY_CALC\]\s+"
         r"(?P<day_idx>\d+),\s+Sim\s+0,\s+Stock\s+\d+\((?P<ticker>[^)]+)\)\s+\|\s+"
+        r"(?:Target:\s+(?P<target>[-\d\.,]+)\s+\|\s+)?"
         r"Invest:\s+(?P<invest>[\d,]+)\s+/\s+ExecPrice:\s+(?P<price>[\d,]+)\s+=\s+Qty:\s+(?P<qty>[\d,]+)"
     )
     add_buy_summary_re = re.compile(
@@ -620,6 +624,7 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
                     total_cost=total_cost,
                     reason="신규 매수",
                     split=0,
+                    trigger_price=float(str(m_new.group("target")).replace(",", "")) if m_new.group("target") is not None else None,
                     gross_cost=gross_cost,
                 )
             )
@@ -671,6 +676,7 @@ def _normalize_trade_reason(value: Optional[str]) -> Optional[str]:
         "매매 미발생 기간 초과": "inactivity",
         "Inactivity": "inactivity",
         "Tier3": "tier3",
+        "신규 진입": "new_buy",
         "신규 매수": "new_buy",
         "추가 매수(하락)": "add_buy_drop",
     }
@@ -746,7 +752,7 @@ def _build_sell_pair_row(pair_index: int, cpu: Optional[SellEvent], gpu: Optiona
         "trigger_price_diff": trigger_diff,
         "order_match": order_match,
     }
-    trigger_same = trigger_diff is not None and abs(trigger_diff) < 1e-6
+    trigger_same = trigger_diff is not None and abs(trigger_diff) < _TRIGGER_PRICE_TOLERANCE
     order_ok = True if order_match is None else bool(order_match)
     row["matched"] = (
         same_key
@@ -788,7 +794,7 @@ def _build_buy_pair_row(pair_index: int, cpu: Optional[BuyEvent], gpu: Optional[
         "trigger_price_diff": trigger_diff,
         "order_match": order_match,
     }
-    trigger_same = trigger_diff is not None and abs(trigger_diff) < 1e-6
+    trigger_same = trigger_diff is not None and abs(trigger_diff) < _TRIGGER_PRICE_TOLERANCE
     order_ok = True if order_match is None else bool(order_match)
     row["matched"] = (
         same_key
