@@ -291,30 +291,20 @@ class MagicSplitStrategy(Strategy):
             candidate_codes = []
             
             # --- [Issue #67] Candidate Source Logic Start ---
-            get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
-            get_tier_candidates_pit = getattr(data_handler, "get_candidates_with_tier_fallback_pit", None)
-            if callable(get_tier_candidates_pit) or callable(get_tier_candidates):
+            get_tier_candidates_pit_gated = getattr(
+                data_handler,
+                "get_candidates_with_tier_fallback_pit_gated",
+                None,
+            )
+            if callable(get_tier_candidates_pit_gated):
                 try:
-                    tier_result = None
                     used_tier = ""
                     raw_candidate_count = 0
-                    if callable(get_tier_candidates_pit):
-                        get_tier_candidates_pit_gated = getattr(
-                            data_handler,
-                            "get_candidates_with_tier_fallback_pit_gated",
-                            None,
-                        )
-                        if callable(get_tier_candidates_pit_gated):
-                            tier_result = get_tier_candidates_pit_gated(
-                                signal_date,
-                                min_liquidity_20d_avg_value=self.min_liquidity_20d_avg_value,
-                                min_tier12_coverage_ratio=self.min_tier12_coverage_ratio,
-                            )
-                        else:
-                            tier_result = get_tier_candidates_pit(signal_date)
-                    if not (isinstance(tier_result, tuple) and len(tier_result) == 2):
-                        tier_result = get_tier_candidates(signal_date)
-                    tier_codes, used_tier = tier_result
+                    tier_codes, used_tier = get_tier_candidates_pit_gated(
+                        signal_date,
+                        min_liquidity_20d_avg_value=self.min_liquidity_20d_avg_value,
+                        min_tier12_coverage_ratio=self.min_tier12_coverage_ratio,
+                    )
                     raw_candidate_count = len(tier_codes)
                     candidate_codes = tier_codes
                     if self.strict_hysteresis_enabled and used_tier.startswith("TIER_2_FALLBACK"):
@@ -384,7 +374,9 @@ class MagicSplitStrategy(Strategy):
                     else None,
                 )
             else:
-                logger.warning("get_candidates_with_tier_fallback missing. Returning empty candidate set.")
+                logger.warning(
+                    "get_candidates_with_tier_fallback_pit_gated missing. Returning empty candidate set."
+                )
                 candidate_codes = []
                 self.last_entry_context = self._build_entry_context(
                     signal_date,

@@ -5,7 +5,6 @@ GPU data preload/tensorization helpers for parameter simulation.
 from __future__ import annotations
 
 import time
-from datetime import timedelta
 from functools import lru_cache
 
 try:
@@ -419,36 +418,6 @@ def preload_all_data_to_gpu(
     return gdf
 
 
-def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    _ensure_gpu_deps()
-    _, pd = _ensure_core_deps()
-
-    print("⏳ Loading weekly filtered stocks data to GPU memory...")
-    start_time = time.time()
-    extended_start_date = pd.to_datetime(start_date) - timedelta(days=14)
-    query = (
-        "SELECT `filter_date` as date, `stock_code` as ticker "
-        "FROM WeeklyFilteredStocks "
-        f"WHERE `filter_date` BETWEEN '{extended_start_date.strftime('%Y-%m-%d')}' AND '{end_date}'"
-    )
-    sql_engine = _get_sql_engine(str(engine))
-    gdf = _read_sql_to_cudf(query, sql_engine, parse_dates=["date"])
-    gdf = _set_index_lean(gdf, "date")
-    print(f"✅ Weekly filtered stocks loaded to GPU. Shape: {gdf.shape}. Time: {time.time() - start_time:.2f}s")
-    return gdf
-
-
-def build_empty_weekly_filtered_gpu():
-    _, cudf, _, _ = _ensure_gpu_deps()
-    empty_df = cudf.DataFrame(
-        {
-            "date": cudf.Series([], dtype="datetime64[ns]"),
-            "ticker": cudf.Series([], dtype="str"),
-        }
-    )
-    return empty_df.set_index("date")
-
-
 def preload_tier_data_to_tensor(
     engine,
     start_date,
@@ -776,9 +745,7 @@ def _enforce_tier12_coverage_gate(
 __all__ = [
     "_get_sql_engine",
     "_read_sql_to_cudf",
-    "build_empty_weekly_filtered_gpu",
     "preload_all_data_to_gpu",
     "preload_pit_universe_mask_to_tensor",
-    "preload_weekly_filtered_stocks_to_gpu",
     "preload_tier_data_to_tensor",
 ]

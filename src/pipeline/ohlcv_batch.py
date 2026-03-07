@@ -74,38 +74,11 @@ def _fetch_history_universe_ranges(conn, requested_start_date, requested_end_dat
     )
 
 
-def _fetch_legacy_universe_ranges(conn, requested_start_date, requested_end_date):
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT DISTINCT stock_code
-            FROM WeeklyFilteredStocks
-                WHERE filter_date <= %s
-                ORDER BY stock_code
-                """,
-            (requested_end_date,),
-        )
-        rows = cur.fetchall()
-        if rows:
-            return [
-                (row[0], requested_start_date, requested_end_date)
-                for row in rows
-            ]
-
-        cur.execute("SELECT stock_code FROM CompanyInfo ORDER BY stock_code")
-        rows = cur.fetchall()
-        return [
-            (row[0], requested_start_date, requested_end_date)
-            for row in rows
-        ]
-
-
 def _build_history_unavailable_message(start_date, end_date):
     return (
         "TickerUniverseHistory returned no rows "
         f"for requested range [{start_date}, {end_date}]. "
-        "Run `python -m src.ticker_universe_batch --mode backfill` first "
-        "or pass `--allow-legacy-fallback` explicitly."
+        "Run `python -m src.ticker_universe_batch --mode backfill` first."
     )
 
 
@@ -113,7 +86,6 @@ def get_ohlcv_ticker_universe(
     conn,
     requested_start_date,
     requested_end_date,
-    allow_legacy_fallback=False,
 ):
     history_ranges = _fetch_history_universe_ranges(
         conn=conn,
@@ -123,24 +95,12 @@ def get_ohlcv_ticker_universe(
     if history_ranges:
         return history_ranges, "history"
 
-    if not allow_legacy_fallback:
-        raise RuntimeError(
-            _build_history_unavailable_message(
-                start_date=requested_start_date,
-                end_date=requested_end_date,
-            )
+    raise RuntimeError(
+        _build_history_unavailable_message(
+            start_date=requested_start_date,
+            end_date=requested_end_date,
         )
-
-    print(
-        "[ohlcv_batch] warning using legacy fallback "
-        f"requested_range=[{requested_start_date}, {requested_end_date}]"
     )
-    legacy_ranges = _fetch_legacy_universe_ranges(
-        conn=conn,
-        requested_start_date=requested_start_date,
-        requested_end_date=requested_end_date,
-    )
-    return legacy_ranges, "legacy"
 
 
 def normalize_ohlcv_df(df_ohlcv, ticker_code):
@@ -254,7 +214,6 @@ def run_ohlcv_batch(
     start_date_str=None,
     end_date_str=None,
     ticker_codes=None,
-    allow_legacy_fallback=False,
     resume=True,
     api_call_delay=ohlcv_collector.API_CALL_DELAY,
     log_interval=DEFAULT_LOG_INTERVAL,
@@ -278,7 +237,6 @@ def run_ohlcv_batch(
             conn=conn,
             requested_start_date=requested_start_date,
             requested_end_date=end_date,
-            allow_legacy_fallback=allow_legacy_fallback,
         )
     else:
         ticker_universe = [
@@ -297,10 +255,6 @@ def run_ohlcv_batch(
         "start_date": requested_start_date.strftime("%Y-%m-%d"),
         "end_date": end_date.strftime("%Y-%m-%d"),
         "universe_source": universe_source,
-        "allow_legacy_fallback": allow_legacy_fallback,
-        "legacy_fallback_used": universe_source == "legacy",
-        "legacy_fallback_tickers": len(ticker_universe) if universe_source == "legacy" else 0,
-        "legacy_fallback_runs": 1 if universe_source == "legacy" else 0,
         "resume": resume,
     }
 
@@ -313,8 +267,7 @@ def run_ohlcv_batch(
     print(
         f"[ohlcv_batch] start start_date={start_date_str}, end_date={end_date_str}, "
         f"tickers={total_tickers}, adjusted={ohlcv_collector.USE_ADJUSTED_OHLCV}, "
-        f"resume={resume}, universe_source={universe_source}, "
-        f"allow_legacy_fallback={allow_legacy_fallback}"
+        f"resume={resume}, universe_source={universe_source}"
     )
 
     for index, ticker_entry in enumerate(ticker_universe, start=1):
@@ -386,12 +339,6 @@ def run_ohlcv_batch(
         f"throughput_rows_per_sec={summary['rows_per_sec']} "
         f"throughput_tickers_per_sec={summary['tickers_per_sec']}"
     )
-    print(
-        "[ohlcv_batch] fallback_report "
-        f"legacy_used={1 if summary['legacy_fallback_used'] else 0} "
-        f"legacy_tickers={summary['legacy_fallback_tickers']} "
-        f"legacy_runs={summary['legacy_fallback_runs']}"
-    )
     return summary
 
 
@@ -449,11 +396,6 @@ def _build_arg_parser():
         default=None,
         help="Optional limit for number of tickers (for smoke test).",
     )
-    parser.add_argument(
-        "--allow-legacy-fallback",
-        action="store_true",
-        help="Use legacy universe sources when TickerUniverseHistory has no rows.",
-    )
     return parser
 
 
@@ -472,7 +414,6 @@ def main():
             conn=conn,
             start_date_str=args.start_date,
             end_date_str=args.end_date,
-            allow_legacy_fallback=args.allow_legacy_fallback,
             resume=args.resume,
             api_call_delay=effective_delay,
             log_interval=args.log_interval,

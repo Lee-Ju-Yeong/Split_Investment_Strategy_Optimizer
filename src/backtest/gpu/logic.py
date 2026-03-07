@@ -825,7 +825,6 @@ def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
     all_data_gpu: cudf.DataFrame,
-    weekly_filtered_gpu: cudf.DataFrame,
     trading_date_indices: cp.ndarray,
     trading_dates_pd_cpu: pd.DatetimeIndex,
     all_tickers: list,
@@ -864,7 +863,6 @@ def run_magic_split_strategy_on_gpu(
     
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
-    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)

@@ -39,7 +39,6 @@ except ImportError:  # pragma: no cover
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
 from .data_loading import (
-    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
     preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
@@ -132,13 +131,6 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
     return batch_size, "adaptive-safe-default"
 
 
-def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate=None):
-    return normalize_runtime_candidate_policy(
-        candidate_source_mode,
-        use_weekly_alpha_gate,
-    )
-
-
 # -----------------------------------------------------------------------------
 # Worker: find_optimal_parameters
 # -----------------------------------------------------------------------------
@@ -164,7 +156,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
-    normalized_mode, normalized_weekly_gate = _normalize_candidate_source_mode(
+    normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
         strategy_params.get("candidate_source_mode", "tier"),
         strategy_params.get("use_weekly_alpha_gate", False),
     )
@@ -202,8 +194,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    print("⏭️ Skipping weekly filtered preload (tier-only runtime path).")
-    weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -240,7 +230,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         trading_dates_pd,
     )
 
-    fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
+    fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
     fixed_mem += int(pit_universe_mask_tensor.nbytes)
 
@@ -308,7 +298,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
                 daily_values_batch = run_gpu_optimization(
                     param_batch,
                     all_data_gpu,
-                    weekly_filtered_gpu,
                     all_tickers,
                     trading_date_indices_gpu,
                     trading_dates_pd,

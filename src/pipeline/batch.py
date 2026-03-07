@@ -93,7 +93,6 @@ def run_pipeline_batch(
     universe_resume=True,
     universe_with_names=False,
     universe_api_call_delay=0.2,
-    allow_financial_legacy_fallback=False,
     lookback_days=20,
     financial_lag_days=1,
     tier_v1_write_enabled=False,
@@ -177,7 +176,6 @@ def run_pipeline_batch(
         )
         if shared_delay is not None:
             financial_kwargs["api_call_delay"] = shared_delay
-        financial_kwargs["allow_legacy_fallback"] = allow_financial_legacy_fallback
         summary["financial"] = run_financial_batch(**financial_kwargs)
 
     if run_investor:
@@ -490,14 +488,6 @@ def _build_arg_parser():
         help="Row batch size for FinancialData upsert commits.",
     )
     parser.add_argument(
-        "--allow-financial-legacy-fallback",
-        action="store_true",
-        help=(
-            "DEPRECATED: allow FinancialData collector to use legacy universe "
-            "(WeeklyFilteredStocks -> CompanyInfo) when snapshot/history is empty."
-        ),
-    )
-    parser.add_argument(
         "--investor-workers",
         type=int,
         default=4,
@@ -744,7 +734,6 @@ def main():
             f"run_tier={not args.skip_tier}, "
             f"financial_workers={args.financial_workers}, "
             f"financial_write_batch_size={args.financial_write_batch_size}, "
-            f"allow_financial_legacy_fallback={args.allow_financial_legacy_fallback}, "
             f"investor_workers={args.investor_workers}, "
             f"investor_write_batch_size={args.investor_write_batch_size}, "
             f"market_cap_workers={args.marketcap_workers}, "
@@ -822,7 +811,6 @@ def main():
             ),
             financial_workers=max(int(args.financial_workers), 1),
             financial_write_batch_size=max(int(args.financial_write_batch_size), 1),
-            allow_financial_legacy_fallback=args.allow_financial_legacy_fallback,
             investor_workers=max(int(args.investor_workers), 1),
             investor_write_batch_size=max(int(args.investor_write_batch_size), 1),
             market_cap_workers=max(int(args.marketcap_workers), 1),

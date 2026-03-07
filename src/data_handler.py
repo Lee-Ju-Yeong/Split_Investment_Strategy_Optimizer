@@ -612,19 +612,6 @@ class DataHandler:
             if owns_conn:
                 conn.close()
 
-    def get_filtered_stock_codes_with_tier(self, date, allowed_tiers=(1, 2)):
-        candidate_codes = self.get_filtered_stock_codes(date)
-        if not candidate_codes:
-            return []
-        tier_map = self.get_tiers_as_of(
-            as_of_date=date,
-            tickers=candidate_codes,
-            allowed_tiers=allowed_tiers,
-        )
-        if not tier_map:
-            return []
-        return [code for code in candidate_codes if code in tier_map]
-
     def _get_eventual_delisted_codes(self):
         if self._eventual_delisted_codes_cache is not None:
             return self._eventual_delisted_codes_cache
@@ -733,42 +720,6 @@ class DataHandler:
         if df.empty:
             return []
         return df["stock_code"].tolist()
-
-    def get_candidates_with_tier_fallback(self, date):
-        """
-        Issue #67: Tier 1 우선, 없으면 Tier <= 2로 fallback.
-        Returns:
-            (candidates_list, tier_used_str)
-        """
-        conn = self.get_connection()
-        date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
-        try:
-            tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
-            tier1_codes = self._apply_universe_mode_filter(tier1_codes)
-            if tier1_codes:
-                return tier1_codes, "TIER_1"
-
-            tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
-            tier12_codes = self._apply_universe_mode_filter(tier12_codes)
-            if tier12_codes:
-                return tier12_codes, "TIER_2_FALLBACK"
-
-            return [], "NO_CANDIDATES"
-        finally:
-            conn.close()
-
-    def get_candidates_with_tier_fallback_pit(self, date):
-        """
-        Issue #67 Phase2:
-        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
-        Returns:
-            (candidates_list, source)
-        """
-        return self.get_candidates_with_tier_fallback_pit_gated(
-            date=date,
-            min_liquidity_20d_avg_value=None,
-            min_tier12_coverage_ratio=None,
-        )
 
     def _filter_by_min_liquidity(self, tier_map, min_liquidity_20d_avg_value):
         if min_liquidity_20d_avg_value is None:

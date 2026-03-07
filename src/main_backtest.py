@@ -92,6 +92,7 @@ def _write_run_manifest(
         "config": {
             "config_path": env_config_path or "config/config.yaml",
             "candidate_source_mode": strategy_params.get("candidate_source_mode"),
+            "use_weekly_alpha_gate": strategy_params.get("use_weekly_alpha_gate"),
             "tier_hysteresis_mode": strategy_params.get("tier_hysteresis_mode"),
             "candidate_lookup_error_policy": strategy_params.get("candidate_lookup_error_policy"),
             "frozen_candidate_manifest_mode": strategy_params.get("frozen_candidate_manifest_mode"),

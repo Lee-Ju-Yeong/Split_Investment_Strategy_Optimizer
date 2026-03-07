@@ -46,12 +46,20 @@ KRX_USER_AGENT = "Mozilla/5.0"
 KRX_PROBE_TIMEOUT_SECONDS = 20
 
 
+def _build_universe_unavailable_message(mode, end_date):
+    return (
+        "Ticker universe lookup failed for MarketCap collector: "
+        f"mode={mode}, end_date={end_date}. "
+        "TickerUniverseSnapshot/History returned no rows. "
+        "Run `python -m src.ticker_universe_batch --mode backfill` first."
+    )
+
+
 def get_market_cap_ticker_universe(conn, end_date=None, mode="daily"):
     """
     Resolves ticker universe consistently by mode.
     - backfill: TickerUniverseHistory
     - daily: TickerUniverseSnapshot(as-of end_date) -> active history(as-of) fallback
-    - legacy fallback: WeeklyFilteredStocks -> CompanyInfo
     """
     with conn.cursor() as cur:
         if mode == "backfill":
@@ -121,23 +129,7 @@ def get_market_cap_ticker_universe(conn, end_date=None, mode="daily"):
             if rows:
                 return [row[0] for row in rows]
 
-        if end_date is None:
-            cur.execute("SELECT DISTINCT stock_code FROM WeeklyFilteredStocks")
-        else:
-            cur.execute(
-                """
-                SELECT DISTINCT stock_code
-                FROM WeeklyFilteredStocks
-                WHERE filter_date <= %s
-                """,
-                (end_date,),
-            )
-        rows = cur.fetchall()
-        if rows:
-            return [row[0] for row in rows]
-
-        cur.execute("SELECT stock_code FROM CompanyInfo")
-        return [row[0] for row in cur.fetchall()]
+        raise RuntimeError(_build_universe_unavailable_message(mode, end_date))
 
 
 def _get_latest_trading_date(conn):

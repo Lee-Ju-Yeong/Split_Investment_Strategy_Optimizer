@@ -106,7 +106,7 @@ WHERE date >= '2013-11-20';
 
 - 기본은 `resume=True` 재실행 (동일 명령 재사용)
 - 재현성 검증이 필요하면 해당 구간만 삭제 후 재실행
-- `--allow-legacy-fallback`은 운영 안정화 전까지 기본 비활성 유지
+- `TickerUniverseHistory`가 비어 있으면 OHLCV 배치는 즉시 실패하므로, 먼저 `src.ticker_universe_batch --mode backfill`로 PIT 유니버스를 채운 뒤 재실행합니다.
 
 ## 7) `CalculatedIndicators` 재계산 실행안 (즉시 실행용)
 
@@ -470,6 +470,5 @@ errors=<errors>
 elapsed=<HH:MM:SS>
 throughput_rows_per_sec=<rows_per_sec>
 throughput_tickers_per_sec=<tickers_per_sec>
-universe_source=<history|legacy>
-legacy_fallback_used=<0|1>
+universe_source=<history|explicit>
 ```
