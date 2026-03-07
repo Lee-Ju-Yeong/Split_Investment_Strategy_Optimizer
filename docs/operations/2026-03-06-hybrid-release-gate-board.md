@@ -56,7 +56,7 @@
 
 ## 7. 현재 미충족 항목
 - `#56` synthetic/research parity gate는 종결되었고, 실제 optimizer/WFO CSV가 생기면 spot revalidation만 남음
-- `#67` PIT default path + coverage gate 미완료
+- `#67`은 CPU opt-in strict frozen manifest까지 반영됐지만, candidate order direct validation과 PIT failure/log standardization이 미완료
 - `#97` strict-only cleanup 미완료
 - release-safe / research-only example 분리는 반영됐지만, 운영 승인 판단은 여전히 별도 증적이 필요
 

@@ -47,11 +47,42 @@ class BacktestEngine:
 
         clear_manifest()
 
+    def _prepare_strict_frozen_candidate_manifest_if_supported(self, trading_dates):
+        prepare_manifest = getattr(
+            self.data_handler,
+            "prepare_strict_frozen_candidate_manifest",
+            None,
+        )
+        if not callable(prepare_manifest):
+            return
+
+        summary = prepare_manifest(
+            trading_dates,
+            candidate_lookup_error_policy=getattr(
+                self.strategy,
+                "candidate_lookup_error_policy",
+                "raise",
+            ),
+            min_liquidity_20d_avg_value=getattr(
+                self.strategy,
+                "min_liquidity_20d_avg_value",
+                None,
+            ),
+            min_tier12_coverage_ratio=getattr(
+                self.strategy,
+                "min_tier12_coverage_ratio",
+                None,
+            ),
+        )
+        if summary:
+            self.logger.info("[FrozenCandidateManifest] %s", summary)
+
     def run(self):
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
         self._clear_tier_candidate_cache_if_supported()
+        self._prepare_strict_frozen_candidate_manifest_if_supported(trading_dates)
         entry_stats = {
             "entry_opportunity_days": 0,
             "candidate_eval_days": 0,

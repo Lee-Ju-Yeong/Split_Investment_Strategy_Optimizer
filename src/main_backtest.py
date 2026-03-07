@@ -92,6 +92,11 @@ def _write_run_manifest(
             "candidate_source_mode": strategy_params.get("candidate_source_mode"),
             "tier_hysteresis_mode": strategy_params.get("tier_hysteresis_mode"),
             "candidate_lookup_error_policy": strategy_params.get("candidate_lookup_error_policy"),
+            "frozen_candidate_manifest_mode": strategy_params.get("frozen_candidate_manifest_mode"),
+            "frozen_candidate_manifest_path": strategy_params.get("frozen_candidate_manifest_path"),
+            "frozen_candidate_manifest_expected_sha256": strategy_params.get(
+                "frozen_candidate_manifest_expected_sha256"
+            ),
         },
         "env_overrides": {
             "MAGICSPLIT_UNIVERSE_MODE": env_universe_mode,
@@ -236,6 +241,15 @@ def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) ->
             if callable(candidate_lookup_summary_getter)
             else {}
         )
+        frozen_manifest_summary_getter = getattr(
+            data_handler,
+            "get_frozen_candidate_manifest_summary",
+            None,
+        )
+        if callable(frozen_manifest_summary_getter):
+            candidate_lookup_summary["frozen_candidate_manifest"] = (
+                frozen_manifest_summary_getter()
+            )
         safety_guard = _build_safety_guard(
             universe_mode=universe_mode,
             strategy_params=strategy_params_from_config,

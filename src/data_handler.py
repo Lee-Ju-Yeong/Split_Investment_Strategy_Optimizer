@@ -1,6 +1,10 @@
 import pandas as pd
 import warnings
 import logging
+import json
+import hashlib
+import os
+import tempfile
 from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
@@ -75,6 +79,17 @@ class DataHandler:
         self._frozen_tier_candidate_manifest_key = None
         self._lazy_tier_candidate_cache = None
         self._lazy_tier_candidate_cache_key = None
+        self._strict_frozen_candidate_manifest_required = False
+        self.last_frozen_candidate_manifest_summary = {}
+        self.frozen_candidate_manifest_mode = self._resolve_frozen_candidate_manifest_mode(
+            strategy_params
+        )
+        self.frozen_candidate_manifest_path = self._resolve_frozen_candidate_manifest_path(
+            strategy_params
+        )
+        self.frozen_candidate_manifest_expected_sha256 = (
+            self._resolve_frozen_candidate_manifest_expected_sha256(strategy_params)
+        )
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
@@ -111,6 +126,39 @@ class DataHandler:
             return False
         finally:
             conn.close()
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_mode(strategy_params):
+        raw_mode = (strategy_params or {}).get("frozen_candidate_manifest_mode", "off")
+        mode = str(raw_mode).strip().lower()
+        if mode not in {"off", "record_strict", "replay_strict"}:
+            raise ValueError(
+                "Unsupported frozen_candidate_manifest_mode="
+                f"{raw_mode!r}. supported=[off, record_strict, replay_strict]"
+            )
+        return mode
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_path(strategy_params):
+        raw_path = (strategy_params or {}).get("frozen_candidate_manifest_path")
+        if raw_path is None:
+            return None
+        path = str(raw_path).strip()
+        return path or None
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_expected_sha256(strategy_params):
+        raw_sha = (strategy_params or {}).get("frozen_candidate_manifest_expected_sha256")
+        if raw_sha is None:
+            return None
+        sha = str(raw_sha).strip().lower()
+        if not sha:
+            return None
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise ValueError(
+                "frozen_candidate_manifest_expected_sha256 must be a 64-char hex digest"
+            )
+        return sha
 
     def _detect_tier_flow5_mcap_column(self):
         conn = self.get_connection()
@@ -203,6 +251,7 @@ class DataHandler:
     def clear_frozen_tier_candidate_manifest(self):
         self._frozen_tier_candidate_manifest = None
         self._frozen_tier_candidate_manifest_key = None
+        self._strict_frozen_candidate_manifest_required = False
 
     def clear_lazy_tier_candidate_cache(self):
         self._lazy_tier_candidate_cache = None
@@ -402,8 +451,9 @@ class DataHandler:
         finally:
             conn.close()
 
-    def get_stock_tier_as_of(self, ticker, as_of_date):
-        conn = self.get_connection()
+    def get_stock_tier_as_of(self, ticker, as_of_date, *, conn=None):
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
         query = """
             SELECT date, stock_code, tier, reason, liquidity_20d_avg_value
@@ -428,10 +478,12 @@ class DataHandler:
                 "liquidity_20d_avg_value": row.get("liquidity_20d_avg_value"),
             }
         finally:
-            conn.close()
+            if owns_conn:
+                conn.close()
 
-    def get_tiers_as_of(self, as_of_date, tickers=None, allowed_tiers=None):
-        conn = self.get_connection()
+    def get_tiers_as_of(self, as_of_date, tickers=None, allowed_tiers=None, *, conn=None):
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
 
         tickers = list(tickers) if tickers else []
@@ -485,7 +537,8 @@ class DataHandler:
                 }
             return result
         finally:
-            conn.close()
+            if owns_conn:
+                conn.close()
 
     def get_filtered_stock_codes_with_tier(self, date, allowed_tiers=(1, 2)):
         candidate_codes = self.get_filtered_stock_codes(date)
@@ -535,7 +588,7 @@ class DataHandler:
             return list(codes)
         return [code for code in codes if str(code) not in eventual_delisted]
 
-    def get_pit_universe_codes_as_of(self, as_of_date):
+    def get_pit_universe_codes_as_of(self, as_of_date, *, conn=None):
         """
         Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
         1) TickerUniverseSnapshot latest(as_of)
@@ -545,7 +598,8 @@ class DataHandler:
         """
         as_of_ts = pd.to_datetime(as_of_date)
         as_of_date_str = as_of_ts.strftime("%Y-%m-%d")
-        conn = self.get_connection()
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         try:
             snapshot_query = """
                 SELECT stock_code
@@ -585,7 +639,8 @@ class DataHandler:
                 return codes, source
             return [], "NO_UNIVERSE"
         finally:
-            conn.close()
+            if owns_conn:
+                conn.close()
 
     def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
         query = """
@@ -675,6 +730,63 @@ class DataHandler:
                 f"(tier12_count={tier12_count}, universe_count={pit_size})"
             )
 
+    def _begin_snapshot_connection(self):
+        conn = self.get_connection()
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cur.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cur.execute("SELECT CONNECTION_ID(), CURRENT_TIMESTAMP()")
+                row = cur.fetchone()
+            return conn, {
+                "connection_id": int((row[0] if row else 0) or 0),
+                "snapshot_started_at": str(row[1]) if row and len(row) > 1 else None,
+            }
+        except Exception:
+            conn.close()
+            raise
+
+    @staticmethod
+    def _iter_signal_dates(trading_dates):
+        dates = pd.to_datetime(list(trading_dates))
+        if len(dates) <= 1:
+            return []
+        return sorted({pd.to_datetime(value).strftime("%Y-%m-%d") for value in dates[:-1]})
+
+    @staticmethod
+    def _hash_file(path):
+        sha = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha.update(chunk)
+        return sha.hexdigest()
+
+    def _load_frozen_candidate_manifest_file(self, manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload
+
+    def _write_frozen_candidate_manifest_file(self, manifest_path, payload):
+        directory = os.path.dirname(manifest_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=directory,
+            prefix=".tmp_frozen_manifest_",
+            suffix=".json",
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+            tmp_path = f.name
+        os.replace(tmp_path, manifest_path)
+
+    def get_frozen_candidate_manifest_summary(self):
+        return dict(self.last_frozen_candidate_manifest_summary)
+
     def _store_lazy_tier_candidate_payload(
         self,
         date,
@@ -700,8 +812,10 @@ class DataHandler:
         date,
         min_liquidity_20d_avg_value=None,
         min_tier12_coverage_ratio=None,
+        *,
+        conn=None,
     ):
-        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
+        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date, conn=conn)
         if not pit_codes:
             return {
                 "candidate_codes": [],
@@ -711,19 +825,18 @@ class DataHandler:
                 "tier12_count": 0,
             }
 
-        tier1_map = self.get_tiers_as_of(
-            as_of_date=date,
-            tickers=pit_codes,
-            allowed_tiers=[1],
-        )
-        tier1_map = self._filter_by_min_liquidity(tier1_map, min_liquidity_20d_avg_value)
-
         tier12_map = self.get_tiers_as_of(
             as_of_date=date,
             tickers=pit_codes,
             allowed_tiers=[1, 2],
+            conn=conn,
         )
         tier12_map = self._filter_by_min_liquidity(tier12_map, min_liquidity_20d_avg_value)
+        tier1_map = {
+            code: info
+            for code, info in tier12_map.items()
+            if int(info.get("tier", 0) or 0) == 1
+        }
 
         self._enforce_tier12_coverage_gate(
             date=date,
@@ -825,6 +938,105 @@ class DataHandler:
             "min_tier12_coverage_ratio": manifest_key[2],
         }
 
+    def prepare_strict_frozen_candidate_manifest(
+        self,
+        trading_dates,
+        *,
+        candidate_lookup_error_policy,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        mode = self.frozen_candidate_manifest_mode
+        if mode == "off":
+            return {}
+        if str(candidate_lookup_error_policy).strip().lower() != "raise":
+            raise ValueError(
+                "strict frozen candidate manifest requires candidate_lookup_error_policy='raise'"
+            )
+
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        signal_dates = self._iter_signal_dates(trading_dates)
+        if mode == "replay_strict":
+            if not self.frozen_candidate_manifest_path:
+                raise ValueError("replay_strict requires frozen_candidate_manifest_path")
+            if not self.frozen_candidate_manifest_expected_sha256:
+                raise ValueError(
+                    "replay_strict requires frozen_candidate_manifest_expected_sha256"
+                )
+            actual_sha256 = self._hash_file(self.frozen_candidate_manifest_path)
+            if actual_sha256 != self.frozen_candidate_manifest_expected_sha256:
+                raise ValueError("Frozen candidate manifest sha256 mismatch.")
+            payload = self._load_frozen_candidate_manifest_file(
+                self.frozen_candidate_manifest_path
+            )
+            meta = payload.get("meta", {})
+            if tuple(meta.get("manifest_key", ())) != manifest_key:
+                raise ValueError("Frozen candidate manifest key mismatch.")
+            manifest = payload.get("manifest", {})
+            manifest_dates = sorted(str(key) for key in manifest.keys())
+            if manifest_dates != signal_dates:
+                raise ValueError("Frozen candidate manifest signal-date set mismatch.")
+            self._frozen_tier_candidate_manifest = manifest
+            self._frozen_tier_candidate_manifest_key = manifest_key
+            self._strict_frozen_candidate_manifest_required = True
+            self.last_frozen_candidate_manifest_summary = {
+                "mode": mode,
+                "path": self.frozen_candidate_manifest_path,
+                "sha256": actual_sha256,
+                "expected_sha256": self.frozen_candidate_manifest_expected_sha256,
+                "signal_dates": len(manifest),
+            }
+            return self.get_frozen_candidate_manifest_summary()
+
+        snapshot_conn, snapshot_meta = self._begin_snapshot_connection()
+        try:
+            manifest = {}
+            for signal_date in signal_dates:
+                manifest[signal_date] = self._resolve_tier_candidate_payload(
+                    signal_date,
+                    min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                    min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+                    conn=snapshot_conn,
+                )
+        finally:
+            snapshot_conn.rollback()
+            snapshot_conn.close()
+
+        self._frozen_tier_candidate_manifest = manifest
+        self._frozen_tier_candidate_manifest_key = manifest_key
+        self._strict_frozen_candidate_manifest_required = True
+        summary = {
+            "mode": mode,
+            "signal_dates": len(signal_dates),
+            "signal_date_start": signal_dates[0] if signal_dates else None,
+            "signal_date_end": signal_dates[-1] if signal_dates else None,
+            "universe_mode": manifest_key[0],
+            "min_liquidity_20d_avg_value": manifest_key[1],
+            "min_tier12_coverage_ratio": manifest_key[2],
+            "snapshot_connection_id": snapshot_meta.get("connection_id"),
+            "snapshot_started_at": snapshot_meta.get("snapshot_started_at"),
+        }
+        if self.frozen_candidate_manifest_path:
+            payload = {
+                "meta": {
+                    "manifest_key": list(manifest_key),
+                    "signal_dates": signal_dates,
+                    **summary,
+                },
+                "manifest": manifest,
+            }
+            self._write_frozen_candidate_manifest_file(
+                self.frozen_candidate_manifest_path,
+                payload,
+            )
+            summary["path"] = self.frozen_candidate_manifest_path
+            summary["sha256"] = self._hash_file(self.frozen_candidate_manifest_path)
+        self.last_frozen_candidate_manifest_summary = summary
+        return self.get_frozen_candidate_manifest_summary()
+
     def get_candidates_with_tier_fallback_pit_gated(
         self,
         date,
@@ -845,6 +1057,10 @@ class DataHandler:
             min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
             min_tier12_coverage_ratio=min_tier12_coverage_ratio,
         )
+        if payload is None and self._strict_frozen_candidate_manifest_required:
+            raise ValueError(
+                f"Frozen candidate manifest miss for {self._normalize_date_key(date)}"
+            )
         if payload is None:
             payload = self._get_lazy_tier_candidate_payload(
                 date=date,

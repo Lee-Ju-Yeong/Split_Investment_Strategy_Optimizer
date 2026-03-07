@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽은 eager pre-freeze 대신 lazy run-local candidate cache로 정리했습니다. true frozen PIT manifest와 candidate order direct validation이 남았습니다.
-- Next action: true frozen manifest 범위를 재설계하고, CPU/GPU candidate order를 직접 비교하는 증적을 추가합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. 남은 핵심은 candidate order direct validation과 PIT 실패/로그 표준화입니다.
+- Next action: CPU/GPU candidate order를 직접 비교하는 증적을 추가하고, strict frozen manifest 산출물과 PIT failure/log를 운영 문서에 연결합니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -26,7 +26,7 @@
 - [x] empirical threshold `0.45` 고정
 - [x] runtime candidate gate parity
 - [x] CPU lazy run-local candidate cache
-- [ ] frozen PIT candidate manifest
+- [x] opt-in strict frozen PIT candidate manifest (entry candidate payload only)
 - [ ] CPU/GPU candidate order direct validation
 - [ ] PIT 실패 시 예외/로그 표준화
 
@@ -38,9 +38,9 @@
   - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
   - CPU `DataHandler`가 동일 gate/date 요청에 대해 lazy run-local cache를 재사용
 - 아직 필요한 것:
-  - transaction/artifact 기반 true frozen manifest
   - CPU/GPU candidate order direct validation artifact
   - PIT 실패 시 예외/로그 표준화
+  - strict frozen manifest artifact를 parity/certification runbook에 연결
 
 ## 5. Reading Guide
 - 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
@@ -126,10 +126,46 @@
     - `tests/test_data_handler_tier.py`: lazy cache reuse / explicit freeze reuse / gate mismatch bypass / universe_mode mismatch bypass
     - `tests/test_backtester_entry_metrics.py`: backtester가 run 시작 시 cache clear만 수행하고 eager freeze는 호출하지 않는지 검증
     - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump` 통과 (`64 tests`)
-- 남은 핵심:
+  - 남은 핵심:
   - `tier` 경로 기준 end-to-end CPU/GPU parity 하네스(#56) (`tests/test_cpu_gpu_parity_topk.py`)
     - 주의: parity 하네스의 "구현/진척 관리"는 #56에서 진행하고, #67에서는 "승격 게이트(DoD)"로만 참조한다.
   - 장기 구간(예: `2013-11-20~`) 백테스트를 위한 `DailyStockTier` 커버리지 확장(backfill)
+- 업데이트(2026-03-07, opt-in strict frozen manifest):
+  - 목적:
+    - eager pre-freeze를 되살리지 않고도 certification/parity run에서 동일 snapshot 기반 candidate payload를 고정
+    - general CPU backtest의 `candidate_lookup_error_policy=skip` 의미와 startup latency를 그대로 보존
+  - 구현:
+    - `src/data_handler.py`
+      - `frozen_candidate_manifest_mode = off | record_strict | replay_strict`
+      - `prepare_strict_frozen_candidate_manifest()` 추가
+      - `REPEATABLE READ + CONSISTENT SNAPSHOT + READ ONLY` 연결로 signal date(`trading_dates[:-1]`) candidate payload를 한 번에 고정
+      - strict 모드에서는 frozen miss 시 live fallback 없이 즉시 예외
+      - replay 모드에서는 `expected_sha256`, `manifest_key`, signal-date set를 선검증한 뒤 재사용
+      - manifest write는 `tmp + fsync + os.replace` atomic write로 저장
+      - tier 조회는 `tier<=2` 한 번만 읽고 `tier==1` subset을 메모리에서 파생
+    - `src/backtest/cpu/backtester.py`
+      - run 시작 시 lazy cache clear 후 `prepare_strict_frozen_candidate_manifest()`를 opt-in으로 호출
+    - `src/main_backtest.py`
+      - run manifest에 `frozen_candidate_manifest_mode`, `frozen_candidate_manifest_path`
+      - candidate lookup summary에 frozen manifest summary 첨부
+  - 검증:
+    - `tests/test_data_handler_tier.py`
+      - signal-date only manifest build
+      - strict mode는 `candidate_lookup_error_policy=raise` 강제
+      - strict frozen miss 예외
+      - replay strict file load
+    - `tests/test_backtester_entry_metrics.py`
+      - backtester가 lazy cache clear와 strict manifest prepare hook을 함께 호출하는지 검증
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump tests.test_main_backtest_artifact_mode`
+      - 결과: `69 tests OK`
+  - 범위 한정:
+    - general CPU run의 기본 경로는 여전히 lazy run-local cache
+    - strict frozen manifest는 entry candidate payload만 고정
+    - candidate order direct validation은 아직 별도 DoD로 남음
+  - Codex-only cross-check:
+    - 현재 HW(Ryzen 7 1700 / 32GB / RTX 5060)에서 startup 비용은 certification/parity 전용으로는 감수 가능
+    - throughput 개선책은 아니며, default/general run을 lazy cache로 유지한 판단이 합리적
+    - replay artifact integrity는 SHA/date-set 선검증 추가 후 stop-the-line 해소
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `DataHandler.get_pit_universe_codes_as_of()` 추가: `TickerUniverseSnapshot latest(as-of)` 우선, empty 시 `TickerUniverseHistory active(as-of)` fallback

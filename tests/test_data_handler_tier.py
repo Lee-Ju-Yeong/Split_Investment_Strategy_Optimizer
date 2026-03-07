@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -125,16 +126,10 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ), patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 100},
-                    "C": {"tier": 1, "liquidity_20d_avg_value": 200},
-                },
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 100},
-                    "C": {"tier": 1, "liquidity_20d_avg_value": 200},
-                },
-            ],
+            return_value={
+                "A": {"tier": 1, "liquidity_20d_avg_value": 100},
+                "C": {"tier": 1, "liquidity_20d_avg_value": 200},
+            },
         ):
             codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
 
@@ -149,10 +144,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ), patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {},
-                {"B": {"tier": 2, "liquidity_20d_avg_value": 150}},
-            ],
+            return_value={"B": {"tier": 2, "liquidity_20d_avg_value": 150}},
         ):
             codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
 
@@ -167,16 +159,10 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ), patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 80},
-                    "B": {"tier": 1, "liquidity_20d_avg_value": 120},
-                },
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 80},
-                    "B": {"tier": 1, "liquidity_20d_avg_value": 120},
-                },
-            ],
+            return_value={
+                "A": {"tier": 1, "liquidity_20d_avg_value": 80},
+                "B": {"tier": 1, "liquidity_20d_avg_value": 120},
+            },
         ):
             codes, source = self.handler.get_candidates_with_tier_fallback_pit_gated(
                 date="2024-01-04",
@@ -195,10 +181,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ), patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
-            ],
+            return_value={"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
         ):
             with self.assertRaises(ValueError):
                 self.handler.get_candidates_with_tier_fallback_pit_gated(
@@ -215,13 +198,10 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ) as pit_mock, patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 120},
-                    "B": {"tier": 2, "liquidity_20d_avg_value": 140},
-                },
-            ],
+            return_value={
+                "A": {"tier": 1, "liquidity_20d_avg_value": 120},
+                "B": {"tier": 2, "liquidity_20d_avg_value": 140},
+            },
         ) as tier_mock:
             summary = self.handler.freeze_tier_candidate_manifest(
                 [pd.Timestamp("2024-01-04")],
@@ -255,13 +235,10 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ) as pit_mock, patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {
-                    "A": {"tier": 1, "liquidity_20d_avg_value": 120},
-                    "B": {"tier": 2, "liquidity_20d_avg_value": 140},
-                },
-            ],
+            return_value={
+                "A": {"tier": 1, "liquidity_20d_avg_value": 120},
+                "B": {"tier": 2, "liquidity_20d_avg_value": 140},
+            },
         ) as tier_mock:
             codes1, source1 = self.handler.get_candidates_with_tier_fallback_pit_gated(
                 date="2024-01-04",
@@ -279,7 +256,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         self.assertEqual(source1, "TIER_1_SNAPSHOT_ASOF")
         self.assertEqual(source2, "TIER_1_SNAPSHOT_ASOF")
         pit_mock.assert_called_once()
-        self.assertEqual(tier_mock.call_count, 2)
+        tier_mock.assert_called_once()
 
     def test_frozen_tier_candidate_manifest_is_bypassed_when_gate_changes(self):
         with patch.object(
@@ -289,12 +266,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ) as pit_mock, patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-            ],
+            return_value={"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
         ) as tier_mock:
             self.handler.freeze_tier_candidate_manifest(
                 [pd.Timestamp("2024-01-04")],
@@ -311,7 +283,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
             )
 
         pit_mock.assert_called_once()
-        self.assertEqual(tier_mock.call_count, 2)
+        tier_mock.assert_called_once()
 
     def test_frozen_tier_candidate_manifest_is_bypassed_when_universe_mode_changes(self):
         with patch.object(
@@ -321,12 +293,7 @@ class TestDataHandlerTierApis(unittest.TestCase):
         ) as pit_mock, patch.object(
             self.handler,
             "get_tiers_as_of",
-            side_effect=[
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-                {"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
-            ],
+            return_value={"A": {"tier": 1, "liquidity_20d_avg_value": 120}},
         ) as tier_mock:
             self.handler.freeze_tier_candidate_manifest(
                 [pd.Timestamp("2024-01-04")],
@@ -344,7 +311,140 @@ class TestDataHandlerTierApis(unittest.TestCase):
             )
 
         pit_mock.assert_called_once()
-        self.assertEqual(tier_mock.call_count, 2)
+        tier_mock.assert_called_once()
+
+    def test_prepare_strict_frozen_candidate_manifest_uses_signal_dates_only(self):
+        self.handler.frozen_candidate_manifest_mode = "record_strict"
+        fake_conn = MagicMock()
+        with patch.object(
+            self.handler,
+            "_begin_snapshot_connection",
+            return_value=(fake_conn, {"connection_id": 7, "snapshot_started_at": "ts"}),
+        ), patch.object(
+            self.handler,
+            "_resolve_tier_candidate_payload",
+            return_value={
+                "candidate_codes": ["A"],
+                "source": "TIER_1_SNAPSHOT_ASOF",
+                "pit_size": 3,
+                "tier1_count": 1,
+                "tier12_count": 2,
+            },
+        ) as resolve_mock:
+            summary = self.handler.prepare_strict_frozen_candidate_manifest(
+                trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+                candidate_lookup_error_policy="raise",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+        called_dates = [call.args[0] for call in resolve_mock.call_args_list]
+        self.assertEqual(called_dates, ["2024-01-02", "2024-01-03"])
+        self.assertEqual(summary["signal_dates"], 2)
+        self.assertEqual(summary["snapshot_connection_id"], 7)
+        self.assertTrue(self.handler._strict_frozen_candidate_manifest_required)
+        fake_conn.rollback.assert_called_once()
+        fake_conn.close.assert_called_once()
+
+    def test_prepare_strict_frozen_candidate_manifest_requires_raise_policy(self):
+        self.handler.frozen_candidate_manifest_mode = "record_strict"
+        with self.assertRaises(ValueError):
+            self.handler.prepare_strict_frozen_candidate_manifest(
+                trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                candidate_lookup_error_policy="skip",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+    def test_strict_frozen_manifest_miss_raises(self):
+        self.handler._frozen_tier_candidate_manifest = {"2024-01-02": {"candidate_codes": [], "source": "NO_CANDIDATES", "pit_size": 0, "tier1_count": 0, "tier12_count": 0}}
+        self.handler._frozen_tier_candidate_manifest_key = self.handler._build_tier_manifest_key(100, 0.3)
+        self.handler._strict_frozen_candidate_manifest_required = True
+
+        with self.assertRaises(ValueError):
+            self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-03",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+    def test_prepare_replay_strict_loads_manifest_file(self):
+        self.handler.frozen_candidate_manifest_mode = "replay_strict"
+        manifest_key = list(self.handler._build_tier_manifest_key(100, 0.3))
+        payload = {
+            "meta": {"manifest_key": manifest_key, "signal_dates": ["2024-01-02"]},
+            "manifest": {
+                "2024-01-02": {
+                    "candidate_codes": ["A"],
+                    "source": "TIER_1_SNAPSHOT_ASOF",
+                    "pit_size": 3,
+                    "tier1_count": 1,
+                    "tier12_count": 2,
+                }
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            import json
+            json.dump(payload, tmp, ensure_ascii=False)
+            tmp_path = tmp.name
+        self.addCleanup(lambda: os.path.exists(tmp_path) and os.remove(tmp_path))
+        self.handler.frozen_candidate_manifest_path = tmp_path
+        self.handler.frozen_candidate_manifest_expected_sha256 = self.handler._hash_file(tmp_path)
+
+        summary = self.handler.prepare_strict_frozen_candidate_manifest(
+            trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            candidate_lookup_error_policy="raise",
+            min_liquidity_20d_avg_value=100,
+            min_tier12_coverage_ratio=0.3,
+        )
+
+        self.assertEqual(summary["mode"], "replay_strict")
+        self.assertEqual(summary["signal_dates"], 1)
+        self.assertEqual(self.handler._frozen_tier_candidate_manifest["2024-01-02"]["candidate_codes"], ["A"])
+
+    def test_prepare_replay_strict_requires_expected_sha256(self):
+        self.handler.frozen_candidate_manifest_mode = "replay_strict"
+        self.handler.frozen_candidate_manifest_path = "/tmp/fake-manifest.json"
+        self.handler.frozen_candidate_manifest_expected_sha256 = None
+
+        with self.assertRaises(ValueError):
+            self.handler.prepare_strict_frozen_candidate_manifest(
+                trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+                candidate_lookup_error_policy="raise",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
+
+    def test_prepare_replay_strict_rejects_signal_date_mismatch(self):
+        self.handler.frozen_candidate_manifest_mode = "replay_strict"
+        manifest_key = list(self.handler._build_tier_manifest_key(100, 0.3))
+        payload = {
+            "meta": {"manifest_key": manifest_key, "signal_dates": ["2024-01-02"]},
+            "manifest": {
+                "2024-01-02": {
+                    "candidate_codes": ["A"],
+                    "source": "TIER_1_SNAPSHOT_ASOF",
+                    "pit_size": 3,
+                    "tier1_count": 1,
+                    "tier12_count": 2,
+                }
+            },
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            import json
+            json.dump(payload, tmp, ensure_ascii=False)
+            tmp_path = tmp.name
+        self.addCleanup(lambda: os.path.exists(tmp_path) and os.remove(tmp_path))
+        self.handler.frozen_candidate_manifest_path = tmp_path
+        self.handler.frozen_candidate_manifest_expected_sha256 = self.handler._hash_file(tmp_path)
+
+        with self.assertRaises(ValueError):
+            self.handler.prepare_strict_frozen_candidate_manifest(
+                trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+                candidate_lookup_error_policy="raise",
+                min_liquidity_20d_avg_value=100,
+                min_tier12_coverage_ratio=0.3,
+            )
 
 
 if __name__ == "__main__":
