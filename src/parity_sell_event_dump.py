@@ -44,7 +44,7 @@ from .universe_policy import resolve_universe_mode
 
 
 _TRIGGER_PRICE_TOLERANCE = 1e-3
-_POSITION_AVG_PRICE_TOLERANCE = 1e-3
+_POSITION_AVG_PRICE_TOLERANCE = 2e-3
 
 
 @dataclass

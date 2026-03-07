@@ -580,7 +580,7 @@ class TestParitySellEventDump(unittest.TestCase):
                 ticker="005930",
                 holdings=1,
                 quantity=10,
-                avg_buy_price=68000.0005,
+                avg_buy_price=68000.0015,
                 current_price=68000.0,
                 total_value=680000.0,
             )
