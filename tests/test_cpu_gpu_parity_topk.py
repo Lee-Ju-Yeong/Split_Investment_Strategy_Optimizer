@@ -15,6 +15,7 @@ from src.cpu_gpu_parity_topk import (
     _load_all_data_to_gpu,
     _load_tier_tensor,
     _resolve_decision_evidence_indices,
+    _summarize_decision_evidence_payload,
     _write_json_artifact,
 )
 
@@ -239,6 +240,65 @@ class TestCpuGpuParityTopk(unittest.TestCase):
         self.assertFalse(partial_scope["decision_level_parity_zero_mismatch"])
         self.assertTrue(partial_scope["promotion_blocked"])
         self.assertIn("decision_fields_not_covered", partial_scope["promotion_block_reasons"])
+
+    def test_apply_decision_evidence_surfaces_pit_failure_rows_separately(self):
+        base_summary = _build_parity_summary(
+            [{"index": 0, "compare": {"mismatch_count": 0, "first_mismatch": None}}],
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        failed = _apply_decision_evidence(
+            base_summary,
+            [
+                {
+                    "row_index": 0,
+                    "decision_level_zero_mismatch": False,
+                    "release_decision_fields_complete": False,
+                    "pit_failure": {"code": "tier12_coverage_gate_failed", "stage": "tier12_coverage_gate"},
+                }
+            ],
+            total_rows=1,
+        )
+
+        self.assertTrue(failed["promotion_blocked"])
+        self.assertEqual(failed["decision_evidence_pit_failure_rows"], 1)
+        self.assertIn("pit_failure_rows=1", failed["promotion_block_reasons"])
+
+    def test_summarize_decision_evidence_payload_includes_candidate_order_and_manifest_fields(self):
+        payload = {
+            "decision_level_zero_mismatch": True,
+            "comparison_scope": "structured_trade_and_state_snapshots",
+            "release_decision_fields_complete": True,
+            "sell_mismatched_pairs": 0,
+            "buy_mismatched_pairs": 0,
+            "cpu_sell_events_count": 1,
+            "gpu_sell_events_count": 1,
+            "cpu_buy_events_count": 1,
+            "gpu_buy_events_count": 1,
+            "daily_snapshot_mismatched_pairs": 0,
+            "position_snapshot_mismatched_pairs": 0,
+            "candidate_order_paired_count": 3,
+            "candidate_order_mismatched_pairs": 0,
+            "candidate_order_zero_mismatch": True,
+            "cpu_candidate_lookup_summary": {"error_count": 0},
+            "pit_failure": None,
+            "frozen_candidate_manifest": {
+                "mode": "record_strict",
+                "path": "results/frozen_manifest.json",
+                "sha256": "abc123",
+            },
+        }
+
+        summary = _summarize_decision_evidence_payload(7, payload, detail_path="detail.json")
+
+        self.assertEqual(summary["row_index"], 7)
+        self.assertEqual(summary["candidate_order_paired_count"], 3)
+        self.assertTrue(summary["candidate_order_zero_mismatch"])
+        self.assertEqual(summary["candidate_lookup_error_count"], 0)
+        self.assertEqual(summary["frozen_candidate_manifest_mode"], "record_strict")
+        self.assertEqual(summary["frozen_candidate_manifest_path"], "results/frozen_manifest.json")
+        self.assertEqual(summary["pit_failure"], None)
 
     def test_write_json_artifact_creates_parent_directory(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

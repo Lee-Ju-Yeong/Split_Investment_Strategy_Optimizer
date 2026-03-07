@@ -462,6 +462,9 @@ def _write_json_artifact(path: str, payload: dict) -> None:
 
 
 def _summarize_decision_evidence_payload(row_index: int, payload: dict, *, detail_path: str | None) -> dict:
+    pit_failure = payload.get("pit_failure")
+    candidate_lookup_summary = payload.get("cpu_candidate_lookup_summary") or {}
+    frozen_manifest = payload.get("frozen_candidate_manifest") or {}
     return {
         "row_index": int(row_index),
         "decision_level_zero_mismatch": bool(payload.get("decision_level_zero_mismatch", False)),
@@ -475,7 +478,37 @@ def _summarize_decision_evidence_payload(row_index: int, payload: dict, *, detai
         "gpu_buy_events_count": int(payload.get("gpu_buy_events_count", 0) or 0),
         "daily_snapshot_mismatched_pairs": int(payload.get("daily_snapshot_mismatched_pairs", 0) or 0),
         "position_snapshot_mismatched_pairs": int(payload.get("position_snapshot_mismatched_pairs", 0) or 0),
+        "candidate_order_paired_count": int(payload.get("candidate_order_paired_count", 0) or 0),
+        "candidate_order_mismatched_pairs": int(payload.get("candidate_order_mismatched_pairs", 0) or 0),
+        "candidate_order_zero_mismatch": bool(payload.get("candidate_order_zero_mismatch", False)),
+        "candidate_lookup_error_count": int(candidate_lookup_summary.get("error_count", 0) or 0),
+        "pit_failure": pit_failure,
+        "pit_failure_code": None if pit_failure is None else pit_failure.get("code"),
+        "pit_failure_stage": None if pit_failure is None else pit_failure.get("stage"),
+        "frozen_candidate_manifest_mode": frozen_manifest.get("mode"),
+        "frozen_candidate_manifest_path": frozen_manifest.get("path"),
+        "frozen_candidate_manifest_sha256": frozen_manifest.get("sha256"),
         "detail_path": detail_path,
+    }
+
+
+def _summarize_decision_evidence_artifacts(evidence_rows: list[dict]) -> dict:
+    checked = len(evidence_rows)
+    candidate_rows = [row for row in evidence_rows if int(row.get("candidate_order_paired_count", 0) or 0) > 0]
+    candidate_passed = sum(1 for row in candidate_rows if bool(row.get("candidate_order_zero_mismatch", False)))
+    pit_failure_rows = sum(1 for row in evidence_rows if row.get("pit_failure"))
+    frozen_manifest_rows = sum(
+        1
+        for row in evidence_rows
+        if str(row.get("frozen_candidate_manifest_mode") or "").strip().lower() in {"record_strict", "replay_strict"}
+    )
+    return {
+        "rows_checked": int(checked),
+        "candidate_order_rows_checked": int(len(candidate_rows)),
+        "candidate_order_rows_passed": int(candidate_passed),
+        "candidate_order_rows_failed": int(len(candidate_rows) - candidate_passed),
+        "pit_failure_rows": int(pit_failure_rows),
+        "frozen_manifest_rows_recorded": int(frozen_manifest_rows),
     }
 
 
@@ -496,12 +529,15 @@ def _apply_decision_evidence(summary: dict, evidence_rows: list[dict], *, total_
         bool(row.get("release_decision_fields_complete", False))
         for row in evidence_rows
     )
+    pit_failure_rows = sum(1 for row in evidence_rows if row.get("pit_failure"))
+    non_pit_mismatch_rows = max(int(checked_count - passed_count - pit_failure_rows), 0)
 
     updated["event_level_diff_collected"] = checked_count > 0
     updated["decision_evidence_rows_checked"] = int(checked_count)
     updated["decision_evidence_rows_passed"] = int(passed_count)
     updated["decision_evidence_all_rows_covered"] = bool(all_rows_covered)
     updated["decision_evidence_release_fields_complete"] = bool(release_fields_complete)
+    updated["decision_evidence_pit_failure_rows"] = int(pit_failure_rows)
     updated["decision_level_parity_zero_mismatch"] = bool(
         updated.get("curve_level_parity_zero_mismatch", False)
         and all_rows_covered
@@ -514,8 +550,11 @@ def _apply_decision_evidence(summary: dict, evidence_rows: list[dict], *, total_
         reasons.append("decision_level_evidence_missing")
     elif not all_rows_covered:
         reasons.append(f"decision_level_evidence_partial({checked_count}/{total_rows})")
-    elif passed_count != checked_count:
-        reasons.append(f"decision_event_mismatch_rows={checked_count - passed_count}")
+    elif pit_failure_rows > 0 or non_pit_mismatch_rows > 0:
+        if pit_failure_rows > 0:
+            reasons.append(f"pit_failure_rows={pit_failure_rows}")
+        if non_pit_mismatch_rows > 0:
+            reasons.append(f"decision_event_mismatch_rows={non_pit_mismatch_rows}")
     elif not release_fields_complete:
         reasons.append("decision_fields_not_covered")
 
@@ -693,6 +732,12 @@ def main() -> None:
             "price_basis": price_basis,
             "adjusted_price_gate_start_date": adjusted_gate_start_date,
             "universe_mode": universe_mode,
+            "config_path": os.environ.get("MAGICSPLIT_CONFIG_PATH") or "config/config.yaml",
+            "frozen_candidate_manifest_mode": strategy_cfg.get("frozen_candidate_manifest_mode", "off"),
+            "frozen_candidate_manifest_path": strategy_cfg.get("frozen_candidate_manifest_path"),
+            "frozen_candidate_manifest_expected_sha256": strategy_cfg.get(
+                "frozen_candidate_manifest_expected_sha256"
+            ),
         },
         "rows": [],
         "summary": {},
@@ -702,6 +747,7 @@ def main() -> None:
         "decision_evidence": {
             "mode": str(args.decision_evidence_mode).strip().lower(),
             "rows": [],
+            "artifact_summary": {},
         },
     }
 
@@ -774,6 +820,9 @@ def main() -> None:
             row_payload["decision_evidence"] = summary_payload
             report["decision_evidence"]["rows"].append(summary_payload)
 
+    report["decision_evidence"]["artifact_summary"] = _summarize_decision_evidence_artifacts(
+        report["decision_evidence"]["rows"]
+    )
     report["summary"] = _apply_decision_evidence(
         report["summary"],
         report["decision_evidence"]["rows"],

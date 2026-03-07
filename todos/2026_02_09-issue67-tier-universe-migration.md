@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. candidate order direct validation artifact와 PIT 실패/로그 표준화도 반영됐고, 남은 핵심은 live evidence 연결입니다.
-- Next action: candidate order artifact를 실제 parity/certification run에 연결하고, strict frozen manifest / PIT failure payload를 runbook에 고정합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽에는 opt-in strict frozen manifest와 general-run lazy cache를 분리해 넣었습니다. candidate order direct validation artifact와 PIT 실패/로그 표준화도 반영됐고, parity/certification run artifact에도 연결했습니다. 남은 핵심은 live evidence 실행과 runbook 고정입니다.
+- Next action: strict frozen manifest mode로 parity/certification live evidence를 1회 수집하고, runbook에 명령/판독 기준을 고정합니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -37,9 +37,10 @@
   - `WeeklyFilteredStocks` dead branch cleanup
   - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
   - CPU `DataHandler`가 동일 gate/date 요청에 대해 lazy run-local cache를 재사용
+  - parity/certification row artifact가 candidate order summary, strict frozen manifest summary, `pit_failure` payload를 함께 저장
 - 아직 필요한 것:
-  - strict frozen manifest artifact를 parity/certification runbook에 연결
-  - candidate order artifact의 live evidence 수집
+  - strict frozen manifest mode live evidence 1회 수집
+  - parity/certification runbook에 artifact 판독 기준 고정
 
 ## 5. Reading Guide
 - 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
@@ -221,6 +222,31 @@
   - 범위 한정:
     - GPU/CPU hot loop 계산식은 건드리지 않았고, failure path와 artifact 직렬화만 구조화
     - real parity/certification run artifact 수집은 아직 별도 단계로 남음
+- 업데이트(2026-03-07, parity/certification artifact wiring):
+  - 구현:
+    - `src/parity_sell_event_dump.py`
+      - CPU runner가 `candidate_lookup_summary`, `run_metrics`, `frozen_candidate_manifest`를 artifact bundle로 함께 반환
+      - parity payload에 `candidate_order_artifact`, `frozen_candidate_manifest`, `pit_failure`, `certification_artifact` 블록 추가
+      - structured PIT 실패 시 비교 run 전체를 죽이지 않고 `comparison_scope=pit_failure` artifact를 반환
+    - `src/cpu_gpu_parity_topk.py`
+      - decision evidence row summary에 `candidate_order_*`, `pit_failure_*`, `frozen_candidate_manifest_*` 필드 추가
+      - top-level `decision_evidence.artifact_summary`에 candidate order row 통계, frozen manifest rows, pit failure rows 집계 추가
+      - parity report meta에 `config_path`, strict frozen manifest config를 기록
+  - 검증:
+    - `tests/test_parity_sell_event_dump.py`
+      - candidate order + frozen manifest artifact 포함 확인
+      - structured PIT failure payload가 parity artifact로 남는지 확인
+    - `tests/test_cpu_gpu_parity_topk.py`
+      - decision evidence summary에 candidate order / frozen manifest / pit failure 필드 포함 확인
+      - `pit_failure_rows`가 promotion reason으로 분리 집계되는지 확인
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_parity_sell_event_dump tests.test_cpu_gpu_parity_topk`
+      - 결과: `29 tests OK`, `1 skipped`
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump tests.test_main_backtest_artifact_mode tests.test_cpu_gpu_parity_topk`
+      - 결과: `94 tests OK`, `5 skipped`
+  - 범위 한정:
+    - candidate order mismatch는 아직 `#56` release gate blocker가 아니라 `#67` runtime artifact 증거로만 남김
+    - `tests.test_gpu_candidate_payload_builder`는 현재 세션의 CUDA OS import 한계 때문에 제외하고 회귀를 돌림
+    - `pit_failure != null`이면 해당 artifact는 failed certification artifact로 읽고, 함께 저장된 `frozen_candidate_manifest`는 success proof가 아니라 provenance/context로만 해석
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `DataHandler.get_pit_universe_codes_as_of()` 추가: `TickerUniverseSnapshot latest(as-of)` 우선, empty 시 `TickerUniverseHistory active(as-of)` fallback

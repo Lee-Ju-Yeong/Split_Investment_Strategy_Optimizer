@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from src.data_handler import PitRuntimeError
 from src.parity_sell_event_dump import (
     BuyEvent,
     CandidateRankRow,
@@ -729,6 +730,168 @@ class TestParitySellEventDump(unittest.TestCase):
         self.assertFalse(payload["candidate_order_zero_mismatch"])
         self.assertFalse(payload["candidate_order_pairs"][0]["matched"])
         self.assertTrue(payload["decision_level_zero_mismatch"])
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_embeds_candidate_order_and_frozen_manifest_artifacts(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        candidate_rows = [
+            CandidateRankRow(
+                source="cpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="005930",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.1234,
+            )
+        ]
+        gpu_candidate_rows = [
+            CandidateRankRow(
+                source="gpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="005930",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.1234,
+            )
+        ]
+        mock_cpu_runner.return_value = (
+            [],
+            [],
+            _daily_snapshots()[0],
+            _position_snapshots()[0],
+            candidate_rows,
+            {
+                "candidate_lookup_summary": {"error_count": 0, "policy": "raise"},
+                "run_metrics": {"pit_failure_days_by_code": {}},
+                "frozen_candidate_manifest": {
+                    "mode": "record_strict",
+                    "path": "results/frozen_manifest.json",
+                    "sha256": "abc123",
+                },
+            },
+        )
+        mock_gpu_runner.return_value = (
+            [],
+            [],
+            _daily_snapshots()[1],
+            _position_snapshots()[1],
+            gpu_candidate_rows,
+            "",
+        )
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertEqual(payload["cpu_candidate_lookup_summary"]["error_count"], 0)
+        self.assertEqual(payload["frozen_candidate_manifest"]["mode"], "record_strict")
+        self.assertTrue(payload["candidate_order_artifact"]["zero_mismatch"])
+        self.assertTrue(payload["certification_artifact"]["candidate_order"]["zero_mismatch"])
+        self.assertEqual(
+            payload["certification_artifact"]["frozen_candidate_manifest"]["path"],
+            "results/frozen_manifest.json",
+        )
+        self.assertIsNone(payload["certification_artifact"]["pit_failure"])
+
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_returns_structured_pit_failure_payload(
+        self,
+        mock_cpu_runner,
+    ):
+        mock_cpu_runner.side_effect = PitRuntimeError(
+            "tier12_coverage_gate_failed",
+            "coverage gate failed",
+            stage="tier12_coverage_gate",
+            details={"date": "2024-01-02"},
+        )
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertFalse(payload["decision_level_zero_mismatch"])
+        self.assertFalse(payload["release_decision_fields_complete"])
+        self.assertEqual(payload["comparison_scope"], "pit_failure")
+        self.assertEqual(payload["pit_failure"]["code"], "tier12_coverage_gate_failed")
+        self.assertEqual(payload["certification_artifact"]["pit_failure"]["stage"], "tier12_coverage_gate")
+        self.assertEqual(payload["candidate_order_artifact"]["paired_count"], 0)
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_preserves_cpu_manifest_artifact_on_gpu_pit_failure(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        mock_cpu_runner.return_value = (
+            [],
+            [],
+            _daily_snapshots()[0],
+            _position_snapshots()[0],
+            [],
+            {
+                "candidate_lookup_summary": {"error_count": 0, "policy": "raise"},
+                "run_metrics": {"pit_failure_days_by_code": {}},
+                "frozen_candidate_manifest": {
+                    "mode": "replay_strict",
+                    "path": "results/frozen_manifest.json",
+                    "sha256": "deadbeef",
+                },
+            },
+        )
+        mock_gpu_runner.side_effect = PitRuntimeError(
+            "frozen_manifest_sha_mismatch",
+            "sha mismatch",
+            stage="strict_frozen_manifest_replay",
+            details={"path": "results/frozen_manifest.json"},
+        )
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertEqual(payload["pit_failure"]["code"], "frozen_manifest_sha_mismatch")
+        self.assertEqual(payload["frozen_candidate_manifest"]["mode"], "replay_strict")
+        self.assertEqual(
+            payload["certification_artifact"]["frozen_candidate_manifest"]["path"],
+            "results/frozen_manifest.json",
+        )
 
 
 if __name__ == "__main__":
