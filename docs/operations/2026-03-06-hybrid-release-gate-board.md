@@ -57,7 +57,7 @@
 ## 7. 현재 미충족 항목
 - `#56` synthetic/research parity gate는 종결되었고, 실제 optimizer/WFO CSV가 생기면 spot revalidation만 남음
 - `#67` runtime PIT candidate policy는 live evidence까지 종결되었고, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact 증적을 확보함
-- `#97` strict-only cleanup은 `tier_hysteresis_mode` strict-only까지만 확정됐고, candidate policy(`candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`)의 runtime shim 제거와 retained wrapper drift / approval gate / step 2 운영 관찰이 남음
+- `#97` strict-only cleanup은 runtime fail-fast와 retained wrapper drift 정리까지 반영됐고, Gate A/B 승인도 완료됐다. 남은 것은 Gate C와 step 2 운영 관찰이다.
 - release-safe / research-only example 분리는 반영됐지만, 운영 승인 판단은 여전히 별도 증적이 필요
 
 ## 8. 현재 예시 config 해석

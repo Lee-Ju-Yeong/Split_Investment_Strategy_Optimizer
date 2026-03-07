@@ -45,3 +45,4 @@
 - Run:
   - `python -m unittest tests.test_wrapper_usage -v`
   - `python -m unittest tests.test_issue69_cpu_backtest_wrapper_compat tests.test_issue69_entrypoint_compat -v`
+  - `python -m unittest tests.test_issue97_retained_wrapper_drift -v`

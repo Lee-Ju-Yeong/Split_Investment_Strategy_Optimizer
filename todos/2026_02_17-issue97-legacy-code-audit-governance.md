@@ -1,17 +1,17 @@
 # Issue #97: Legacy Audit And Strict-Only Governance
 
 > Type: `implementation`
-> Status: `in progress`
+> Status: `in review`
 > Priority: `P1`
 > Last updated: 2026-03-07
 > Related issues: `#97`, `#93`, `#98`
-> Gate status: `Gate A/B/C pending, strict-only step 1 follow-up in progress`
+> Gate status: `Gate A/B approved, Gate C pending, step 2 observation pending`
 
 ## 1. One-Page Summary
 - What: 레거시, fallback, 호환 경로를 무작정 지우지 않고 승인 게이트를 거쳐 정리하는 문서입니다.
 - Why: 실행 경로를 단순화해야 parity와 문서 가독성도 같이 좋아지지만, 잘못 지우면 운영 계약이 깨집니다.
-- Current status: 1차 인벤토리, 저위험 아카이브 이동, fallback 축소 1차에 이어 `tier_hysteresis_mode` strict-only fail-fast는 반영됐습니다. 이번 follow-up에서는 tests/docs/config를 `candidate_source_mode='tier'` + `use_weekly_alpha_gate=False` strict-only spec으로 맞췄고, runtime wrapper shim 제거는 별도 코드 작업으로 남아 있습니다.
-- Next action: candidate runtime shim 제거, Gate A/B 승인, retained wrapper drift 회귀를 순차적으로 정리합니다.
+- Current status: runtime strict-only fail-fast(`tier_hysteresis_mode`, `candidate_source_mode`, `use_weekly_alpha_gate`)와 retained wrapper drift 정리까지 반영됐습니다. `src.pipeline_batch`와 `src.ohlcv_batch`는 canonical module thin wrapper로 재정렬했고, Gate A/B 승인 기준도 충족했습니다.
+- Next action: Gate C 승인 기록과 step 2 운영 지표 관찰(최소 2주)을 진행합니다.
 
 ## 2. Fixed Rules
 - 근거 없는 즉시 삭제는 금지합니다.
@@ -22,9 +22,9 @@
 - [x] 레거시 인벤토리 1차 작성
 - [x] 저위험 archive 이동
 - [x] fallback 축소 1차 반영
-- [ ] strict-only step 1: `strict_hysteresis_v1` + `candidate_source_mode='tier'` + `use_weekly_alpha_gate=False`만 허용
-- [ ] Gate A 승인
-- [ ] Gate B 승인
+- [x] strict-only step 1: `strict_hysteresis_v1` + `candidate_source_mode='tier'` + `use_weekly_alpha_gate=False`만 허용
+- [x] Gate A 승인
+- [x] Gate B 승인
 - [ ] Gate C 승인
 - [ ] strict-only step 2: 운영 지표 최소 2주 관찰
 - [ ] strict-only step 3: non-strict 코드/테스트/문서 삭제
@@ -35,11 +35,13 @@
   - `allow_legacy_fallback`과 tier fallback 일부 축소
   - `tier_hysteresis_mode=legacy`는 strict validator로 거부
   - CPU strategy/shared helper, tests/docs/config는 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False` strict-only spec으로 정렬
-- 아직 필요한 것:
+- 이번 라운드에서 닫은 것:
   - candidate runtime shim 제거
-  - 승인 기록
-  - retained wrapper drift 재점검
-  - real entrypoint regression test 보강
+  - retained wrapper drift 재정렬(`src.pipeline_batch`, `src.ohlcv_batch`)
+  - real entrypoint regression test 보강(`--help`, wrapper->canonical symbol identity)
+- 아직 필요한 것:
+  - Gate C 승인 기록
+  - step 2 운영 지표 관찰(최소 2주)
 
 ## 5. Reading Guide
 - 이 문서는 “무엇을 지워도 되는가”보다 “무엇은 왜 아직 남겨야 하는가”를 먼저 설명합니다.
@@ -55,8 +57,8 @@
 - [x] fallback 축소 1차 반영
   - `L-003`: strict 경로에서 Tier2 fallback 비사용(`allow_tier2_fallback=False`)
   - `L-005`: `--allow-legacy-fallback` deprecated 명시(문구/경고)
-- [ ] Gate A: 인벤토리 확정 승인
-- [ ] Gate B: 제거/축소 대상 항목별 승인
+- [x] Gate A: 인벤토리 확정 승인
+- [x] Gate B: 제거/축소 대상 항목별 승인
 - [ ] Gate C: 배포 전 최종 승인
 
 ## 1. 이번 이슈의 핵심 원칙 (현업 기준)
@@ -80,15 +82,15 @@
 | L-001 | `src/backtest/cpu/strategy.py` | 종목선정/우선순위 | runtime strict-only: `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`, `additional_buy_priority`로 신호 순서 결정 | 변경 시 CPU/GPU parity 및 종목선정 결과 변동 | High | 유지 | strict validator + entry ranking 분기 존재 |
 | L-002 | `src/backtest/cpu/execution.py` | 체결/정산 | 한국시장 호가 반올림 + 매수/매도 체결 정산 SSOT | 체결가/수량/손익 왜곡 | High | 유지 | `_adjust_price_up`, `_execute_buy/_execute_sell` |
 | L-003 | `src/data_handler.py` | 후보군 fallback | `get_candidates_with_tier_fallback` (tier1 우선, tier<=2 fallback) | 후보군 공백/의도치 않은 전략 드리프트 | Medium | 축소 | #67 정책 전환 단계 fallback 핵심 |
-| L-004 | `src/backtest/gpu/engine.py` | 모드 호환 fallback | strict-only spec과 달리 legacy `candidate_source_mode`를 warning 후 `tier`로 coercion | 설정 오류를 조용히 숨길 위험 | Medium | 축소 | runtime shim 제거 필요 |
+| L-004 | `src/backtest/gpu/engine.py` | 모드 호환 fallback | strict-only spec에서 legacy candidate mode와 `use_weekly_alpha_gate=True`를 즉시 거부 | 설정 오류를 조용히 숨길 위험 | Medium | 축소 완료 | `normalize_runtime_candidate_policy` fail-fast 반영 |
 | L-005 | `src/pipeline/ohlcv_batch.py` | 데이터 fallback | `--allow-legacy-fallback`로 history 비어있을 때 legacy 유니버스 사용 | 데이터 소스 일관성 저하 가능성 | Medium | 축소 | TODO/P0 후속에서 제거 예정으로 명시 |
 | L-006 | `src/main_script.py` | legacy orchestrator | 주간 필터 CSV/DB 경로 기반 legacy/general 파이프라인 | 신규 배치 체계와 중복 운영 리스크 | Medium | 축소 | `legacy/general data pipeline` 명시 |
-| L-007 | `src/pipeline_batch.py` | entrypoint wrapper | `src.pipeline.batch` thin wrapper | 운영 커맨드 계약 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
+| L-007 | `src/pipeline_batch.py` | entrypoint wrapper | `src.pipeline.batch` thin wrapper | 운영 커맨드 계약 파손 | Medium | 유지 | 2026-03-07 thin-forward 재정렬 완료 |
 | L-008 | `src/ticker_universe_batch.py` | entrypoint wrapper | `src.pipeline.ticker_universe_batch` thin wrapper | 운영 스크립트 호환 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
-| L-009 | `src/ohlcv_batch.py` | entrypoint wrapper | `src.pipeline.ohlcv_batch` thin wrapper | 운영 스크립트 호환 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
+| L-009 | `src/ohlcv_batch.py` | entrypoint wrapper | `src.pipeline.ohlcv_batch` thin wrapper | 운영 스크립트 호환 파손 | Medium | 유지 | 2026-03-07 thin-forward 재정렬 완료 |
 | L-010 | `src/walk_forward_analyzer.py` | entrypoint wrapper | `src.analysis.walk_forward_analyzer` thin wrapper | 운영/문서 커맨드 호환 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
 | L-011 | `src/parameter_simulation_gpu.py` | entrypoint wrapper | import-safe wrapper(`#60`) | public API/실행 커맨드 호환 파손 | Medium | 유지 | #93 keep 목록 |
-| L-012 | `src/parameter_simulation_gpu_lib.py` | legacy import compat | `src.optimization.gpu.*` re-export | legacy import 깨짐 | Medium | 유지 | #93 keep 목록 + compat 테스트 |
+| L-012 | `src/parameter_simulation_gpu_lib.py` | legacy import compat | broad compatibility facade (`src.optimization.gpu.*` re-export) | legacy import 깨짐 | Medium | 유지(예외) | thin wrapper는 아니지만 Gate B에서 명시적 예외로 유지 |
 | L-013 | `src/tier_parity_monitor.py` | 운영보조 wrapper | parity 명령 래핑 + PASS/FAIL 출력 | 즉시 삭제 시 운영 모니터링 편의 하락 | Low | 아카이브 후보 | `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md`에서 사용 |
 | L-014 | `reproduce_issue.py` | 유휴 재현 스크립트 | 단발성 pykrx 재현 코드(레포 참조 없음) | 삭제 리스크 낮음 | Low | 아카이브 후보 | 코드/문서 참조 검색 결과 없음 |
 | L-015 | `reproduce_issue_v2.py` | 유휴 재현 스크립트 | 단발성 pykrx 재현 코드(레포 참조 없음) | 삭제 리스크 낮음 | Low | 아카이브 후보 | 코드/문서 참조 검색 결과 없음 |
@@ -102,38 +104,47 @@
 - [x] 레거시 인벤토리 1차 작성
 - [x] 저위험 archive 이동(3건) 반영
 - [x] fallback 축소 1차 반영(`L-003`, `L-005`)
-- [ ] Strict-only 전환 1단계: `strict_hysteresis_v1` + `candidate_source_mode='tier'`/`use_weekly_alpha_gate=False`만 허용(legacy 입력 시 fail-fast)
+- [x] Strict-only 전환 1단계: `strict_hysteresis_v1` + `candidate_source_mode='tier'`/`use_weekly_alpha_gate=False`만 허용(legacy 입력 시 fail-fast)
 - [ ] Strict-only 전환 2단계: 운영 지표 관찰(최소 2주)
 - [ ] Strict-only 전환 3단계: non-strict 코드/테스트/문서 완전 삭제
-- [ ] Gate A 승인 완료
-- [ ] 제거/축소 대상 확정안 작성
-- [ ] Gate B 승인 완료
-- [ ] 승인 범위만 PR로 반영
+- [x] Gate A 승인 완료
+- [x] 제거/축소 대상 확정안 작성
+- [x] Gate B 승인 완료
+- [x] 승인 범위만 PR로 반영
 - [ ] Gate C 승인 완료
-- [ ] `TODO.md`/`todos/`/이슈 코멘트 동기화
+- [x] `TODO.md`/`todos/` 동기화
 
 ## 6. 완료 기준
 - [ ] 전수조사 인벤토리 완료(근거 포함)
 - [ ] 유지/축소/제거/아카이브 분류 확정
 - [ ] 사용자 승인 게이트 A/B/C 기록 완료
-- [ ] 승인 범위 제거 PR 병합 완료
 
-## 6-1. 2026-03-07 strict-only step 1 반영
+## 6-1. 2026-03-07 strict-only step 1 / wrapper drift 반영
 - 구현:
   - `src/tier_hysteresis_policy.py` 추가
   - `src/candidate_runtime_policy.py` 추가
-  - `src/backtest/cpu/strategy.py`는 candidate strict validator를 사용하고, tests/docs/config는 동일 spec으로 정렬
-  - `src/backtest/gpu/engine.py`, `src/optimization/gpu/parameter_simulation.py`, `src/debug_gpu_single_run.py`, `src/parity_sell_event_dump.py`, `src/backtest/gpu/logic.py`의 retained shim 제거는 후속 코드 작업으로 남음
+  - `src/gpu_execution_policy.py` 추가
+  - CPU/GPU/optimizer/debug/parity가 동일 strict validator를 사용
+  - `src/pipeline_batch.py`, `src/ohlcv_batch.py`를 canonical module thin wrapper로 재정렬
 - 테스트/문서:
   - `tests/test_cpu_strategy_entry_context.py`
   - `tests/test_gpu_engine_prep_path.py`
   - `tests/test_gpu_parameter_simulation_orchestration.py`
   - `tests/test_gpu_parameter_batch_fallback.py`
+  - `tests/test_gpu_execution_policy.py`
   - `tests/test_issue67_tier_universe.py`
+  - `tests/test_issue97_retained_wrapper_drift.py`
   - `tests/test_parity_sell_event_dump.py`
+  - `tests/test_pipeline_batch.py`
+  - `tests/test_ohlcv_batch.py`
+  - `tests/test_wrapper_usage.py`
+  - `tests/test_issue69_entrypoint_compat.py`
+  - `tests/test_issue69_cpu_backtest_wrapper_compat.py`
   - `config/config.example.yaml`
 - 해석:
-  - `tier_hysteresis_mode` strict-only는 반영됐지만, candidate runtime shim 제거 전까지 step 1을 닫았다고 보지 않는다.
+  - strict-only step 1은 닫혔다.
+  - retained wrapper drift도 `pipeline_batch`/`ohlcv_batch` 기준으로 닫혔다.
+  - 남은 것은 Gate C와 step 2 운영 관찰이다.
 
 ## 7. 다음 PR 제안 (분리 권장)
 - PR-97A: 인벤토리/정책 문서 고정 (코드 변경 없음)
@@ -173,17 +184,17 @@
   - 제거 PR + 롤백 메모 + 운영 반영 기록
 
 ## 9. 2026-03-07 후속 체크리스트 초안 (retained wrapper contract)
-- [ ] retained entrypoint wrapper drift 재점검
-  - `src.pipeline_batch.py`
-  - `src.ohlcv_batch.py`
-  - `src.ticker_universe_batch.py`
-- [ ] wrapper는 thin forwarder만 허용하도록 기준 명문화
+- [x] retained entrypoint wrapper drift 재점검
+  - `src.pipeline_batch.py`, `src.ohlcv_batch.py`는 thin wrapper로 재정렬
+  - `src.ticker_universe_batch.py`, `src.walk_forward_analyzer.py`, `src.parameter_simulation_gpu.py`는 기존 thin wrapper 유지 확인
+  - `src.parameter_simulation_gpu_lib.py`는 Gate B 승인 예외(compat facade)로 유지
+- [x] wrapper는 thin forwarder만 허용하도록 기준 명문화
   - canonical 구현 모듈만 import
   - CLI/help/argparse는 canonical과 동일 동작 유지
-- [ ] real entrypoint regression test 보강
+- [x] real entrypoint regression test 보강
   - `python -m src.pipeline_batch --help`
   - `python -m src.ohlcv_batch --help`
   - wrapper import/export뿐 아니라 canonical delegation까지 검증
-- [ ] `src.pipeline_batch.py`와 `src.pipeline.batch`의 SSOT 위치 재확정
-  - 테스트 경로와 운영 경로가 다른 파일을 보지 않도록 정리
-- [ ] thin wrapper 유지 항목은 삭제 대상이 아니라 drift 방지 대상으로 분류 업데이트
+- [x] `src.pipeline_batch.py`와 `src.pipeline.batch`의 SSOT 위치 재확정
+  - canonical 구현은 `src.pipeline.*`, `src.*` wrapper는 entrypoint thin forwarder로 고정
+- [x] thin wrapper 유지 항목은 삭제 대상이 아니라 drift 방지 대상으로 분류 업데이트
