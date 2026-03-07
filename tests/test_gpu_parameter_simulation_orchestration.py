@@ -82,6 +82,8 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
                 "use_weekly_alpha_gate": use_weekly_alpha_gate,
                 "tier_hysteresis_mode": "legacy",
                 "cooldown_period_days": 5,
+                "min_liquidity_20d_avg_value": 123,
+                "min_tier12_coverage_ratio": 0.45,
             },
             execution_params_base={},
             db_connection_str="mysql+pymysql://user:pw@host/db",
@@ -166,6 +168,8 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertEqual(kwargs["universe_mode"], "optimistic_survivor")
         _, tier_kwargs = mock_preload_tier.call_args
         self.assertEqual(tier_kwargs["universe_mode"], "optimistic_survivor")
+        self.assertEqual(tier_kwargs["min_liquidity_20d_avg_value"], 123)
+        self.assertAlmostEqual(float(tier_kwargs["min_tier12_coverage_ratio"]), 0.45, places=6)
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
@@ -217,6 +221,8 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertEqual(kwargs["universe_mode"], "optimistic_survivor")
         _, tier_kwargs = mock_preload_tier.call_args
         self.assertEqual(tier_kwargs["universe_mode"], "optimistic_survivor")
+        self.assertEqual(tier_kwargs["min_liquidity_20d_avg_value"], 123)
+        self.assertAlmostEqual(float(tier_kwargs["min_tier12_coverage_ratio"]), 0.45, places=6)
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])

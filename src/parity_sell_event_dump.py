@@ -388,6 +388,8 @@ def _run_gpu_and_collect_sell_events(
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=int(strategy_cfg.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=strategy_cfg.get("min_tier12_coverage_ratio"),
     )
     pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
         db_connection_str,
