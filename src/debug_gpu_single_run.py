@@ -118,6 +118,8 @@ def preload_tier_data_to_tensor(
     trading_dates_pd,
     *,
     universe_mode="optimistic_survivor",
+    min_liquidity_20d_avg_value=0,
+    min_tier12_coverage_ratio=None,
 ):
     return preload_tier_data_to_tensor_shared(
         engine,
@@ -126,6 +128,8 @@ def preload_tier_data_to_tensor(
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+        min_tier12_coverage_ratio=min_tier12_coverage_ratio,
     )
 
 # -----------------------------------------------------------------------------
@@ -242,6 +246,8 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=int(params_dict.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=params_dict.get("min_tier12_coverage_ratio"),
     )
 
     # 3. 백테스팅 커널 실행

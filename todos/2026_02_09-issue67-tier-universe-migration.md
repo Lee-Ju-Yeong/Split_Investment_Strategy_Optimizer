@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path와 coverage gate는 대부분 정리됐지만, runtime candidate gate parity와 frozen PIT manifest는 아직 남았습니다.
-- Next action: optimizer/runtime path에도 CPU와 같은 candidate gate를 태우고, run-scoped manifest cache를 도입합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity까지는 정리됐고, frozen PIT manifest와 candidate order direct validation이 남았습니다.
+- Next action: run-scoped manifest cache를 도입하고, CPU/GPU candidate order를 직접 비교하는 증적을 추가합니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -24,7 +24,7 @@
 - [x] ATR as-of / `signal_date(T-1)` 정합 반영
 - [x] coverage report + `--fail-on-gate` 보강
 - [x] empirical threshold `0.45` 고정
-- [ ] runtime candidate gate parity
+- [x] runtime candidate gate parity
 - [ ] frozen PIT candidate manifest
 - [ ] CPU/GPU candidate order direct validation
 - [ ] PIT 실패 시 예외/로그 표준화
@@ -34,10 +34,10 @@
   - `candidate_source_mode` 정규화
   - tier coverage gate와 sampled report 동기화
   - `WeeklyFilteredStocks` dead branch cleanup
+  - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
 - 아직 필요한 것:
-  - optimizer/runtime 경로의 `min_liquidity_20d_avg_value`
-  - `min_tier12_coverage_ratio` 완전 동일화
   - run 중 DB drift를 막는 frozen manifest
+  - CPU/GPU candidate order direct validation artifact
 
 ## 5. Reading Guide
 - 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
@@ -100,6 +100,13 @@
     - `2015-01-12..2015-01-26`: 최저 `0.477972`
     - `2023-11-06..2023-11-20`: 최저 `0.487128`
   - exact-snapshot proxy(20-snapshot step) 최저값도 약 `0.4525`로 확인되어 `0.45`를 운영 하한으로 채택
+- 업데이트(2026-03-07, runtime gate parity sync):
+  - `src/optimization/gpu/data_loading.py.preload_tier_data_to_tensor()`가 `liquidity_20d_avg_value`를 함께 preload하고, GPU tensor 단계에서 `min_liquidity_20d_avg_value`와 `min_tier12_coverage_ratio`를 적용하도록 보강
+  - `src/optimization/gpu/parameter_simulation.py`, `src/debug_gpu_single_run.py`, `src/parity_sell_event_dump.py`가 같은 gate 값을 공용 preload 함수로 전달하도록 정리
+  - 검증:
+    - `tests/test_gpu_tier_tensor_pit.py`
+    - `tests/test_gpu_parameter_simulation_orchestration.py`
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration` 통과 (`8 tests`)
 - 남은 핵심:
   - `tier` 경로 기준 end-to-end CPU/GPU parity 하네스(#56) (`tests/test_cpu_gpu_parity_topk.py`)
     - 주의: parity 하네스의 "구현/진척 관리"는 #56에서 진행하고, #67에서는 "승격 게이트(DoD)"로만 참조한다.
@@ -167,6 +174,7 @@
 - [x] `WeeklyFilteredStocks` 전용 로더 외 `DailyStockTier` 기반 로더 추가
 - [x] GPU 후보군 생성 로직에 `tier=1 -> <=2 fallback` 동일 규칙 적용
 - [ ] CPU/GPU 동일 입력일 때 동일 후보군이 생성되는지 검증
+- [x] optimizer/debug/parity 경로에서 공용 tier preload gate(`min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`) 전달
 
 ### 3-4. 운용/검증 가드
 - [x] 구간별 Tier 커버리지 리포트 추가 (`date`, `tier1_count`, `tier12_count`)

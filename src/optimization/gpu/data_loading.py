@@ -457,6 +457,8 @@ def preload_tier_data_to_tensor(
     trading_dates_pd,
     *,
     universe_mode="optimistic_survivor",
+    min_liquidity_20d_avg_value=0,
+    min_tier12_coverage_ratio=None,
 ):
     """
     Loads DailyStockTier data and converts it to a dense (num_days, num_tickers) int8 tensor.
@@ -472,12 +474,12 @@ def preload_tier_data_to_tensor(
     end_date_str = pd.to_datetime(end_date).strftime("%Y-%m-%d")
     universe_filter_t = _build_universe_filter_clause(universe_mode, "t")
     query = f"""
-        SELECT t.date, t.stock_code as ticker, t.tier
+        SELECT t.date, t.stock_code as ticker, t.tier, t.liquidity_20d_avg_value
         FROM DailyStockTier t
         WHERE t.date BETWEEN '{start_date_str}' AND '{end_date_str}'
           {universe_filter_t}
         UNION ALL
-        SELECT t.date, t.stock_code as ticker, t.tier
+        SELECT t.date, t.stock_code as ticker, t.tier, t.liquidity_20d_avg_value
         FROM DailyStockTier t
         JOIN (
             SELECT stock_code, MAX(date) AS max_date
@@ -496,6 +498,13 @@ def preload_tier_data_to_tensor(
         return cp.zeros((len(trading_dates_pd), len(all_tickers)), dtype=cp.int8)
 
     df_reindexed = _build_tier_frame(df_pd, trading_dates_pd, all_tickers)
+    liquidity_asof = _build_asof_value_frame(
+        df_pd,
+        trading_dates_pd,
+        all_tickers,
+        value_col="liquidity_20d_avg_value",
+        fill_value=-1.0,
+    )
     universe_mask = _build_universe_mask_frame(
         sql_engine=sql_engine,
         start_date_sql=start_date_str,
@@ -504,8 +513,18 @@ def preload_tier_data_to_tensor(
         trading_dates_pd=trading_dates_pd,
         universe_mode=universe_mode,
     )
+    min_liq = max(int(min_liquidity_20d_avg_value or 0), 0)
+    if min_liq > 0:
+        liquidity_mask = liquidity_asof.fillna(-1.0) >= float(min_liq)
+        df_reindexed = df_reindexed.where(liquidity_mask, 0)
     if not universe_mask.empty:
         df_reindexed = df_reindexed.where(universe_mask, 0)
+        _enforce_tier12_coverage_gate(
+            df_reindexed=df_reindexed,
+            universe_mask=universe_mask,
+            trading_dates_pd=trading_dates_pd,
+            min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+        )
     tier_tensor = cp.asarray(df_reindexed.values, dtype=cp.int8)
 
     print(f"✅ Tier data loaded and tensorized. Shape: {tier_tensor.shape}. Time: {time.time() - start_time:.2f}s")
@@ -704,6 +723,53 @@ def _build_tier_frame(df_pd, trading_dates_pd, all_tickers):
         df_ffilled.reindex(index=trading_dates_pd, columns=[str(t) for t in all_tickers])
         .fillna(0)
         .astype(int)
+    )
+
+
+def _build_asof_value_frame(df_pd, trading_dates_pd, all_tickers, *, value_col, fill_value):
+    df_wide = (
+        df_pd.assign(ticker=df_pd["ticker"].astype(str))
+        .pivot_table(index="date", columns="ticker", values=value_col, aggfunc="last")
+        .sort_index()
+    )
+    union_index = df_wide.index.union(trading_dates_pd).sort_values()
+    df_ffilled = df_wide.reindex(index=union_index).ffill()
+    return df_ffilled.reindex(
+        index=trading_dates_pd,
+        columns=[str(t) for t in all_tickers],
+    ).fillna(fill_value)
+
+
+def _enforce_tier12_coverage_gate(
+    *,
+    df_reindexed,
+    universe_mask,
+    trading_dates_pd,
+    min_tier12_coverage_ratio,
+):
+    if min_tier12_coverage_ratio is None:
+        return
+
+    threshold = float(min_tier12_coverage_ratio)
+    if threshold <= 0.0:
+        return
+
+    universe_counts = universe_mask.sum(axis=1)
+    tier1_counts = (df_reindexed == 1).sum(axis=1)
+    tier12_counts = ((df_reindexed > 0) & (df_reindexed <= 2)).sum(axis=1)
+    failing = (universe_counts > 0) & ((tier12_counts / universe_counts) < threshold)
+    if not failing.any():
+        return
+
+    fail_date = trading_dates_pd[failing.to_numpy().nonzero()[0][0]]
+    pit_size = int(universe_counts.loc[fail_date])
+    tier1_count = int(tier1_counts.loc[fail_date])
+    tier12_count = int(tier12_counts.loc[fail_date])
+    ratio = float(tier12_count) / float(pit_size)
+    raise ValueError(
+        f"Tier coverage gate failed on {fail_date.date()}: "
+        f"tier12_ratio={ratio:.4f} < threshold={threshold:.4f} "
+        f"(tier1_count={tier1_count}, tier12_count={tier12_count}, universe_count={pit_size})"
     )
 
 

@@ -227,6 +227,8 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=int(strategy_params.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=strategy_params.get("min_tier12_coverage_ratio"),
     )
     pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
         db_connection_str,

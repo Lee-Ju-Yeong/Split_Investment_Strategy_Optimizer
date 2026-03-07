@@ -26,7 +26,7 @@
 | Gate | Current State | Meaning | Owner Doc |
 | --- | --- | --- | --- |
 | `#56 Release parity` | Done (synthetic) | config single-row + synthetic `top-k=20` 범위까지 decision-level 증적 확보, real optimizer/WFO CSV는 spot revalidation만 남음 | [#56](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md) |
-| `#67 Runtime PIT candidate policy` | Open | CPU/GPU 후보군 게이트와 frozen manifest 정리가 아직 남음 | [#67](todos/2026_02_09-issue67-tier-universe-migration.md) |
+| `#67 Runtime PIT candidate policy` | Open | GPU runtime gate parity는 반영됐고, frozen manifest와 candidate order direct validation이 아직 남음 | [#67](todos/2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `#97 Strict-only governance` | Open | 제거/축소 대상과 strict-only 전환 승인 절차가 남음 | [#97](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
 | `#98 Throughput promotion` | Blocked | `#67/#97`이 닫히기 전에는 승격 판단 불가 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
@@ -34,7 +34,7 @@
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
-| `P0` | `#67` PIT universe + DailyStockTier runtime 정렬 | In Progress | CPU/GPU 후보군 규칙을 완전히 같게 만들어야 함 | runtime candidate gate parity + frozen PIT manifest 정리 | [doc](todos/2026_02_09-issue67-tier-universe-migration.md) |
+| `P0` | `#67` PIT universe + DailyStockTier runtime 정렬 | In Progress | GPU preload gate까지 맞췄고, 이제 run-scoped frozen manifest와 candidate order direct validation이 남음 | frozen PIT manifest + candidate order direct validation 정리 | [doc](todos/2026_02_09-issue67-tier-universe-migration.md) |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P1` | `#97` legacy strict-only 전환 | In Progress | fallback/legacy 경로를 줄여야 문서와 실행 경로가 단순해짐 | Gate A/B 승인과 strict-only step 1 확정 | [doc](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
 | `P1` | `#98` GPU throughput refactor | Blocked | 성능은 중요하지만 의미론이 먼저 고정돼야 함 | fixed-data VRAM + ranking hot path 설계, 단 승격은 보류 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
