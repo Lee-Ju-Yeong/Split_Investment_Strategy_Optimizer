@@ -4,29 +4,37 @@ It is used to test the GPU single run with the parameters from the config.yaml f
 """
 import time
 import argparse
+from pathlib import Path
+import sys
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
 import os
 import urllib.parse
 
+# BOOTSTRAP: allow direct execution (`python src/debug_gpu_single_run.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 # --- 필요한 모듈 추가 임포트 ---
-from src.config_loader import load_config
-from src.backtest.gpu.engine import run_magic_split_strategy_on_gpu
-from src.gpu_execution_policy import build_gpu_execution_params
-from src.price_policy import (
+from .config_loader import load_config
+from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
+from .gpu_execution_policy import build_gpu_execution_params
+from .price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,
     validate_backtest_window_for_price_policy,
 )
-from src.tier_hysteresis_policy import normalize_tier_hysteresis_mode
-from src.universe_policy import resolve_universe_mode
-from src.optimization.gpu.data_loading import (
+from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
+from .universe_policy import resolve_universe_mode
+from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
     preload_tier_data_to_tensor as preload_tier_data_to_tensor_shared,
 )
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
-from src.performance_analyzer import PerformanceAnalyzer
+from .performance_analyzer import PerformanceAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
@@ -301,7 +309,7 @@ def _cpu_daily_values_to_series(cpu_result):
 
 
 def run_tier_parity_gate(config_dict, gpu_equity_curve, tolerance=1e-3):
-    from src.main_backtest import run_backtest_from_config
+    from .main_backtest import run_backtest_from_config
 
     cfg = dict(config_dict)
     cfg["strategy_params"] = dict(cfg.get("strategy_params", {}))

@@ -220,6 +220,80 @@ class TestGpuEnginePrepPath(unittest.TestCase):
                 debug_mode=False,
             )
 
+    @patch("src.backtest.gpu.engine._process_additional_buy_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_new_entry_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_sell_signals_gpu")
+    @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
+    def test_no_signal_day_reuses_shared_zero_buffers(
+        self,
+        mock_create_tensors,
+        mock_process_sell,
+        mock_process_new_entry,
+        mock_process_additional_buy,
+    ):
+        all_data_gpu = MagicMock()
+        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
+        mock_create_tensors.return_value = {
+            "open": cp.array([[100000.0]], dtype=cp.float32),
+            "close": cp.array([[100000.0]], dtype=cp.float32),
+            "high": cp.array([[100000.0]], dtype=cp.float32),
+            "low": cp.array([[100000.0]], dtype=cp.float32),
+        }
+
+        captured = {}
+
+        def _sell_stub(*args, **_kwargs):
+            captured["sell_signal_close"] = args[9]
+            captured["sell_signal_high"] = args[10]
+            captured["sell_signal_day_idx"] = args[11]
+            return (
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                cp.zeros((1, 1), dtype=cp.bool_),
+            )
+
+        def _entry_stub(*args, **_kwargs):
+            return (
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        def _add_stub(*args, **_kwargs):
+            captured["add_signal_close"] = args[7]
+            captured["add_signal_low"] = args[8]
+            captured["add_signal_day_idx"] = args[9]
+            return (
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        mock_process_sell.side_effect = _sell_stub
+        mock_process_new_entry.side_effect = _entry_stub
+        mock_process_additional_buy.side_effect = _add_stub
+
+        gpu_engine.run_magic_split_strategy_on_gpu(
+            initial_cash=10_000_000.0,
+            param_combinations=self._param_combinations(),
+            all_data_gpu=all_data_gpu,
+            trading_date_indices=cp.asarray([0], dtype=cp.int32),
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2026-01-06"]),
+            all_tickers=["005930"],
+            execution_params=self._execution_params(mode="tier"),
+            tier_tensor=cp.zeros((1, 1), dtype=cp.int8),
+            debug_mode=False,
+        )
+
+        self.assertEqual(captured["sell_signal_day_idx"], -1)
+        self.assertEqual(captured["add_signal_day_idx"], -1)
+        self.assertIs(captured["sell_signal_close"], captured["sell_signal_high"])
+        self.assertIs(captured["add_signal_close"], captured["add_signal_low"])
+        self.assertEqual(int(cp.count_nonzero(captured["sell_signal_close"]).item()), 0)
+        self.assertEqual(int(cp.count_nonzero(captured["add_signal_close"]).item()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

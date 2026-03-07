@@ -29,13 +29,13 @@
 | `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | Ready | `#97 Gate C + step 2` blocker 해소. 이제 throughput 승격 판단은 `#98` 자체 증적로 진행 가능 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | In Progress | `PR-98C` 일부 반영 완료. CPU runtime lookup cache, tier batch query + cached multi-ticker row/price access path, GPU zero-tensor reuse까지 적용했고 before/after evidence는 계속 축적 중 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P1` | `#98` GPU throughput refactor | Ready | 의미론/거버넌스 blocker가 정리돼 이제 성능 증적을 쌓을 차례 | fixed-data VRAM + ranking hot path 설계 및 계측 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선이 먼저 들어감 | fixed-data VRAM + prepared market-data reuse before/after 계측 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Backlog Summary

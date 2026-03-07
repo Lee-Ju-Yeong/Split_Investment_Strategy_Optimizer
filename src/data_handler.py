@@ -9,32 +9,18 @@ from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
 
-try:
-    from .price_policy import (
-        is_adjusted_price_basis,
-        normalize_iso_date,
-        normalize_price_basis,
-        resolve_price_policy,
-        validate_backtest_window_for_price_policy,
-    )
-    from .universe_policy import (
-        is_survivor_optimistic_mode,
-        normalize_universe_mode,
-        resolve_universe_mode,
-    )
-except ImportError:  # pragma: no cover
-    from price_policy import (  # type: ignore
-        is_adjusted_price_basis,
-        normalize_iso_date,
-        normalize_price_basis,
-        resolve_price_policy,
-        validate_backtest_window_for_price_policy,
-    )
-    from universe_policy import (  # type: ignore
-        is_survivor_optimistic_mode,
-        normalize_universe_mode,
-        resolve_universe_mode,
-    )
+from .price_policy import (
+    is_adjusted_price_basis,
+    normalize_iso_date,
+    normalize_price_basis,
+    resolve_price_policy,
+    validate_backtest_window_for_price_policy,
+)
+from .universe_policy import (
+    is_survivor_optimistic_mode,
+    normalize_universe_mode,
+    resolve_universe_mode,
+)
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
@@ -149,6 +135,9 @@ class DataHandler:
         self._lazy_tier_candidate_cache_key = None
         self._strict_frozen_candidate_manifest_required = False
         self.last_frozen_candidate_manifest_summary = {}
+        self._runtime_row_asof_cache = {}
+        self._runtime_ohlc_cache = {}
+        self._runtime_latest_price_cache = {}
         self.frozen_candidate_manifest_mode = self._resolve_frozen_candidate_manifest_mode(
             strategy_params
         )
@@ -329,8 +318,22 @@ class DataHandler:
         self._lazy_tier_candidate_cache = None
         self._lazy_tier_candidate_cache_key = None
 
+    def clear_runtime_lookup_cache(self):
+        self._runtime_row_asof_cache = {}
+        self._runtime_ohlc_cache = {}
+        self._runtime_latest_price_cache = {}
+
     def clear_load_stock_data_cache(self):
+        self.clear_runtime_lookup_cache()
         self._load_stock_data_cached.cache_clear()
+
+    def _build_runtime_lookup_key(self, ticker, target_date, start_date, end_date):
+        return (
+            str(ticker),
+            self._normalize_date_key(target_date),
+            self._normalize_date_key(start_date),
+            self._normalize_date_key(end_date),
+        )
 
     def _validate_window(self, start_date, end_date):
         validate_backtest_window_for_price_policy(
@@ -468,36 +471,75 @@ class DataHandler:
 
 
     def get_latest_price(self, date, ticker, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, date, start_date, end_date)
+        if cache_key in self._runtime_latest_price_cache:
+            return self._runtime_latest_price_cache[cache_key]
         data_row = self.get_stock_row_as_of(ticker, date, start_date, end_date)
         if data_row is None:
+            self._runtime_latest_price_cache[cache_key] = None
             return None
         try:
-            return data_row['close_price']
+            price = data_row['close_price']
         except KeyError:
-            return None
+            price = None
+        self._runtime_latest_price_cache[cache_key] = price
+        return price
+
+    def get_latest_prices(self, date, tickers, start_date, end_date):
+        prices = {}
+        for ticker in dict.fromkeys(str(code) for code in (tickers or [])):
+            prices[ticker] = self.get_latest_price(date, ticker, start_date, end_date)
+        return prices
 
     def get_stock_row_as_of(self, ticker, as_of_date, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, as_of_date, start_date, end_date)
+        if cache_key in self._runtime_row_asof_cache:
+            return self._runtime_row_asof_cache[cache_key]
+
         stock_data = self.load_stock_data(ticker, start_date, end_date)
         if stock_data is None or stock_data.empty:
+            self._runtime_row_asof_cache[cache_key] = None
             return None
 
         target_date = pd.to_datetime(as_of_date)
         row_index = stock_data.index.asof(target_date)
         if pd.isna(row_index):
+            self._runtime_row_asof_cache[cache_key] = None
             return None
 
         self.assert_point_in_time(row_index, target_date)
         data_row = stock_data.loc[row_index].copy()
         data_row.name = row_index
+        self._runtime_row_asof_cache[cache_key] = data_row
+        if row_index == target_date:
+            self._runtime_ohlc_cache[cache_key] = data_row
+            self._runtime_latest_price_cache[cache_key] = data_row.get("close_price")
         return data_row
 
+    def get_stock_rows_as_of(self, tickers, as_of_date, start_date, end_date):
+        rows = {}
+        for ticker in dict.fromkeys(str(code) for code in (tickers or [])):
+            rows[ticker] = self.get_stock_row_as_of(
+                ticker,
+                as_of_date,
+                start_date,
+                end_date,
+            )
+        return rows
+
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, date, start_date, end_date)
+        if cache_key in self._runtime_ohlc_cache:
+            return self._runtime_ohlc_cache[cache_key]
+
         stock_data = self.load_stock_data(ticker, start_date, end_date)
         if stock_data is None or stock_data.empty:
+            self._runtime_ohlc_cache[cache_key] = None
             return None
 
         target_date = pd.to_datetime(date)
         if target_date not in stock_data.index:
+            self._runtime_ohlc_cache[cache_key] = None
             return None
 
         data_row = stock_data.loc[target_date]
@@ -505,6 +547,9 @@ class DataHandler:
             data_row = data_row.iloc[-1]
         data_row = data_row.copy()
         data_row.name = target_date
+        self._runtime_ohlc_cache[cache_key] = data_row
+        self._runtime_row_asof_cache[cache_key] = data_row
+        self._runtime_latest_price_cache[cache_key] = data_row.get("close_price")
         return data_row
 
     def get_filtered_stock_codes(self, date):

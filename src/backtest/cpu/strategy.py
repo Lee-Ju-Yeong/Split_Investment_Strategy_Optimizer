@@ -397,12 +397,30 @@ class MagicSplitStrategy(Strategy):
                     continue
                 active_candidates.append(code)
             self.last_entry_context["active_candidate_count"] = len(active_candidates)
-            
+
+            candidate_rows_by_ticker = {}
+            get_stock_rows_as_of = getattr(data_handler, "get_stock_rows_as_of", None)
+            if active_candidates and callable(get_stock_rows_as_of):
+                batch_rows = get_stock_rows_as_of(
+                    active_candidates,
+                    signal_date,
+                    self.backtest_start_date,
+                    self.backtest_end_date,
+                )
+                if isinstance(batch_rows, dict):
+                    candidate_rows_by_ticker = batch_rows
+
             ranked_candidates = []
             for ticker in active_candidates:
-                signal_row = data_handler.get_stock_row_as_of(
-                    ticker, signal_date, self.backtest_start_date, self.backtest_end_date
-                )
+                if ticker in candidate_rows_by_ticker:
+                    signal_row = candidate_rows_by_ticker[ticker]
+                else:
+                    signal_row = data_handler.get_stock_row_as_of(
+                        ticker,
+                        signal_date,
+                        self.backtest_start_date,
+                        self.backtest_end_date,
+                    )
                 if signal_row is None or "atr_14_ratio" not in signal_row.index:
                     continue
                 latest_atr = signal_row["atr_14_ratio"]
@@ -554,34 +572,68 @@ class MagicSplitStrategy(Strategy):
         if signal_date is None:
             return buy_signals
 
-        # 추가 매수 신호 생성 로직
-        for ticker in list(portfolio.positions.keys()):
-            # 당일 매도된 종목은 추가 매수 안 함
+        holdings_tickers = list(portfolio.positions.keys())
+        tier_map = None
+        get_tiers_as_of = getattr(data_handler, "get_tiers_as_of", None)
+        if holdings_tickers and callable(get_tiers_as_of):
+            batch_tiers = get_tiers_as_of(
+                signal_date,
+                tickers=holdings_tickers,
+                allowed_tiers=[1, 2],
+            )
+            if isinstance(batch_tiers, dict):
+                tier_map = batch_tiers
+
+        eligible_tickers = []
+        eligible_positions = {}
+        for ticker in holdings_tickers:
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
-            tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+            if isinstance(tier_map, dict):
+                tier_info = tier_map.get(ticker)
+            else:
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
             tier_value = self._coerce_tier_value(tier_info)
             if tier_value <= 0 or tier_value > 2:
                 continue
-            
+
             positions = portfolio.positions[ticker]
-            # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
-            # 이 종목의 첫 번째 매수(order 1)가 오늘 이전에 이루어졌는지 확인합니다.
+            if len(positions) >= self.max_splits_limit:
+                continue
+
             first_position = next((p for p in positions if p.order == 1), None)
             if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
                 continue
-            
-            signal_row = data_handler.get_stock_row_as_of(
-                ticker, signal_date, self.backtest_start_date, self.backtest_end_date
+
+            eligible_tickers.append(ticker)
+            eligible_positions[ticker] = positions
+
+        signal_rows_by_ticker = {}
+        get_stock_rows_as_of = getattr(data_handler, "get_stock_rows_as_of", None)
+        if eligible_tickers and callable(get_stock_rows_as_of):
+            batch_rows = get_stock_rows_as_of(
+                eligible_tickers,
+                signal_date,
+                self.backtest_start_date,
+                self.backtest_end_date,
             )
+            if isinstance(batch_rows, dict):
+                signal_rows_by_ticker = batch_rows
+
+        # 추가 매수 신호 생성 로직
+        for ticker in eligible_tickers:
+            positions = eligible_positions[ticker]
+            if ticker in signal_rows_by_ticker:
+                signal_row = signal_rows_by_ticker[ticker]
+            else:
+                signal_row = data_handler.get_stock_row_as_of(
+                    ticker,
+                    signal_date,
+                    self.backtest_start_date,
+                    self.backtest_end_date,
+                )
             if signal_row is None:
                 continue
-
-            if not any(p.order == 1 for p in positions):
-                continue
-
-            if len(positions) >= self.max_splits_limit:
-                continue    
             
             signal_close = signal_row["close_price"]
             signal_low = signal_row["low_price"]

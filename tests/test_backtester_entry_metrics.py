@@ -26,6 +26,7 @@ class _DummyDataHandler:
     def __init__(self, trading_dates):
         self._trading_dates = pd.DatetimeIndex(trading_dates)
         self.clear_lazy_tier_candidate_cache = MagicMock()
+        self.clear_runtime_lookup_cache = MagicMock()
         self.clear_frozen_tier_candidate_manifest = MagicMock()
         self.freeze_tier_candidate_manifest = MagicMock()
         self.prepare_strict_frozen_candidate_manifest = MagicMock(return_value={})
@@ -80,6 +81,7 @@ class TestBacktesterEntryMetrics(unittest.TestCase):
         engine.run()
 
         data_handler.clear_lazy_tier_candidate_cache.assert_called_once()
+        self.assertEqual(data_handler.clear_runtime_lookup_cache.call_count, len(dates))
         data_handler.prepare_strict_frozen_candidate_manifest.assert_called_once()
         call_args, call_kwargs = data_handler.prepare_strict_frozen_candidate_manifest.call_args
         self.assertTrue(call_args[0].equals(dates))

@@ -77,6 +77,16 @@ class BacktestEngine:
         if summary:
             self.logger.info("[FrozenCandidateManifest] %s", summary)
 
+    def _clear_runtime_lookup_cache_if_supported(self):
+        clear_lookup_cache = getattr(
+            self.data_handler,
+            "clear_runtime_lookup_cache",
+            None,
+        )
+        if not callable(clear_lookup_cache):
+            return
+        clear_lookup_cache()
+
     def run(self):
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
@@ -111,6 +121,7 @@ class BacktestEngine:
         
         # tqdm의 mininterval을 늘려 로그 출력이 밀리지 않게 함
         for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress", mininterval=1.0)):
+            self._clear_runtime_lookup_cache_if_supported()
             if debug_ticker and self.logger.isEnabledFor(logging.DEBUG):
                 try:
                     stock_data = self.data_handler.load_stock_data(debug_ticker, self.start_date, self.end_date)

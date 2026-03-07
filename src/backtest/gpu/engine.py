@@ -195,6 +195,8 @@ def run_magic_split_strategy_on_gpu(
     processed_days = 0
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+    zero_signal_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
+    zero_signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
     
     #  각 월의 첫 거래일 인덱스를 미리 계산
@@ -239,12 +241,12 @@ def run_magic_split_strategy_on_gpu(
                 if tier_tensor is not None:
                     signal_tiers_gpu = tier_tensor[signal_day_idx]
                 else:
-                    signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
+                    signal_tiers_gpu = zero_signal_tiers_gpu
             else:
-                signal_closes_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-                signal_highs_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-                signal_lows_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-                signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
+                signal_closes_gpu = zero_signal_prices_gpu
+                signal_highs_gpu = zero_signal_prices_gpu
+                signal_lows_gpu = zero_signal_prices_gpu
+                signal_tiers_gpu = zero_signal_tiers_gpu
 
             # --- [Issue #67] Candidate Selection Logic ---
             final_candidate_indices = cp.array([], dtype=cp.int32)
