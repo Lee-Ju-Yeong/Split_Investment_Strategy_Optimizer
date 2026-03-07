@@ -43,7 +43,8 @@ from .price_policy import is_adjusted_price_basis, resolve_price_policy
 from .universe_policy import resolve_universe_mode
 
 
-_TRIGGER_PRICE_TOLERANCE = 1e-4
+_TRIGGER_PRICE_TOLERANCE = 1e-3
+_POSITION_AVG_PRICE_TOLERANCE = 1e-3
 
 
 @dataclass
@@ -592,7 +593,10 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
         r"^\[GPU_ADD_BUY_SUMMARY\]\s+Day\s+(?P<day_idx>\d+),\s+Sim\s+0\s+\|\s+Buys:\s+(?P<count>\d+)\s+\|"
     )
     add_buy_detail_re = re.compile(
-        r"^└─\s+Stock\s+\d+\((?P<ticker>[^)]+)\)\s+\|\s+Qty:\s+(?P<qty>[\d,]+)\s+@\s+(?P<price>[\d,]+)$"
+        r"^└─\s+Stock\s+\d+\((?P<ticker>[^)]+)\)\s+\|\s+"
+        r"Split:\s+(?P<split>\d+)\s+\|\s+"
+        r"Target:\s+(?P<target>[-\d\.,]+)\s+\|\s+"
+        r"Qty:\s+(?P<qty>[\d,]+)\s+@\s+(?P<price>[\d,]+)$"
     )
 
     def _resolve_date(day_idx: int) -> str:
@@ -651,7 +655,8 @@ def _parse_gpu_buy_events(log_text: str, trading_dates: List[str], buy_commissio
                     execution_price=exec_price,
                     total_cost=total_cost,
                     reason="추가 매수(하락)",
-                    split=None,
+                    split=int(m_detail.group("split")),
+                    trigger_price=float(str(m_detail.group("target")).replace(",", "")),
                     gross_cost=gross_cost,
                 )
             )
@@ -982,7 +987,7 @@ def _build_position_snapshot_pair_row(
         and cpu.ticker == gpu.ticker
         and holdings_diff == 0
         and quantity_diff == 0
-        and abs(avg_buy_price_diff) < 1e-6
+        and abs(avg_buy_price_diff) < _POSITION_AVG_PRICE_TOLERANCE
         and abs(current_price_diff) < 1e-6
         and abs(total_value_diff) < 1e-6
     )

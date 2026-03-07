@@ -591,8 +591,16 @@ def _process_additional_buy_signals_gpu(
             
             print(f"[GPU_ADD_BUY_SUMMARY] Day {current_day_idx}, Sim 0 | Buys: {sim0_stocks.size} | Capital After: {capital_after:,.0f}")
             for i in range(sim0_stocks.size):
-                ticker_code = all_tickers[sim0_stocks[i].item()]
-                print(f"  └─ Stock {sim0_stocks[i].item()}({ticker_code}) | Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}")
+                stock_idx = sim0_stocks[i].item()
+                ticker_code = all_tickers[stock_idx]
+                split_idx = split_indices[sim0_mask][i].item()
+                target_price = trigger_prices[0, stock_idx].item()
+                print(
+                    f"  └─ Stock {stock_idx}({ticker_code}) | "
+                    f"Split: {split_idx} | "
+                    f"Target: {target_price:,.2f} | "
+                    f"Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}"
+                )
 
     return portfolio_state, positions_state, last_trade_day_idx_state
 
