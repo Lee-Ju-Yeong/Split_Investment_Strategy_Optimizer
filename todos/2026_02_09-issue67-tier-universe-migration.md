@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
 - Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
-- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity까지는 정리됐고, frozen PIT manifest와 candidate order direct validation이 남았습니다.
-- Next action: run-scoped manifest cache를 도입하고, CPU/GPU candidate order를 직접 비교하는 증적을 추가합니다.
+- Current status: tier-only runtime path, coverage gate, GPU runtime candidate gate parity는 정리됐고, CPU 쪽은 eager pre-freeze 대신 lazy run-local candidate cache로 정리했습니다. true frozen PIT manifest와 candidate order direct validation이 남았습니다.
+- Next action: true frozen manifest 범위를 재설계하고, CPU/GPU candidate order를 직접 비교하는 증적을 추가합니다.
 
 ## 2. Fixed Rules
 - `candidate_source_mode=tier`가 기본 경로입니다.
@@ -25,6 +25,7 @@
 - [x] coverage report + `--fail-on-gate` 보강
 - [x] empirical threshold `0.45` 고정
 - [x] runtime candidate gate parity
+- [x] CPU lazy run-local candidate cache
 - [ ] frozen PIT candidate manifest
 - [ ] CPU/GPU candidate order direct validation
 - [ ] PIT 실패 시 예외/로그 표준화
@@ -35,9 +36,11 @@
   - tier coverage gate와 sampled report 동기화
   - `WeeklyFilteredStocks` dead branch cleanup
   - GPU optimizer/debug/parity preload가 `min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`를 공용 tier tensor gate로 전달
+  - CPU `DataHandler`가 동일 gate/date 요청에 대해 lazy run-local cache를 재사용
 - 아직 필요한 것:
-  - run 중 DB drift를 막는 frozen manifest
+  - transaction/artifact 기반 true frozen manifest
   - CPU/GPU candidate order direct validation artifact
+  - PIT 실패 시 예외/로그 표준화
 
 ## 5. Reading Guide
 - 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
@@ -107,6 +110,22 @@
     - `tests/test_gpu_tier_tensor_pit.py`
     - `tests/test_gpu_parameter_simulation_orchestration.py`
     - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration` 통과 (`8 tests`)
+- 업데이트(2026-03-07, frozen PIT manifest):
+  - 1차 구현은 `src/backtest/cpu/backtester.py`가 run 시작 시 trading_dates 전체에 대해 pre-freeze를 수행하는 형태였음
+  - Codex-only 교차검증 결과:
+    - Ryzen 7 1700 기준 startup latency 증가
+    - `candidate_lookup_error_policy=skip` 계약 우회
+    - `true frozen snapshot`이라고 부르기 어려움
+  - 그래서 방향을 보수적으로 수정:
+    - `src/backtest/cpu/backtester.py`의 eager pre-freeze 제거
+    - `src/data_handler.py`에 `universe_mode`까지 포함한 lazy run-local candidate cache 유지
+    - explicit `freeze_tier_candidate_manifest()` 저장소와 lazy cache를 분리
+    - run 시작 시 lazy cache만 clear하고 explicit freeze payload는 건드리지 않음
+    - `TierCoverage` 출력은 `print`에서 logger 기반으로 낮춤
+  - 검증:
+    - `tests/test_data_handler_tier.py`: lazy cache reuse / explicit freeze reuse / gate mismatch bypass / universe_mode mismatch bypass
+    - `tests/test_backtester_entry_metrics.py`: backtester가 run 시작 시 cache clear만 수행하고 eager freeze는 호출하지 않는지 검증
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_data_handler_tier tests.test_backtester_entry_metrics tests.test_issue67_tier_universe tests.test_gpu_tier_tensor_pit tests.test_gpu_parameter_simulation_orchestration tests.test_cpu_strategy_entry_context tests.test_parity_sell_event_dump` 통과 (`64 tests`)
 - 남은 핵심:
   - `tier` 경로 기준 end-to-end CPU/GPU parity 하네스(#56) (`tests/test_cpu_gpu_parity_topk.py`)
     - 주의: parity 하네스의 "구현/진척 관리"는 #56에서 진행하고, #67에서는 "승격 게이트(DoD)"로만 참조한다.
@@ -174,6 +193,7 @@
 - [x] `WeeklyFilteredStocks` 전용 로더 외 `DailyStockTier` 기반 로더 추가
 - [x] GPU 후보군 생성 로직에 `tier=1 -> <=2 fallback` 동일 규칙 적용
 - [ ] CPU/GPU 동일 입력일 때 동일 후보군이 생성되는지 검증
+- [x] CPU lazy run-local candidate cache 도입
 - [x] optimizer/debug/parity 경로에서 공용 tier preload gate(`min_liquidity_20d_avg_value`, `min_tier12_coverage_ratio`) 전달
 
 ### 3-4. 운용/검증 가드
