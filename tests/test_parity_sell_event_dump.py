@@ -545,6 +545,64 @@ class TestParitySellEventDump(unittest.TestCase):
         self.assertEqual(rows[0].ticker, "005930")
         self.assertEqual(rows[0].trigger_price, 68000.0)
 
+    def test_parse_gpu_add_buy_marker_reads_split_and_target_price(self):
+        log_text = "\n".join(
+            [
+                "[GPU_ADD_BUY_SUMMARY] Day 2, Sim 0 | Buys: 1 | Capital After: 800,000",
+                "  └─ Stock 0(005930) | Split: 1 | Target: 67,500.00 | Qty: 10 @ 68,000",
+            ]
+        )
+
+        rows = _parse_gpu_buy_events(
+            log_text,
+            trading_dates=["2024-01-01", "2024-01-02", "2024-01-03"],
+            buy_commission_rate=0.0,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].ticker, "005930")
+        self.assertEqual(rows[0].split, 1)
+        self.assertEqual(rows[0].trigger_price, 67500.0)
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_allows_small_avg_buy_price_snapshot_delta(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        cpu_daily, gpu_daily = _daily_snapshots()
+        cpu_positions, gpu_positions = _position_snapshots()
+        gpu_positions = [
+            PositionSnapshot(
+                source="gpu",
+                date="2024-01-02",
+                ticker="005930",
+                holdings=1,
+                quantity=10,
+                avg_buy_price=68000.0005,
+                current_price=68000.0,
+                total_value=680000.0,
+            )
+        ]
+        mock_cpu_runner.return_value = ([], [], cpu_daily, cpu_positions)
+        mock_gpu_runner.return_value = ([], [], gpu_daily, gpu_positions, "")
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertTrue(payload["position_snapshot_pairs"][0]["matched"])
+        self.assertEqual(payload["position_snapshot_mismatched_pairs"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
