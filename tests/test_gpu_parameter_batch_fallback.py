@@ -83,6 +83,15 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
             normalize_runtime_candidate_policy("tier", "true")
 
+    def test_runtime_candidate_policy_allows_falsey_string_gate(self):
+        mode, weekly_gate = normalize_runtime_candidate_policy("tier", "false")
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
+
+    def test_runtime_candidate_policy_rejects_unknown_string_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported boolean-like value"):
+            normalize_runtime_candidate_policy("tier", "disabled")
+
 
 if __name__ == "__main__":
     unittest.main()

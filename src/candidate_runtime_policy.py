@@ -13,9 +13,24 @@ STRICT_CANDIDATE_SOURCE_MODE = "tier"
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
+    if isinstance(value, int):
+        if value in (0, 1):
+            return bool(value)
+        raise ValueError(
+            f"Unsupported boolean-like value for strict runtime policy: {value!r}"
+        )
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+        raise ValueError(
+            f"Unsupported boolean-like value for strict runtime policy: {value!r}"
+        )
+    raise ValueError(
+        f"Unsupported boolean-like value for strict runtime policy: {value!r}"
+    )
 
 
 def normalize_runtime_candidate_policy(

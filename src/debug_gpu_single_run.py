@@ -13,12 +13,13 @@ import urllib.parse
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
 from src.backtest.gpu.engine import run_magic_split_strategy_on_gpu
-from src.candidate_runtime_policy import normalize_runtime_candidate_policy
+from src.gpu_execution_policy import build_gpu_execution_params
 from src.price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,
     validate_backtest_window_for_price_policy,
 )
+from src.tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from src.universe_policy import resolve_universe_mode
 from src.optimization.gpu.data_loading import (
     build_empty_weekly_filtered_gpu as build_empty_weekly_filtered_gpu_shared,
@@ -169,6 +170,18 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
     
     return daily_portfolio_values
 
+
+def _build_run_execution_params(params_dict: dict, universe_mode: str):
+    return build_gpu_execution_params(
+        execution_params,
+        params_dict,
+        universe_mode,
+        default_tier_hysteresis_mode=strategy_params.get(
+            'tier_hysteresis_mode',
+            'strict_hysteresis_v1',
+        ),
+    )
+
 # 4. [신규] 워커 함수: run_single_backtest
 def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initial_cash: float, debug_mode: bool = False):
     """
@@ -254,15 +267,7 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     # 3. 백테스팅 커널 실행
     start_time_kernel = time.time()
     
-    # exec_params에 모드 정보 추가
-    run_exec_params = execution_params.copy()
-    candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
-        params_dict.get('candidate_source_mode', 'tier'),
-        params_dict.get('use_weekly_alpha_gate', False),
-    )
-    run_exec_params['candidate_source_mode'] = candidate_source_mode
-    run_exec_params['use_weekly_alpha_gate'] = use_weekly_alpha_gate
-    run_exec_params['universe_mode'] = universe_mode
+    run_exec_params = _build_run_execution_params(params_dict, universe_mode)
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
@@ -310,6 +315,10 @@ def run_tier_parity_gate(config_dict, gpu_equity_curve, tolerance=1e-3):
     cfg = dict(config_dict)
     cfg["strategy_params"] = dict(cfg.get("strategy_params", {}))
     cfg["strategy_params"]["candidate_source_mode"] = "tier"
+    cfg["strategy_params"]["use_weekly_alpha_gate"] = False
+    cfg["strategy_params"]["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
+        cfg["strategy_params"].get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
 
     cpu_result = run_backtest_from_config(cfg)
     cpu_curve = _cpu_daily_values_to_series(cpu_result)

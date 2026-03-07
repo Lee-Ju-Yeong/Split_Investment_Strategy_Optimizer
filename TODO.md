@@ -28,14 +28,14 @@
 | `#56 Release parity` | Done (synthetic) | config single-row + synthetic `top-k=20` 범위까지 decision-level 증적 확보, real optimizer/WFO CSV는 spot revalidation만 남음 | [#56](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md) |
 | `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `#97 Strict-only governance` | Open | `tier_hysteresis_mode` strict-only는 반영됐지만, candidate policy(`tier` only / `use_weekly_alpha_gate=False`)의 runtime shim 제거와 Gate A/B/C 승인이 남아 있음 | [#97](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | Blocked | `#97`이 닫히기 전에는 승격 판단 불가 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#97 Strict-only governance` | In Review | runtime strict-only fail-fast와 retained wrapper drift 정리는 끝났고, Gate A/B 승인까지 반영됨. 남은 것은 Gate C 최종 승인과 step 2 운영 관찰 | [#97](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
+| `#98 Throughput promotion` | Blocked | `#97 Gate C + step 2`가 닫히기 전에는 승격 판단 불가 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P1` | `#97` legacy strict-only 전환 | In Progress | `tier_hysteresis_mode` strict-only 이후 candidate policy spec도 tier-only로 굳혔지만, runtime shim 제거와 approval gate를 닫아야 문서/실행 경로가 단순해짐 | candidate runtime shim 제거, Gate A/B 승인, real entrypoint wrapper regression 고정 | [doc](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
+| `P1` | `#97` legacy strict-only 전환 | In Review | strict-only runtime과 retained wrapper thin-forward 정리는 끝났고, 최종 승격 전 Gate C/운영 관찰만 남음 | Gate C 승인 기록, 2주 운영 지표 관찰 시작 | [doc](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
 | `P1` | `#98` GPU throughput refactor | Blocked | 성능은 중요하지만 의미론이 먼저 고정돼야 함 | fixed-data VRAM + ranking hot path 설계, 단 승격은 보류 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
