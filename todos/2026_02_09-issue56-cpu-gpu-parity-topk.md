@@ -62,6 +62,17 @@
       - 따라서 `release_decision_fields_complete`는 더 이상 상수 `False`가 아니라 snapshot evidence 수집 여부로 계산
       - 남은 blocker는 `decision_fields_not_covered` 고정값이 아니라, `all-row` coverage와 실제 `decision_level_zero_mismatch=0` 증적 확보 여부
     - curve parity는 missing date를 `mismatch`로 계산해 `inner join`에 의한 false-zero 가능성을 제거
+  - 업데이트(2026-03-07, config release-grade pass):
+    - `results/parity_topk_config_state_20260307_retry.json`
+    - 기간: `2026-01-05 ~ 2026-01-09`
+    - 결과:
+      - `curve_level_parity_zero_mismatch=true`
+      - `decision_level_parity_zero_mismatch=true`
+      - `decision_evidence_release_fields_complete=true`
+      - `promotion_blocked=false`
+    - 해석:
+      - `state snapshot diff + buy-event trigger/reason normalization`이 실제 release-grade row에서 동작함을 확인
+      - 단, 이 증적은 `config single-row` 기준이므로 `#56 전체 close`가 아니라 `longer-window + multi-row(top-k)` 확장 검증의 출발점으로 본다
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `tier-only` parity gate 추가:

@@ -217,12 +217,13 @@
   - [x] selected-row decision evidence 자동수집(2026-03-07): `--decision-evidence-mode` + row별 detail JSON artifact 저장
   - [x] release gate 보수화(2026-03-07): 기본 `representative` 수집은 `decision_level_evidence_partial(...)`로 승격 해제를 금지
   - [x] state snapshot diff 연결(2026-03-07): `parity_sell_event_dump`가 일별 `cash/total_value/stock_count` + `date,ticker`별 positions snapshot을 함께 비교하고 `release_decision_fields_complete`를 계산
+  - [x] config single-row release-grade parity pass 확보(2026-03-07): `results/parity_topk_config_state_20260307_retry.json`에서 `decision_level_parity_zero_mismatch=true`, `promotion_blocked=false`
   - [x] parity harness curve/coverage 보수화(2026-03-07): curve 비교는 missing date를 mismatch로 계산하고 Tier coverage gate 분모를 PIT universe count와 일치시킴
   - [ ] 하드 게이트: parity mismatch `0건`만 pass (Release Gate 미충족, 5거래일 `tier top-k=5` mismatch 잔존)
   - [x] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가
   - [x] 2단계 실행 경로 분리: `--pipeline-stage gpu/cpu` + snapshot replay + `--cpu-workers`
   - [x] Research Gate(탐색 단계) 기준 충족: 1일/스모크 기준 parity 증적 확보
-  - [ ] Release Gate(승격 단계) 기준 미충족: decision-level parity `0 mismatch` 재검증 필요
+  - [ ] Release Gate(승격 단계) 기준 미충족: single-row pass는 확보했지만 longer-window + multi-row(top-k) 재검증 필요
 - [ ] 도메인 모델/캐시 통합(Position, CompanyInfo 캐시) (이슈 #57): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57
 - [x] 테스트 인터페이스 갱신(test_integration.py) (이슈 #59): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59
 - [x] 스크립트 import 부작용 제거(parameter_simulation_gpu.py) (이슈 #60): https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60

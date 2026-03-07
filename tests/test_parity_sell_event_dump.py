@@ -6,6 +6,7 @@ from src.parity_sell_event_dump import (
     DailySnapshot,
     PositionSnapshot,
     SellEvent,
+    _parse_gpu_buy_events,
     _parse_gpu_daily_snapshots,
     _parse_gpu_position_snapshots,
     collect_trade_event_parity_report,
@@ -81,7 +82,7 @@ class TestParitySellEventDump(unittest.TestCase):
                 quantity=10,
                 execution_price=68000.0,
                 total_cost=680100.0,
-                reason="신규 매수",
+                reason="신규 진입",
                 order=1,
                 trigger_price=68000.0,
             )
@@ -527,6 +528,22 @@ class TestParitySellEventDump(unittest.TestCase):
         self.assertEqual(len(position_rows), 1)
         self.assertEqual(position_rows[0].quantity, 10)
         self.assertEqual(position_rows[0].ticker, "005930")
+
+    def test_parse_gpu_new_buy_marker_reads_target_price(self):
+        log_text = (
+            "[GPU_NEW_BUY_CALC] 1, Sim 0, Stock 0(005930) | "
+            "Target: 68000.00 | Invest: 680,000 / ExecPrice: 68,000 = Qty: 10"
+        )
+
+        rows = _parse_gpu_buy_events(
+            log_text,
+            trading_dates=["2024-01-01", "2024-01-02"],
+            buy_commission_rate=0.0,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].ticker, "005930")
+        self.assertEqual(rows[0].trigger_price, 68000.0)
 
 
 if __name__ == "__main__":

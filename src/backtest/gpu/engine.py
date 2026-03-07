@@ -337,7 +337,7 @@ def run_magic_split_strategy_on_gpu(
                         )
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
-                cooldown_period_days, param_combinations, current_opens_gpu,
+                cooldown_period_days, param_combinations, current_opens_gpu, signal_closes_gpu,
                 candidate_tickers_for_day, candidate_atrs_for_day,
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
                 all_tickers=all_tickers,

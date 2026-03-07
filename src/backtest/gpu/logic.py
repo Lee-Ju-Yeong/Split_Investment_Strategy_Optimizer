@@ -605,6 +605,7 @@ def _process_new_entry_signals_gpu(
     cooldown_period_days: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    signal_close_prices: cp.ndarray,
     # [삭제] current_lows, current_highs
     candidate_tickers_for_day: cp.ndarray,
     candidate_atrs_for_day: cp.ndarray,
@@ -734,9 +735,11 @@ def _process_new_entry_signals_gpu(
                     cap_after_log = temp_cap_log - cost_item
                     expected_quantity = quantities_sim0[i].item()
                     actual_quantity = recorded_quantity
+                    trigger_price_val = signal_close_prices[stock_idx].item()
 
                     print(
                         f"[GPU_NEW_BUY_CALC] {current_day_idx}, Sim 0, Stock {stock_idx}({ticker_code}) | "
+                        f"Target: {trigger_price_val:,.2f} | "
                         f"Invest: {investment_per_order[0].item():,.0f} / ExecPrice: {buy_price_val:,.0f} = Qty: {expected_quantity:,.0f}"
                     )
                     print(f"  └─ Executed Buy Price Saved to State: {buy_price_val:,.0f}")
