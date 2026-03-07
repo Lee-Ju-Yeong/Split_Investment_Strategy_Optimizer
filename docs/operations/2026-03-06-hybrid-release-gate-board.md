@@ -55,17 +55,18 @@
 - wall-time / GPU util / OOM retry / batch recovery 측정
 
 ## 7. 현재 미충족 항목
-- `#56` release parity gate 미충족
+- `#56` synthetic/research parity gate는 종결되었고, 실제 optimizer/WFO CSV가 생기면 spot revalidation만 남음
 - `#67` PIT default path + coverage gate 미완료
 - `#97` strict-only cleanup 미완료
-- example config가 여전히 `optimistic_survivor` / `legacy` 기본값을 포함
+- release-safe / research-only example 분리는 반영됐지만, 운영 승인 판단은 여전히 별도 증적이 필요
 
 ## 8. 현재 예시 config 해석
-- `config/config.example.yaml`은 지금 상태로는 `release-safe default example`이 아니다.
+- `config/config.example.yaml`은 지금 `release-safe / promotion candidate`와 `research-only / non-promotion` 예시를 함께 담는다.
 - 더 정확한 해석은:
+  - 기본 strategy example은 `strict_pit + tier + strict_hysteresis_v1 + raise`
   - `cpu_certification_*`는 hybrid 기능 예시
-  - `optimistic_survivor`는 연구/비승격 트랙 예시
-- 운영 승인 예시로 쓰려면 `strict_pit + tier + non-legacy hysteresis` 기준이 별도로 명시돼야 한다.
+  - `optimistic_survivor` / `legacy`는 연구/비승격 트랙 예시
+- 즉 example config만으로 운영 승인 결론을 내리면 안 되고, 여전히 parity/PIT/future reference 증적이 함께 있어야 한다.
 
 ## 9. TODO 해석 규칙
 - `#98`이 P1에 있다는 이유만으로 promotion 가능하다는 뜻은 아니다.
@@ -79,4 +80,3 @@
 - `TODO.md`에서 hybrid 구현 완료와 release gate 미충족을 분리 표기
 - example config의 승격 가능 의미 오해를 줄이는 문구 추가
 - `#56`, `#67`, `#97`, `#98`의 증적 제출 위치를 이 문서 기준으로 연결
-

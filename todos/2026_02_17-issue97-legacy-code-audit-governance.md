@@ -86,7 +86,7 @@
 | L-010 | `src/walk_forward_analyzer.py` | entrypoint wrapper | `src.analysis.walk_forward_analyzer` thin wrapper | 운영/문서 커맨드 호환 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
 | L-011 | `src/parameter_simulation_gpu.py` | entrypoint wrapper | import-safe wrapper(`#60`) | public API/실행 커맨드 호환 파손 | Medium | 유지 | #93 keep 목록 |
 | L-012 | `src/parameter_simulation_gpu_lib.py` | legacy import compat | `src.optimization.gpu.*` re-export | legacy import 깨짐 | Medium | 유지 | #93 keep 목록 + compat 테스트 |
-| L-013 | `src/tier_parity_monitor.py` | 운영보조 wrapper | parity 명령 래핑 + PASS/FAIL 출력 | 즉시 삭제 시 운영 모니터링 편의 하락 | Low | 아카이브 후보 | `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`에서 사용 |
+| L-013 | `src/tier_parity_monitor.py` | 운영보조 wrapper | parity 명령 래핑 + PASS/FAIL 출력 | 즉시 삭제 시 운영 모니터링 편의 하락 | Low | 아카이브 후보 | `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md`에서 사용 |
 | L-014 | `reproduce_issue.py` | 유휴 재현 스크립트 | 단발성 pykrx 재현 코드(레포 참조 없음) | 삭제 리스크 낮음 | Low | 아카이브 후보 | 코드/문서 참조 검색 결과 없음 |
 | L-015 | `reproduce_issue_v2.py` | 유휴 재현 스크립트 | 단발성 pykrx 재현 코드(레포 참조 없음) | 삭제 리스크 낮음 | Low | 아카이브 후보 | 코드/문서 참조 검색 결과 없음 |
 

@@ -96,7 +96,7 @@
 - Gate C (반영):
   - 운영 배포 전 승인 + 롤백 절차 검증 완료
 - 게이트 운영 정책 소스:
-  - PR/Nightly two-tier 및 full-13 강제 조건은 `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md`의 `11`장을 단일 소스로 따른다.
+  - PR/Nightly two-tier 및 full-13 강제 조건은 `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md`의 `11`장을 단일 소스로 따른다.
 
 ## 5. 측정/검증 기준 (반드시 Before/After)
 - 동일 기간/모드/파라미터 고정
@@ -584,7 +584,7 @@
   - Rule-5에 따라 한 번에 1개 가설만 반영한다(묶음 반영 금지).
 
 ### 17-4. 합격 기준(동일 유지)
-- strict parity `decision-level mismatch=0` (two-tier/full-13 정책은 `todos/2026_02_09-issue56-cpu-gpu-parity-topk.md` 11장 준수)
+- strict parity `decision-level mismatch=0` (two-tier/full-13 정책은 `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md` 11장 준수)
 - OOM 미발생
 - C1 대비 `kernel time <= +1.0%` (목표: `<= 0%`)
 - 측정 규격:
