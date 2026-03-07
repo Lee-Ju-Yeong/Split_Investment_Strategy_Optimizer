@@ -1,10 +1,53 @@
-# perf(gpu): GPU Throughput 리팩토링 + 성능 저하 fallback 제거 (Issue #98)
-- 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/98`
-- 작성일: 2026-02-17
-- 최종 갱신: 2026-02-25
-- 목적: GPU 처리량 병목과 fallback 유발 성능 저하를 제거하되, CPU=SSOT 원칙과 decision-level parity(`#56`)를 유지
+# Issue #98: GPU Throughput Refactor
 
-## 0. 분리 원칙 (Issue #97/#56/#67 관계)
+> Type: `implementation`
+> Status: `blocked`
+> Priority: `P1`
+> Last updated: 2026-03-07
+> Related issues: `#98`, `#56`, `#67`, `#97`
+> Gate status: `blocked by release parity and runtime policy`
+
+## 1. One-Page Summary
+- What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
+- Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
+- Current status: baseline과 일부 cleanup은 진행됐지만, 최종 승격은 `#56/#67/#97`이 닫히기 전까지 보류입니다.
+- Next action: fixed-data VRAM, daily ranking hot path, memory estimate 같은 현재 병목을 strict parity 전제로 정리합니다.
+
+## 2. Plain-Language Rule
+- `PO (Perf-Only)`: 결과를 바꾸지 않는 최적화
+- `PC (Parity-Coupled)`: 후보군, 정렬, 체결 의미론에 영향을 줄 수 있는 최적화
+- `PC`는 반드시 `#56` strict parity 증적을 다시 통과해야 합니다.
+
+## 3. Current Priority Bottlenecks
+- [ ] fixed-data VRAM blind spot
+- [ ] daily as-of ranking precompute
+- [ ] ranking scratch memory estimate 보강
+- [ ] strict fallback telemetry 고정
+- [ ] multi-sim active-set rerank parity
+- [ ] CPU I/O / session cache / engine reuse 정리
+
+## 4. Current Plan
+- [x] PR-98A: batch-size fallback / legacy universe fallback 일부 정리
+- [ ] PR-98B: candidate hot path (`PC`)
+- [ ] PR-98C: CPU I/O / cache / data loading (`PO`)
+- [ ] PR-98D: perf regression guard / benchmark
+- [ ] before/after 문서화
+- [ ] `#56` strict parity 재검증
+
+## 5. Key Evidence
+- 이미 있는 것:
+  - baseline log: `results/perf_baseline_strict_hyst_20260220_024023.log`
+  - release gate board: `docs/operations/2026-03-06-hybrid-release-gate-board.md`
+- 아직 없는 것:
+  - 최신 병목 항목에 대한 release-grade before/after
+  - `PC` 변경 후 longer-window strict parity 증적
+
+## 6. Reading Guide
+- 이 문서는 “어떻게 더 빠르게 만들까”보다 먼저 “어떤 최적화가 결과 의미를 바꾸는가”를 분리하는 문서입니다.
+- 세부 병목 인벤토리는 아래 본문을 필요할 때만 읽으세요.
+
+## 7. Detailed History And Working Log
+### 0. 분리 원칙 (Issue #97/#56/#67 관계)
 - #97: 레거시 자산 정리 거버넌스(삭제/아카이브/승인 게이트)
 - #98: 성능 리팩토링(throughput, kernel launch, host-device sync, I/O)
 - #56: parity hard gate(Release 기준 `mismatch=0`)

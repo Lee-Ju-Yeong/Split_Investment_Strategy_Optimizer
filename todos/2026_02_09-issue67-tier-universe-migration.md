@@ -1,9 +1,50 @@
-# feat(backtest): A안 전환 - KRX PIT + DailyStockTier 후보군 표준화 (Issue #67)
-- 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/67`
-- 작성일: 2026-02-09
-- 결정: 최종 `A안`(KRX PIT + Tier), 전환기 `C안`(Hybrid) 제한 허용
+# Issue #67: PIT Universe + DailyStockTier Runtime Standardization
 
-## 0. 진행 현황 (2026-02-09)
+> Type: `implementation`
+> Status: `in progress`
+> Priority: `P0`
+> Last updated: 2026-03-07
+> Related issues: `#67`, `#56`, `#98`
+> Gate status: `open`
+
+## 1. One-Page Summary
+- What: CPU/GPU 후보군 선택을 `KRX PIT + DailyStockTier` 기준으로 완전히 통일하는 문서입니다.
+- Why: candidate policy가 한쪽이라도 다르면 parity와 WFO 승격 판단이 동시에 흔들립니다.
+- Current status: tier-only runtime path와 coverage gate는 대부분 정리됐지만, runtime candidate gate parity와 frozen PIT manifest는 아직 남았습니다.
+- Next action: optimizer/runtime path에도 CPU와 같은 candidate gate를 태우고, run-scoped manifest cache를 도입합니다.
+
+## 2. Fixed Rules
+- `candidate_source_mode=tier`가 기본 경로입니다.
+- `signal_date=T-1`, `as-of <= signal_date` 규칙을 지킵니다.
+- `min_tier12_coverage_ratio=0.45`를 운영 하한으로 봅니다.
+- `#56`의 release parity gate와 충돌하면 이 문서의 변경도 승격할 수 없습니다.
+
+## 3. Current Plan
+- [x] tier-only runtime path 고정
+- [x] ATR as-of / `signal_date(T-1)` 정합 반영
+- [x] coverage report + `--fail-on-gate` 보강
+- [x] empirical threshold `0.45` 고정
+- [ ] runtime candidate gate parity
+- [ ] frozen PIT candidate manifest
+- [ ] CPU/GPU candidate order direct validation
+- [ ] PIT 실패 시 예외/로그 표준화
+
+## 4. Key Evidence
+- 현재 확인된 것:
+  - `candidate_source_mode` 정규화
+  - tier coverage gate와 sampled report 동기화
+  - `WeeklyFilteredStocks` dead branch cleanup
+- 아직 필요한 것:
+  - optimizer/runtime 경로의 `min_liquidity_20d_avg_value`
+  - `min_tier12_coverage_ratio` 완전 동일화
+  - run 중 DB drift를 막는 frozen manifest
+
+## 5. Reading Guide
+- 지금 무엇이 열려 있는지만 보려면 `3. Current Plan`을 먼저 읽으세요.
+- 아래 이력은 왜 threshold와 runtime 정책이 현재처럼 고정됐는지 추적할 때만 읽으면 됩니다.
+
+## 6. Detailed History And Working Log
+### 0. 진행 현황 (2026-02-09)
 - 현재 작업 브랜치: `feature/issue67-a-universe-tier-phase1` (`main` 직접 작업 금지 준수)
 - 완료(코드 반영):
   - CPU/전략 후보군 분기: `weekly | tier | hybrid_transition` + `use_weekly_alpha_gate`

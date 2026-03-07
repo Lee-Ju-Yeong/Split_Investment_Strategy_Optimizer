@@ -1,9 +1,49 @@
-# chore(legacy): 레거시 코드 전수조사 및 단계적 제거 거버넌스 (Issue #97)
-- 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/97`
-- 작성일: 2026-02-17
-- 목적: 레거시/우회/호환 로직을 전수조사하고, 사용자 승인 게이트를 거쳐 안전하게 정리
+# Issue #97: Legacy Audit And Strict-Only Governance
 
-## 0. 진행 현황 (2026-02-17)
+> Type: `implementation`
+> Status: `in progress`
+> Priority: `P1`
+> Last updated: 2026-03-07
+> Related issues: `#97`, `#93`, `#98`
+> Gate status: `Gate A/B/C pending`
+
+## 1. One-Page Summary
+- What: 레거시, fallback, 호환 경로를 무작정 지우지 않고 승인 게이트를 거쳐 정리하는 문서입니다.
+- Why: 실행 경로를 단순화해야 parity와 문서 가독성도 같이 좋아지지만, 잘못 지우면 운영 계약이 깨집니다.
+- Current status: 1차 인벤토리, 저위험 아카이브 이동, fallback 축소 1차는 끝났습니다.
+- Next action: Gate A/B 승인과 strict-only step 1을 고정합니다.
+
+## 2. Fixed Rules
+- 근거 없는 즉시 삭제는 금지합니다.
+- `entrypoint wrapper`와 핵심 실행 경로는 `#93` 정책과 충돌 없이 다뤄야 합니다.
+- 성능 튜닝은 `#98`, 정책 삭제/축소는 `#97`이 담당합니다.
+
+## 3. Current Plan
+- [x] 레거시 인벤토리 1차 작성
+- [x] 저위험 archive 이동
+- [x] fallback 축소 1차 반영
+- [ ] Gate A 승인
+- [ ] Gate B 승인
+- [ ] Gate C 승인
+- [ ] strict-only step 1: `strict_hysteresis_v1`만 허용
+- [ ] strict-only step 2: 운영 지표 최소 2주 관찰
+- [ ] strict-only step 3: non-strict 코드/테스트/문서 삭제
+
+## 4. Key Evidence
+- 이미 끝난 것:
+  - archive 이동 3건
+  - `allow_legacy_fallback`과 tier fallback 일부 축소
+- 아직 필요한 것:
+  - 승인 기록
+  - retained wrapper drift 재점검
+  - real entrypoint regression test 보강
+
+## 5. Reading Guide
+- 이 문서는 “무엇을 지워도 되는가”보다 “무엇은 왜 아직 남겨야 하는가”를 먼저 설명합니다.
+- 세부 인벤토리는 아래 표를 필요할 때만 읽으세요.
+
+## 6. Detailed History And Working Log
+### 0. 진행 현황 (2026-02-17)
 - [x] 1차 인벤토리 작성(핵심 실행경로/호환 wrapper/fallback/유휴 스크립트)
 - [x] 저위험 archive 이동 반영
   - `reproduce_issue.py` -> `archive/legacy_tools/reproduce_issue.py`
