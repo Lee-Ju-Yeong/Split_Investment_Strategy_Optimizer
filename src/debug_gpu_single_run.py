@@ -13,6 +13,7 @@ import urllib.parse
 # --- 필요한 모듈 추가 임포트 ---
 from src.config_loader import load_config
 from src.backtest.gpu.engine import run_magic_split_strategy_on_gpu
+from src.candidate_runtime_policy import normalize_runtime_candidate_policy
 from src.price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,
@@ -255,8 +256,12 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     
     # exec_params에 모드 정보 추가
     run_exec_params = execution_params.copy()
-    run_exec_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
-    run_exec_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
+    candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
+        params_dict.get('candidate_source_mode', 'tier'),
+        params_dict.get('use_weekly_alpha_gate', False),
+    )
+    run_exec_params['candidate_source_mode'] = candidate_source_mode
+    run_exec_params['use_weekly_alpha_gate'] = use_weekly_alpha_gate
     run_exec_params['universe_mode'] = universe_mode
     
     daily_values_result = run_gpu_backtest_kernel(

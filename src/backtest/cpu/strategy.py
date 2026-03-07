@@ -12,9 +12,13 @@ import numpy as np
 import uuid
 
 try:
+    from ...candidate_runtime_policy import normalize_runtime_candidate_policy
     from ...data_handler import build_pit_failure_record
+    from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 except ImportError:  # pragma: no cover
+    from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
     from data_handler import build_pit_failure_record  # type: ignore
+    from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,7 @@ class MagicSplitStrategy(Strategy):
         use_weekly_alpha_gate=False,
         min_liquidity_20d_avg_value=0,
         min_tier12_coverage_ratio=0.0,
-        tier_hysteresis_mode="legacy",
+        tier_hysteresis_mode="strict_hysteresis_v1",
         candidate_lookup_error_policy="raise",
         buy_commission_rate=0.00015,
         enable_candidate_rank_trace=False,
@@ -86,11 +90,15 @@ class MagicSplitStrategy(Strategy):
         self.max_inactivity_period = max_inactivity_period
         
         # [Issue #67]
-        self.candidate_source_mode = candidate_source_mode
-        self.use_weekly_alpha_gate = use_weekly_alpha_gate
+        normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
+            candidate_source_mode,
+            use_weekly_alpha_gate,
+        )
+        self.candidate_source_mode = normalized_mode
+        self.use_weekly_alpha_gate = normalized_weekly_gate
         self.min_liquidity_20d_avg_value = min_liquidity_20d_avg_value
         self.min_tier12_coverage_ratio = min_tier12_coverage_ratio
-        self.tier_hysteresis_mode = str(tier_hysteresis_mode).strip().lower()
+        self.tier_hysteresis_mode = normalize_tier_hysteresis_mode(tier_hysteresis_mode)
         self.candidate_lookup_error_policy = str(candidate_lookup_error_policy).strip().lower()
         if self.candidate_lookup_error_policy not in {"raise", "skip"}:
             raise ValueError(
@@ -99,10 +107,7 @@ class MagicSplitStrategy(Strategy):
             )
         self.buy_commission_rate = float(buy_commission_rate)
         self.enable_candidate_rank_trace = bool(enable_candidate_rank_trace)
-        self.strict_hysteresis_enabled = (
-            self.tier_hysteresis_mode == "strict_hysteresis_v1"
-            and self.candidate_source_mode in {"tier", "hybrid_transition"}
-        )
+        self.strict_hysteresis_enabled = True
         
         self.investment_per_order = 0
         self.previous_month = -1
@@ -140,12 +145,7 @@ class MagicSplitStrategy(Strategy):
         return data_handler.get_previous_trading_date(trading_dates, current_day_idx)
 
     def _resolve_candidate_mode(self):
-        if self.candidate_source_mode != "tier":
-            logger.warning(
-                f"[Warning] candidate_source_mode='{self.candidate_source_mode}' is deprecated. "
-                "Forcing 'tier' (A-path)."
-            )
-        return "tier"
+        return self.candidate_source_mode
 
     @staticmethod
     def _build_entry_context(

@@ -4,11 +4,8 @@ import unittest
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.optimization.gpu.parameter_simulation import (
-    _normalize_candidate_source_mode,
-    _resolve_adaptive_fallback_batch_size,
-    _resolve_batch_size,
-)
+from src.candidate_runtime_policy import normalize_runtime_candidate_policy
+from src.optimization.gpu.parameter_simulation import _resolve_adaptive_fallback_batch_size, _resolve_batch_size
 
 
 class TestGpuParameterBatchFallback(unittest.TestCase):
@@ -69,25 +66,22 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
     def test_adaptive_fallback_batch_size_minimum_is_one(self):
         self.assertEqual(_resolve_adaptive_fallback_batch_size(0), 1)
 
-    def test_normalize_candidate_source_mode_keeps_tier(self):
-        mode, weekly_gate = _normalize_candidate_source_mode("tier", False)
+    def test_runtime_candidate_policy_keeps_tier(self):
+        mode, weekly_gate = normalize_runtime_candidate_policy("tier", False)
         self.assertEqual(mode, "tier")
         self.assertFalse(weekly_gate)
 
-    def test_normalize_candidate_source_mode_forces_weekly_to_tier(self):
-        mode, weekly_gate = _normalize_candidate_source_mode("weekly", False)
-        self.assertEqual(mode, "tier")
-        self.assertFalse(weekly_gate)
+    def test_runtime_candidate_policy_rejects_weekly(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("weekly", False)
 
-    def test_normalize_candidate_source_mode_forces_hybrid_with_gate_to_tier(self):
-        mode, weekly_gate = _normalize_candidate_source_mode("hybrid_transition", True)
-        self.assertEqual(mode, "tier")
-        self.assertFalse(weekly_gate)
+    def test_runtime_candidate_policy_rejects_hybrid_with_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("hybrid_transition", True)
 
-    def test_normalize_candidate_source_mode_ignores_string_gate(self):
-        mode, weekly_gate = _normalize_candidate_source_mode("hybrid_transition", "true")
-        self.assertEqual(mode, "tier")
-        self.assertFalse(weekly_gate)
+    def test_runtime_candidate_policy_rejects_truthy_string_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("tier", "true")
 
 
 if __name__ == "__main__":

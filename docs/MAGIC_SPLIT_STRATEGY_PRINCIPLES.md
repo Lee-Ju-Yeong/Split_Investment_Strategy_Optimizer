@@ -22,8 +22,8 @@
 ### 1. Tier 후보군 필터링
 
 -   **원칙:** 신규 진입 후보군은 `DailyStockTier` 기반으로 구성합니다.
--   **적용:** 신호일(T-1) 기준 `Tier1`을 우선 사용하고, strict 모드가 아니며 `Tier1`이 비어 있을 때만 `Tier2` fallback을 허용합니다.
--   **비고:** `candidate_source_mode='weekly'`는 운영 경로에서 더 이상 1차 후보군으로 사용하지 않습니다.
+-   **적용:** strict-only runtime에서는 `candidate_source_mode='tier'`만 허용합니다. 신호일(T-1) 기준 `Tier1`만 신규 진입 후보로 사용하고, `Tier2` fallback 결과는 신규 진입에서 skip합니다.
+-   **비고:** runtime은 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`만 허용합니다. `weekly`/`hybrid_transition`은 역사적 설명용 표기만 남고 즉시 오류입니다.
 
 ### 2. 신규 진입 후보 선정 (New Entry)
 
@@ -45,9 +45,9 @@
 ### 3. Entry/Hold 히스테리시스
 
 -   **정책 모드:** `strategy_params.tier_hysteresis_mode`로 제어합니다.
-    - `legacy`(기본): Entry는 `tier=1 -> empty면 tier<=2 fallback`
-    - `strict_hysteresis_v1`: Entry는 Tier1 only(비면 skip), Tier2 fallback 차단
--   **Entry 경로:** `candidate_source_mode`가 `tier`/`hybrid_transition`일 때 Tier 후보군을 사용합니다. strict 모드에서는 `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
+    - `strict_hysteresis_v1`: 유일한 지원 runtime mode입니다. Entry는 Tier1 only(비면 skip), Tier2 fallback 차단
+    - `legacy`: 역사적 설명용 표기만 남습니다. `#97 strict-only step 1` 이후 runtime에서는 즉시 오류입니다.
+-   **Entry 경로:** runtime은 `candidate_source_mode='tier'`만 사용합니다. `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
 -   **Hold/Add 경로:** `generate_additional_buy_signals`는 T+0 진입 제외(T+1부터 허용), `cooldown_tracker`, `max_splits_limit`, `additional_buy_drop_rate`를 적용합니다. 모드와 무관하게 T-1 Tier가 `1~2`인 보유 종목에만 추가 매수를 허용합니다.
 -   **Tier3 리스크 경로:** Tier 기반 강제청산은 비활성입니다. 청산은 손절/비활성기간(`max_inactivity_period`) 규칙으로만 수행합니다.
 

@@ -54,6 +54,14 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
         self.assertEqual(signals, [])
         self.assertEqual(self.strategy.last_entry_context["tier_source"], "NO_SIGNAL_DATE")
 
+    def test_rejects_legacy_tier_hysteresis_mode(self):
+        with self.assertRaisesRegex(ValueError, "strict-only runtime requires"):
+            MagicSplitStrategy(
+                **self.base_config,
+                candidate_source_mode="tier",
+                tier_hysteresis_mode="legacy",
+            )
+
     def test_sets_lookup_error_context(self):
         strategy = MagicSplitStrategy(
             **self.base_config,

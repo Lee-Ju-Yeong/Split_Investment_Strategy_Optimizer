@@ -7,6 +7,7 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.candidate_runtime_policy import normalize_runtime_candidate_policy
 
 _GPU_IMPORT_ERROR = None
 try:
@@ -38,7 +39,11 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         }
 
     @staticmethod
-    def _execution_params(mode, use_weekly_alpha_gate=False, tier_hysteresis_mode="legacy"):
+    def _execution_params(
+        mode,
+        use_weekly_alpha_gate=False,
+        tier_hysteresis_mode="strict_hysteresis_v1",
+    ):
         return {
             "buy_commission_rate": 0.00015,
             "sell_commission_rate": 0.00015,
@@ -85,7 +90,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
 
     @staticmethod
     def _run_with_mode(mode, all_data_gpu, weekly_filtered_gpu):
-        # candidate_source_mode는 강제로 tier 경로를 사용하므로 tier_tensor는 항상 제공한다.
+        # strict-only runtime에서는 valid tier policy만 허용한다.
         tier_tensor = cp.zeros((0, 1), dtype=cp.int8)
         return gpu_engine.run_magic_split_strategy_on_gpu(
             initial_cash=10_000_000.0,
@@ -129,24 +134,19 @@ class TestGpuEnginePrepPath(unittest.TestCase):
 
         weekly_filtered_gpu.reset_index.assert_not_called()
 
-    @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
-    def test_forces_tier_path_for_weekly_mode(self, mock_create_tensors):
-        all_data_gpu = MagicMock()
-        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
-        weekly_filtered_gpu = MagicMock()
-        weekly_filtered_gpu.reset_index.return_value = MagicMock()
+    def test_runtime_candidate_policy_rejects_weekly_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("weekly", False)
 
-        mock_create_tensors.return_value = self._empty_tensors()
-
-        self._run_with_mode("weekly", all_data_gpu, weekly_filtered_gpu)
-
-        weekly_filtered_gpu.reset_index.assert_not_called()
+    def test_runtime_candidate_policy_rejects_weekly_alpha_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("tier", True)
 
     @patch("src.backtest.gpu.engine._process_additional_buy_signals_gpu")
     @patch("src.backtest.gpu.engine._process_new_entry_signals_gpu")
     @patch("src.backtest.gpu.engine._process_sell_signals_gpu")
     @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
-    def test_additional_buy_receives_signal_tiers_in_legacy_mode(
+    def test_additional_buy_receives_signal_tiers_in_strict_mode(
         self,
         mock_create_tensors,
         mock_process_sell,
@@ -201,7 +201,7 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             all_tickers=["005930"],
             execution_params=self._execution_params(
                 mode="tier",
-                tier_hysteresis_mode="legacy",
+                tier_hysteresis_mode="strict_hysteresis_v1",
             ),
             tier_tensor=cp.zeros((1, 1), dtype=cp.int8),
             debug_mode=False,
@@ -211,6 +211,25 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         signal_tiers_arg = mock_process_additional_buy.call_args.kwargs["signal_tiers"]
         self.assertIsNotNone(signal_tiers_arg)
         self.assertEqual(signal_tiers_arg.shape, (1,))
+
+    def test_rejects_legacy_tier_hysteresis_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported tier_hysteresis_mode"):
+            self._execution_params(mode="tier", tier_hysteresis_mode="legacy")
+            gpu_engine.run_magic_split_strategy_on_gpu(
+                initial_cash=10_000_000.0,
+                param_combinations=self._param_combinations(),
+                all_data_gpu=MagicMock(),
+                weekly_filtered_gpu=MagicMock(),
+                trading_date_indices=cp.asarray([], dtype=cp.int32),
+                trading_dates_pd_cpu=pd.DatetimeIndex([]),
+                all_tickers=["005930"],
+                execution_params=self._execution_params(
+                    mode="tier",
+                    tier_hysteresis_mode="legacy",
+                ),
+                tier_tensor=cp.zeros((0, 1), dtype=cp.int8),
+                debug_mode=False,
+            )
 
 
 if __name__ == "__main__":

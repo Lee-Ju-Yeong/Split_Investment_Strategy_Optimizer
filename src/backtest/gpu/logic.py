@@ -10,6 +10,7 @@ import cupy as cp
 import cudf
 import pandas as pd
 import time 
+from ...candidate_runtime_policy import normalize_runtime_candidate_policy
 from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
 from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
 from .utils import _sort_candidates_by_atr_then_ticker as _sort_candidates_by_atr_then_ticker_gpu
@@ -840,13 +841,10 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
-    if candidate_source_mode != "tier":
-        print(
-            f"[Warning] candidate_source_mode '{candidate_source_mode}' is deprecated. "
-            "Forcing 'tier' (A-path)."
-        )
-        candidate_source_mode = "tier"
+    candidate_source_mode, _ = normalize_runtime_candidate_policy(
+        execution_params.get("candidate_source_mode", "tier"),
+        execution_params.get("use_weekly_alpha_gate", False),
+    )
     if tier_tensor is None:
         raise ValueError("tier_tensor is required when candidate_source_mode='tier'")
 

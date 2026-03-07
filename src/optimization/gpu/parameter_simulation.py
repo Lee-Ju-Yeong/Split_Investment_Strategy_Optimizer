@@ -13,21 +13,25 @@ import time
 from datetime import datetime
 
 try:
+    from ...candidate_runtime_policy import normalize_runtime_candidate_policy
     from ...price_policy import (
         is_adjusted_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
     from ...universe_policy import (
         is_survivor_optimistic_mode,
         resolve_universe_mode,
     )
 except ImportError:  # pragma: no cover
+    from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
     from universe_policy import (  # type: ignore
         is_survivor_optimistic_mode,
         resolve_universe_mode,
@@ -129,16 +133,10 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
 
 
 def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate=None):
-    requested_mode = str(candidate_source_mode).strip()
-    requested_weekly_gate = bool(use_weekly_alpha_gate)
-    if requested_mode != "tier" or requested_weekly_gate:
-        print(
-            "[Warning] "
-            f"candidate_source_mode='{requested_mode}', "
-            f"use_weekly_alpha_gate={requested_weekly_gate} is deprecated. "
-            "Forcing tier-only (A-path) for CPU/GPU parity."
-        )
-    return "tier", False
+    return normalize_runtime_candidate_policy(
+        candidate_source_mode,
+        use_weekly_alpha_gate,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -150,14 +148,18 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     '전체 시뮬레이션 결과'를 DataFrame으로 반환합니다.
     (WFO 오케스트레이터가 이 결과를 받아 분석을 수행합니다.)
     """
-    cp, _, create_engine, _ = _ensure_gpu_deps()
-    np, pd = _ensure_core_deps()
-
     ctx = _get_context()
     config = ctx.config
     db_connection_str = ctx.db_connection_str
     backtest_settings = ctx.backtest_settings
     strategy_params = ctx.strategy_params
+
+    execution_tier_hysteresis_mode = normalize_tier_hysteresis_mode(
+        strategy_params.get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
+
+    cp, _, create_engine, _ = _ensure_gpu_deps()
+    np, pd = _ensure_core_deps()
 
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
@@ -168,7 +170,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     )
     execution_params["candidate_source_mode"] = normalized_mode
     execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
-    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
+    execution_params["tier_hysteresis_mode"] = execution_tier_hysteresis_mode
     universe_mode = resolve_universe_mode(
         strategy_params,
         universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),

@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-07
 > Related issues: `#97`, `#93`, `#98`
-> Gate status: `Gate A/B/C pending`
+> Gate status: `Gate A/B/C pending, strict-only step 1 follow-up in progress`
 
 ## 1. One-Page Summary
 - What: 레거시, fallback, 호환 경로를 무작정 지우지 않고 승인 게이트를 거쳐 정리하는 문서입니다.
 - Why: 실행 경로를 단순화해야 parity와 문서 가독성도 같이 좋아지지만, 잘못 지우면 운영 계약이 깨집니다.
-- Current status: 1차 인벤토리, 저위험 아카이브 이동, fallback 축소 1차는 끝났습니다.
-- Next action: Gate A/B 승인과 strict-only step 1을 고정합니다.
+- Current status: 1차 인벤토리, 저위험 아카이브 이동, fallback 축소 1차에 이어 `tier_hysteresis_mode` strict-only fail-fast는 반영됐습니다. 이번 follow-up에서는 tests/docs/config를 `candidate_source_mode='tier'` + `use_weekly_alpha_gate=False` strict-only spec으로 맞췄고, runtime wrapper shim 제거는 별도 코드 작업으로 남아 있습니다.
+- Next action: candidate runtime shim 제거, Gate A/B 승인, retained wrapper drift 회귀를 순차적으로 정리합니다.
 
 ## 2. Fixed Rules
 - 근거 없는 즉시 삭제는 금지합니다.
@@ -22,10 +22,10 @@
 - [x] 레거시 인벤토리 1차 작성
 - [x] 저위험 archive 이동
 - [x] fallback 축소 1차 반영
+- [ ] strict-only step 1: `strict_hysteresis_v1` + `candidate_source_mode='tier'` + `use_weekly_alpha_gate=False`만 허용
 - [ ] Gate A 승인
 - [ ] Gate B 승인
 - [ ] Gate C 승인
-- [ ] strict-only step 1: `strict_hysteresis_v1`만 허용
 - [ ] strict-only step 2: 운영 지표 최소 2주 관찰
 - [ ] strict-only step 3: non-strict 코드/테스트/문서 삭제
 
@@ -33,7 +33,10 @@
 - 이미 끝난 것:
   - archive 이동 3건
   - `allow_legacy_fallback`과 tier fallback 일부 축소
+  - `tier_hysteresis_mode=legacy`는 strict validator로 거부
+  - CPU strategy/shared helper, tests/docs/config는 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False` strict-only spec으로 정렬
 - 아직 필요한 것:
+  - candidate runtime shim 제거
   - 승인 기록
   - retained wrapper drift 재점검
   - real entrypoint regression test 보강
@@ -74,10 +77,10 @@
 ## 3. 1차 인벤토리 (핵심 실행경로 중심)
 | id | location | category | current_behavior | risk | removal_cost | recommendation | evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| L-001 | `src/backtest/cpu/strategy.py` | 종목선정/우선순위 | `candidate_source_mode`(`weekly/tier/hybrid`)와 `additional_buy_priority`로 신호 순서 결정 | 변경 시 CPU/GPU parity 및 종목선정 결과 변동 | High | 유지 | tier/hybrid/fallback 및 strict hysteresis 분기 존재 |
+| L-001 | `src/backtest/cpu/strategy.py` | 종목선정/우선순위 | runtime strict-only: `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`, `additional_buy_priority`로 신호 순서 결정 | 변경 시 CPU/GPU parity 및 종목선정 결과 변동 | High | 유지 | strict validator + entry ranking 분기 존재 |
 | L-002 | `src/backtest/cpu/execution.py` | 체결/정산 | 한국시장 호가 반올림 + 매수/매도 체결 정산 SSOT | 체결가/수량/손익 왜곡 | High | 유지 | `_adjust_price_up`, `_execute_buy/_execute_sell` |
 | L-003 | `src/data_handler.py` | 후보군 fallback | `get_candidates_with_tier_fallback` (tier1 우선, tier<=2 fallback) | 후보군 공백/의도치 않은 전략 드리프트 | Medium | 축소 | #67 정책 전환 단계 fallback 핵심 |
-| L-004 | `src/backtest/gpu/engine.py` | 모드 호환 fallback | invalid `candidate_source_mode` 시 `weekly` fallback | 설정 오류가 조용히 숨겨질 위험 | Medium | 축소 | warning 후 fallback 처리 |
+| L-004 | `src/backtest/gpu/engine.py` | 모드 호환 fallback | strict-only spec과 달리 legacy `candidate_source_mode`를 warning 후 `tier`로 coercion | 설정 오류를 조용히 숨길 위험 | Medium | 축소 | runtime shim 제거 필요 |
 | L-005 | `src/pipeline/ohlcv_batch.py` | 데이터 fallback | `--allow-legacy-fallback`로 history 비어있을 때 legacy 유니버스 사용 | 데이터 소스 일관성 저하 가능성 | Medium | 축소 | TODO/P0 후속에서 제거 예정으로 명시 |
 | L-006 | `src/main_script.py` | legacy orchestrator | 주간 필터 CSV/DB 경로 기반 legacy/general 파이프라인 | 신규 배치 체계와 중복 운영 리스크 | Medium | 축소 | `legacy/general data pipeline` 명시 |
 | L-007 | `src/pipeline_batch.py` | entrypoint wrapper | `src.pipeline.batch` thin wrapper | 운영 커맨드 계약 파손 | Medium | 유지 | #93 wrapper policy keep 목록 |
@@ -99,7 +102,7 @@
 - [x] 레거시 인벤토리 1차 작성
 - [x] 저위험 archive 이동(3건) 반영
 - [x] fallback 축소 1차 반영(`L-003`, `L-005`)
-- [ ] Strict-only 전환 1단계: `strict_hysteresis_v1`만 허용(legacy 입력 시 fail-fast)
+- [ ] Strict-only 전환 1단계: `strict_hysteresis_v1` + `candidate_source_mode='tier'`/`use_weekly_alpha_gate=False`만 허용(legacy 입력 시 fail-fast)
 - [ ] Strict-only 전환 2단계: 운영 지표 관찰(최소 2주)
 - [ ] Strict-only 전환 3단계: non-strict 코드/테스트/문서 완전 삭제
 - [ ] Gate A 승인 완료
@@ -115,6 +118,23 @@
 - [ ] 사용자 승인 게이트 A/B/C 기록 완료
 - [ ] 승인 범위 제거 PR 병합 완료
 
+## 6-1. 2026-03-07 strict-only step 1 반영
+- 구현:
+  - `src/tier_hysteresis_policy.py` 추가
+  - `src/candidate_runtime_policy.py` 추가
+  - `src/backtest/cpu/strategy.py`는 candidate strict validator를 사용하고, tests/docs/config는 동일 spec으로 정렬
+  - `src/backtest/gpu/engine.py`, `src/optimization/gpu/parameter_simulation.py`, `src/debug_gpu_single_run.py`, `src/parity_sell_event_dump.py`, `src/backtest/gpu/logic.py`의 retained shim 제거는 후속 코드 작업으로 남음
+- 테스트/문서:
+  - `tests/test_cpu_strategy_entry_context.py`
+  - `tests/test_gpu_engine_prep_path.py`
+  - `tests/test_gpu_parameter_simulation_orchestration.py`
+  - `tests/test_gpu_parameter_batch_fallback.py`
+  - `tests/test_issue67_tier_universe.py`
+  - `tests/test_parity_sell_event_dump.py`
+  - `config/config.example.yaml`
+- 해석:
+  - `tier_hysteresis_mode` strict-only는 반영됐지만, candidate runtime shim 제거 전까지 step 1을 닫았다고 보지 않는다.
+
 ## 7. 다음 PR 제안 (분리 권장)
 - PR-97A: 인벤토리/정책 문서 고정 (코드 변경 없음)
 - PR-97B: 저위험 아카이브 이동 (`reproduce_issue*.py`)
@@ -125,11 +145,13 @@
 - #97은 삭제/축소 거버넌스와 승인 게이트 관리에 집중한다.
 
 ## 8. Strict-only 전환 계획 (합의안)
-목표: `tier_hysteresis_mode`의 non-strict(`legacy`) 분기를 단계적으로 제거해 정책/코드 경로를 단순화한다.
+목표: `tier_hysteresis_mode`와 runtime candidate policy의 non-strict 분기를 단계적으로 제거해 정책/코드 경로를 단순화한다.
 
 ### Step 1. strict만 허용 (fail-fast)
 - 적용 대상: CPU/GPU 공통 실행 경로
-- 정책: `tier_hysteresis_mode != strict_hysteresis_v1` 입력 시 즉시 오류 반환
+- 정책:
+  - `tier_hysteresis_mode != strict_hysteresis_v1` 입력 시 즉시 오류 반환
+  - `candidate_source_mode != tier` 또는 `use_weekly_alpha_gate=True` 입력 시 즉시 오류 반환
 - 목적: non-strict 경로 신규 사용을 원천 차단하고 운영 정책을 단일화
 
 ### Step 2. 운영 지표 관찰 (최소 2주)
