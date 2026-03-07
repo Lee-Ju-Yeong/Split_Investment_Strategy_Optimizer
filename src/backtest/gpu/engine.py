@@ -95,6 +95,24 @@ def _build_parity_snapshot_lines(
     return lines
 
 
+def _build_candidate_rank_lines(*, current_date, signal_date, ranked_records) -> list[str]:
+    if signal_date is None or not ranked_records:
+        return []
+    trade_date_str = current_date.strftime("%Y-%m-%d")
+    signal_date_str = signal_date.strftime("%Y-%m-%d")
+    lines = []
+    for rank, row in enumerate(ranked_records, start=1):
+        ticker, entry_score_q, flow_score_q, atr_score_q, market_cap_q, atr_value = row
+        lines.append(
+            "[GPU_CANDIDATE_RANK] "
+            f"trade_date={trade_date_str}|signal_date={signal_date_str}|rank={int(rank)}|"
+            f"ticker={ticker}|entry_composite_score_q={int(entry_score_q)}|"
+            f"flow_score_q={int(flow_score_q)}|atr_score_q={int(atr_score_q)}|"
+            f"market_cap_q={int(market_cap_q)}|atr_14_ratio={float(atr_value):.6f}"
+        )
+    return lines
+
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -248,6 +266,7 @@ def run_magic_split_strategy_on_gpu(
 
             # (D) Valid Data Check + deterministic ranking metrics
             # (CompositeScore -> MarketCap -> Ticker)
+            ranked_records_for_day = []
             if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
                     all_data_reset_idx=all_data_reset_idx,
@@ -259,36 +278,16 @@ def run_magic_split_strategy_on_gpu(
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                 else:
-                    candidate_tickers_for_day, candidate_atrs_for_day, ranked_records = build_ranked_candidate_payload(
+                    candidate_tickers_for_day, candidate_atrs_for_day, ranked_records_for_day = build_ranked_candidate_payload(
                         valid_candidate_metrics_df=valid_candidate_metrics_df,
                         return_ranked_records=debug_mode,
                     )
-
-                    if candidate_tickers_for_day.size > 0:
-                        if debug_mode:
-                            preview = ", ".join([str(row[0]) for row in ranked_records[:10]])
-                            print(
-                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
-                                f"(signal={signal_date.strftime('%Y-%m-%d')}) "
-                                f"ranked={len(ranked_records)} top10=[{preview}]"
-                            )
-                    else:
+                    if candidate_tickers_for_day.size == 0:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                         candidate_atrs_for_day = cp.array([], dtype=cp.float32)
-                        if debug_mode:
-                            print(
-                                f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
-                                f"(signal={signal_date.strftime('%Y-%m-%d')}) ranked=0"
-                            )
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
-                if debug_mode:
-                    signal_str = signal_date.strftime('%Y-%m-%d') if signal_date is not None else "None"
-                    print(
-                        f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
-                        f"(signal={signal_str}) ranked=0 (no candidates before metric filter)"
-                    )
 
             # 2-2. 월별 투자금 재계산
             # --- 신호 처리 함수 호출 (기존과 동일) ---
@@ -330,11 +329,25 @@ def run_magic_split_strategy_on_gpu(
                     if filtered_metrics_df is None or filtered_metrics_df.empty:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                         candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                        ranked_records_for_day = []
                     else:
-                        candidate_tickers_for_day, candidate_atrs_for_day, _ = build_ranked_candidate_payload(
+                        candidate_tickers_for_day, candidate_atrs_for_day, ranked_records_for_day = build_ranked_candidate_payload(
                             valid_candidate_metrics_df=filtered_metrics_df,
-                            return_ranked_records=False,
+                            return_ranked_records=debug_mode,
                         )
+            if debug_mode:
+                signal_str = signal_date.strftime('%Y-%m-%d') if signal_date is not None else "None"
+                preview = ", ".join([str(row[0]) for row in ranked_records_for_day[:10]])
+                print(
+                    f"[GPU_CANDIDATE_DEBUG] {current_date.strftime('%Y-%m-%d')} "
+                    f"(signal={signal_str}) ranked={len(ranked_records_for_day)} top10=[{preview}]"
+                )
+                for line in _build_candidate_rank_lines(
+                    current_date=current_date,
+                    signal_date=signal_date,
+                    ranked_records=ranked_records_for_day,
+                ):
+                    print(line)
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
                 cooldown_period_days, param_combinations, current_opens_gpu, signal_closes_gpu,

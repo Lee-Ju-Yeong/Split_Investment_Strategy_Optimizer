@@ -113,6 +113,8 @@ class TestBacktesterEntryMetrics(unittest.TestCase):
                     "active_candidate_count": 0,
                     "ranked_candidate_count": 0,
                     "selected_count": 0,
+                    "pit_failure_code": "tier12_coverage_gate_failed",
+                    "pit_failure_stage": "tier12_coverage_gate",
                 },
             ]
         )
@@ -142,6 +144,8 @@ class TestBacktesterEntryMetrics(unittest.TestCase):
         self.assertAlmostEqual(metrics["avg_active_candidates"], 3.5, places=2)
         self.assertAlmostEqual(metrics["avg_ranked_candidates"], 3.0, places=2)
         self.assertAlmostEqual(metrics["avg_selected_signals"], 0.0, places=2)
+        self.assertEqual(metrics["pit_failure_days_by_code"], {"tier12_coverage_gate_failed": 1})
+        self.assertEqual(metrics["pit_failure_days_by_stage"], {"tier12_coverage_gate": 1})
 
     def test_entry_metrics_counts_unknown_source(self):
         dates = pd.to_datetime(["2024-01-02"])

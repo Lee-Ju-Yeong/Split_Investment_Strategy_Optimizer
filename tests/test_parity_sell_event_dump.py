@@ -3,10 +3,12 @@ from unittest.mock import patch
 
 from src.parity_sell_event_dump import (
     BuyEvent,
+    CandidateRankRow,
     DailySnapshot,
     PositionSnapshot,
     SellEvent,
     _parse_gpu_buy_events,
+    _parse_gpu_candidate_rank_rows,
     _parse_gpu_daily_snapshots,
     _parse_gpu_position_snapshots,
     collect_trade_event_parity_report,
@@ -529,6 +531,21 @@ class TestParitySellEventDump(unittest.TestCase):
         self.assertEqual(position_rows[0].quantity, 10)
         self.assertEqual(position_rows[0].ticker, "005930")
 
+    def test_parse_gpu_candidate_rank_markers(self):
+        log_text = "\n".join(
+            [
+                "[GPU_CANDIDATE_RANK] trade_date=2024-01-02|signal_date=2024-01-01|rank=1|ticker=005930|entry_composite_score_q=8123|flow_score_q=7000|atr_score_q=6000|market_cap_q=400000|atr_14_ratio=0.123400",
+                "[GPU_CANDIDATE_RANK] trade_date=2024-01-02|signal_date=2024-01-01|rank=2|ticker=000660|entry_composite_score_q=7123|flow_score_q=6500|atr_score_q=5500|market_cap_q=300000|atr_14_ratio=0.113400",
+            ]
+        )
+
+        rows = _parse_gpu_candidate_rank_rows(log_text)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].ticker, "005930")
+        self.assertEqual(rows[0].rank, 1)
+        self.assertEqual(rows[1].entry_composite_score_q, 7123)
+
     def test_parse_gpu_new_buy_marker_reads_target_price(self):
         log_text = (
             "[GPU_NEW_BUY_CALC] 1, Sim 0, Stock 0(005930) | "
@@ -602,6 +619,116 @@ class TestParitySellEventDump(unittest.TestCase):
 
         self.assertTrue(payload["position_snapshot_pairs"][0]["matched"])
         self.assertEqual(payload["position_snapshot_mismatched_pairs"], 0)
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_captures_candidate_order_matches(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        candidate_rows = [
+            CandidateRankRow(
+                source="cpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="005930",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.1234,
+            )
+        ]
+        gpu_candidate_rows = [
+            CandidateRankRow(
+                source="gpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="005930",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.12340001,
+            )
+        ]
+        mock_cpu_runner.return_value = ([], [], _daily_snapshots()[0], _position_snapshots()[0], candidate_rows)
+        mock_gpu_runner.return_value = ([], [], _daily_snapshots()[1], _position_snapshots()[1], gpu_candidate_rows, "")
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertEqual(payload["candidate_order_paired_count"], 1)
+        self.assertEqual(payload["candidate_order_mismatched_pairs"], 0)
+        self.assertTrue(payload["candidate_order_zero_mismatch"])
+        self.assertTrue(payload["candidate_order_pairs"][0]["matched"])
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_flags_candidate_order_mismatch_without_affecting_decision_level(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        candidate_rows = [
+            CandidateRankRow(
+                source="cpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="005930",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.1234,
+            )
+        ]
+        gpu_candidate_rows = [
+            CandidateRankRow(
+                source="gpu",
+                trade_date="2024-01-02",
+                signal_date="2024-01-01",
+                rank=1,
+                ticker="000660",
+                entry_composite_score_q=8123,
+                flow_score_q=7000,
+                atr_score_q=6000,
+                market_cap_q=400000,
+                atr_14_ratio=0.1234,
+            )
+        ]
+        mock_cpu_runner.return_value = ([], [], _daily_snapshots()[0], _position_snapshots()[0], candidate_rows)
+        mock_gpu_runner.return_value = ([], [], _daily_snapshots()[1], _position_snapshots()[1], gpu_candidate_rows, "")
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertEqual(payload["candidate_order_mismatched_pairs"], 1)
+        self.assertFalse(payload["candidate_order_zero_mismatch"])
+        self.assertFalse(payload["candidate_order_pairs"][0]["matched"])
+        self.assertTrue(payload["decision_level_zero_mismatch"])
 
 
 if __name__ == "__main__":

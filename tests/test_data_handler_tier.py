@@ -8,7 +8,7 @@ import pandas as pd
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from data_handler import DataHandler
+from data_handler import DataHandler, PitRuntimeError
 
 
 class TestDataHandlerTierApis(unittest.TestCase):
@@ -183,12 +183,14 @@ class TestDataHandlerTierApis(unittest.TestCase):
             "get_tiers_as_of",
             return_value={"A": {"tier": 1, "liquidity_20d_avg_value": 100}},
         ):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(PitRuntimeError) as ctx:
                 self.handler.get_candidates_with_tier_fallback_pit_gated(
                     date="2024-01-04",
                     min_liquidity_20d_avg_value=0,
                     min_tier12_coverage_ratio=0.6,
                 )
+        self.assertEqual(ctx.exception.pit_code, "tier12_coverage_gate_failed")
+        self.assertEqual(ctx.exception.pit_stage, "tier12_coverage_gate")
 
     def test_freeze_tier_candidate_manifest_reuses_cached_payload(self):
         with patch.object(
@@ -348,25 +350,27 @@ class TestDataHandlerTierApis(unittest.TestCase):
 
     def test_prepare_strict_frozen_candidate_manifest_requires_raise_policy(self):
         self.handler.frozen_candidate_manifest_mode = "record_strict"
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PitRuntimeError) as ctx:
             self.handler.prepare_strict_frozen_candidate_manifest(
                 trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03"]),
                 candidate_lookup_error_policy="skip",
                 min_liquidity_20d_avg_value=100,
                 min_tier12_coverage_ratio=0.3,
             )
+        self.assertEqual(ctx.exception.pit_code, "strict_frozen_requires_raise_policy")
 
     def test_strict_frozen_manifest_miss_raises(self):
         self.handler._frozen_tier_candidate_manifest = {"2024-01-02": {"candidate_codes": [], "source": "NO_CANDIDATES", "pit_size": 0, "tier1_count": 0, "tier12_count": 0}}
         self.handler._frozen_tier_candidate_manifest_key = self.handler._build_tier_manifest_key(100, 0.3)
         self.handler._strict_frozen_candidate_manifest_required = True
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PitRuntimeError) as ctx:
             self.handler.get_candidates_with_tier_fallback_pit_gated(
                 date="2024-01-03",
                 min_liquidity_20d_avg_value=100,
                 min_tier12_coverage_ratio=0.3,
             )
+        self.assertEqual(ctx.exception.pit_code, "frozen_manifest_miss")
 
     def test_prepare_replay_strict_loads_manifest_file(self):
         self.handler.frozen_candidate_manifest_mode = "replay_strict"
@@ -407,13 +411,14 @@ class TestDataHandlerTierApis(unittest.TestCase):
         self.handler.frozen_candidate_manifest_path = "/tmp/fake-manifest.json"
         self.handler.frozen_candidate_manifest_expected_sha256 = None
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PitRuntimeError) as ctx:
             self.handler.prepare_strict_frozen_candidate_manifest(
                 trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03"]),
                 candidate_lookup_error_policy="raise",
                 min_liquidity_20d_avg_value=100,
                 min_tier12_coverage_ratio=0.3,
             )
+        self.assertEqual(ctx.exception.pit_code, "frozen_manifest_expected_sha_missing")
 
     def test_prepare_replay_strict_rejects_signal_date_mismatch(self):
         self.handler.frozen_candidate_manifest_mode = "replay_strict"
@@ -438,13 +443,28 @@ class TestDataHandlerTierApis(unittest.TestCase):
         self.handler.frozen_candidate_manifest_path = tmp_path
         self.handler.frozen_candidate_manifest_expected_sha256 = self.handler._hash_file(tmp_path)
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PitRuntimeError) as ctx:
             self.handler.prepare_strict_frozen_candidate_manifest(
                 trading_dates=pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
                 candidate_lookup_error_policy="raise",
                 min_liquidity_20d_avg_value=100,
                 min_tier12_coverage_ratio=0.3,
             )
+        self.assertEqual(ctx.exception.pit_code, "frozen_manifest_signal_date_set_mismatch")
+
+    def test_invalid_frozen_manifest_mode_is_structured(self):
+        with self.assertRaises(PitRuntimeError) as ctx:
+            DataHandler._resolve_frozen_candidate_manifest_mode(
+                {"frozen_candidate_manifest_mode": "broken_mode"}
+            )
+        self.assertEqual(ctx.exception.pit_code, "frozen_manifest_mode_invalid")
+
+    def test_invalid_frozen_manifest_expected_sha_is_structured(self):
+        with self.assertRaises(PitRuntimeError) as ctx:
+            DataHandler._resolve_frozen_candidate_manifest_expected_sha256(
+                {"frozen_candidate_manifest_expected_sha256": "not-a-sha"}
+            )
+        self.assertEqual(ctx.exception.pit_code, "frozen_manifest_expected_sha_invalid")
 
 
 if __name__ == "__main__":
