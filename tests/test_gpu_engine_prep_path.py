@@ -71,6 +71,18 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             dtype=cp.float32,
         )
 
+    def test_single_sim_available_slots_counts_held_stocks(self):
+        positions_state = cp.zeros((1, 3, 2, 1), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 1, 1, 0] = 5.0
+
+        available_slots = gpu_engine._get_single_sim_available_slots(
+            positions_state=positions_state,
+            max_stocks=2.0,
+        )
+
+        self.assertEqual(available_slots, 0)
+
     @staticmethod
     def _run_with_mode(mode, all_data_gpu, weekly_filtered_gpu):
         # candidate_source_mode는 강제로 tier 경로를 사용하므로 tier_tensor는 항상 제공한다.

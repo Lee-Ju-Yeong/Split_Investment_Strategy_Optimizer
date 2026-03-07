@@ -26,15 +26,14 @@
 | Gate | Current State | Meaning | Owner Doc |
 | --- | --- | --- | --- |
 | `#56 Release parity` | Done (synthetic) | config single-row + synthetic `top-k=20` 범위까지 decision-level 증적 확보, real optimizer/WFO CSV는 spot revalidation만 남음 | [#56](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md) |
-| `#67 Runtime PIT candidate policy` | Open | GPU runtime gate parity, CPU opt-in strict frozen manifest, candidate order direct validation artifact, PIT failure/log standardization, parity/certification artifact 연결까지 반영됨. 남은 핵심은 live evidence 실행과 runbook 고정 | [#67](todos/2026_02_09-issue67-tier-universe-migration.md) |
+| `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `#97 Strict-only governance` | Open | 제거/축소 대상과 strict-only 전환 승인 절차가 남음 | [#97](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | Blocked | `#67/#97`이 닫히기 전에는 승격 판단 불가 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | Blocked | `#97`이 닫히기 전에는 승격 판단 불가 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
-| `P0` | `#67` PIT universe + DailyStockTier runtime 정렬 | In Progress | GPU preload gate, CPU opt-in strict frozen manifest, candidate order direct validation artifact, PIT failure/log standardization, parity/certification artifact 연결까지 맞췄다. 남은 핵심은 live evidence 실행과 runbook 고정이다 | strict frozen manifest mode로 parity/certification live evidence 1회 수집 | [doc](todos/2026_02_09-issue67-tier-universe-migration.md) |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P1` | `#97` legacy strict-only 전환 | In Progress | fallback/legacy 경로를 줄여야 문서와 실행 경로가 단순해짐 | Gate A/B 승인과 strict-only step 1 확정 | [doc](todos/2026_02_17-issue97-legacy-code-audit-governance.md) |
 | `P1` | `#98` GPU throughput refactor | Blocked | 성능은 중요하지만 의미론이 먼저 고정돼야 함 | fixed-data VRAM + ranking hot path 설계, 단 승격은 보류 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
@@ -82,6 +81,7 @@
   - [#71 pykrx + Tier v2 roadmap](todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md)
   - [#69 package restructure](todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md)
   - [#56 parity release gate](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md)
+  - [#67 PIT candidate policy](todos/done_2026_02_09-issue67-tier-universe-migration.md)
 - 완료 상태이지만 참고가 필요한 운영 문서:
   - [#93 wrapper deprecation/removal plan](todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md)
 

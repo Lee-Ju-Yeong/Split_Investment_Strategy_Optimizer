@@ -39,7 +39,7 @@
 
 ## 3. Related Active Docs
 - [#56 parity](done_2026_02_09-issue56-cpu-gpu-parity-topk.md)
-- [#67 tier universe](2026_02_09-issue67-tier-universe-migration.md)
+- [#67 tier universe](done_2026_02_09-issue67-tier-universe-migration.md)
 - [#68 robust WFO](2026_02_09-issue68-robust-wfo-ablation.md)
 - [#101 tier1 bias](2026_02_22-issue101-feat-tier1.md)
 

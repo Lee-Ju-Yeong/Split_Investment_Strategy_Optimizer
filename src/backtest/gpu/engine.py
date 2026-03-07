@@ -113,6 +113,13 @@ def _build_candidate_rank_lines(*, current_date, signal_date, ranked_records) ->
     return lines
 
 
+def _get_single_sim_available_slots(*, positions_state: cp.ndarray, max_stocks: float) -> int:
+    held_mask_sim0 = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
+    current_num_stocks = int(cp.sum(held_mask_sim0).item())
+    max_stocks_int = int(float(max_stocks))
+    return max(0, max_stocks_int - current_num_stocks)
+
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -313,13 +320,26 @@ def run_magic_split_strategy_on_gpu(
                     (day_idx - cooldown_row_sim0) < cooldown_period_days
                 )
                 active_mask_sim0 = (~held_mask_sim0) & (~in_cooldown_mask_sim0)
-                active_candidate_mask = active_mask_sim0[candidate_tickers_for_day]
-                filtered_candidate_indices = candidate_tickers_for_day[active_candidate_mask].astype(
-                    cp.int32, copy=False
+                available_slots_sim0 = _get_single_sim_available_slots(
+                    positions_state=positions_state,
+                    max_stocks=param_combinations[0, 0].item(),
                 )
+                if available_slots_sim0 <= 0:
+                    candidate_tickers_for_day = cp.array([], dtype=cp.int32)
+                    candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                    ranked_records_for_day = []
+                    active_mask_sim0 = None
+                if active_mask_sim0 is None:
+                    filtered_candidate_indices = cp.array([], dtype=cp.int32)
+                else:
+                    active_candidate_mask = active_mask_sim0[candidate_tickers_for_day]
+                    filtered_candidate_indices = candidate_tickers_for_day[active_candidate_mask].astype(
+                        cp.int32, copy=False
+                    )
                 if signal_date is None or filtered_candidate_indices.size == 0:
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+                    ranked_records_for_day = []
                 else:
                     filtered_metrics_df = _collect_candidate_rank_metrics_asof(
                         all_data_reset_idx=all_data_reset_idx,

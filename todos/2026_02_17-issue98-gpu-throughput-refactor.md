@@ -10,7 +10,7 @@
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: baseline과 일부 cleanup은 진행됐지만, 최종 승격은 `#56/#67/#97`이 닫히기 전까지 보류입니다.
+- Current status: baseline과 일부 cleanup은 진행됐지만, 최종 승격은 `#97`이 닫히기 전까지 보류입니다. `#56` synthetic parity와 `#67` runtime PIT candidate policy는 live evidence 기준으로 종결되었습니다.
 - Next action: fixed-data VRAM, daily ranking hot path, memory estimate 같은 현재 병목을 strict parity 전제로 정리합니다.
 
 ## 2. Plain-Language Rule
