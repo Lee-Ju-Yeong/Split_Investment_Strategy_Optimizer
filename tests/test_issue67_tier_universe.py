@@ -28,46 +28,9 @@ class TestIssue67TierUniverse(unittest.TestCase):
     def tearDown(self):
         self.pool_patcher.stop()
 
-    @patch("pandas.read_sql")
-    def test_get_candidates_with_tier_fallback_tier1_exists(self, mock_read_sql):
-        # Tier 1 query returns results
-        mock_read_sql.side_effect = [
-            pd.DataFrame({"stock_code": ["000001", "000002"]}), # Tier 1
-        ]
-        
-        candidates, source = self.data_handler.get_candidates_with_tier_fallback("2024-01-01")
-        
-        self.assertEqual(candidates, ["000001", "000002"])
-        self.assertEqual(source, "TIER_1")
-        self.assertEqual(mock_read_sql.call_count, 1) # Should only call Tier 1 query
-
-    @patch("pandas.read_sql")
-    def test_get_candidates_with_tier_fallback_tier1_empty_tier2_exists(self, mock_read_sql):
-        # Tier 1 empty, Tier 2 returns results
-        mock_read_sql.side_effect = [
-            pd.DataFrame({"stock_code": []}), # Tier 1
-            pd.DataFrame({"stock_code": ["000003", "000004"]}), # Tier 2
-        ]
-        
-        candidates, source = self.data_handler.get_candidates_with_tier_fallback("2024-01-01")
-        
-        self.assertEqual(candidates, ["000003", "000004"])
-        self.assertEqual(source, "TIER_2_FALLBACK")
-        self.assertEqual(mock_read_sql.call_count, 2)
-
-    @patch("pandas.read_sql")
-    def test_get_candidates_with_tier_fallback_both_empty(self, mock_read_sql):
-        # Both empty
-        mock_read_sql.side_effect = [
-            pd.DataFrame({"stock_code": []}), # Tier 1
-            pd.DataFrame({"stock_code": []}), # Tier 2
-        ]
-        
-        candidates, source = self.data_handler.get_candidates_with_tier_fallback("2024-01-01")
-        
-        self.assertEqual(candidates, [])
-        self.assertEqual(source, "NO_CANDIDATES")
-        self.assertEqual(mock_read_sql.call_count, 2)
+    def test_legacy_candidate_helpers_removed(self):
+        self.assertFalse(hasattr(self.data_handler, "get_candidates_with_tier_fallback"))
+        self.assertFalse(hasattr(self.data_handler, "get_candidates_with_tier_fallback_pit"))
 
 class TestIssue67StrategyModes(unittest.TestCase):
     def setUp(self):

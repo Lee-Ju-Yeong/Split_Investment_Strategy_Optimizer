@@ -30,7 +30,7 @@ class _DummyDataHandler:
             return None
         return pd.to_datetime(trading_dates[current_day_idx - 1])
 
-    def get_candidates_with_tier_fallback(self, _signal_date):
+    def get_candidates_with_tier_fallback_pit_gated(self, _signal_date, **_kwargs):
         return self._candidate_codes, "TIER_1"
 
     def get_stock_row_as_of(self, ticker, *_args, **_kwargs):

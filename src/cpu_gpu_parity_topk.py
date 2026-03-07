@@ -101,13 +101,6 @@ def _load_all_data_to_gpu(
     )
 
 
-def _build_empty_weekly_filtered_gpu():
-    import cudf
-
-    df = cudf.DataFrame({"date": [], "ticker": []})
-    return df.set_index("date")
-
-
 def _load_tier_tensor(
     sql_engine,
     start_date: str,
@@ -648,7 +641,6 @@ def main() -> None:
 
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
-    weekly_filtered_gpu = _build_empty_weekly_filtered_gpu()
     pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
         db_conn_str,
         start_date,
@@ -684,7 +676,6 @@ def main() -> None:
                 initial_cash=float(initial_cash),
                 param_combinations=single_param_gpu,
                 all_data_gpu=all_data_gpu,
-                weekly_filtered_gpu=weekly_filtered_gpu,
                 trading_date_indices=trading_date_indices_gpu,
                 trading_dates_pd_cpu=trading_dates_pd,
                 all_tickers=all_tickers,
@@ -701,7 +692,6 @@ def main() -> None:
             initial_cash=float(initial_cash),
             param_combinations=param_gpu,
             all_data_gpu=all_data_gpu,
-            weekly_filtered_gpu=weekly_filtered_gpu,
             trading_date_indices=trading_date_indices_gpu,
             trading_dates_pd_cpu=trading_dates_pd,
             all_tickers=all_tickers,

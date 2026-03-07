@@ -76,22 +76,10 @@ class TestDataHandlerTierApis(unittest.TestCase):
         self.assertEqual(result["005930"]["tier"], 1)
         self.assertEqual(result["000660"]["tier"], 2)
 
-    def test_get_filtered_stock_codes_with_tier(self):
-        with patch.object(
-            self.handler, "get_filtered_stock_codes", return_value=["A", "B", "C"]
-        ), patch.object(
-            self.handler,
-            "get_tiers_as_of",
-            return_value={
-                "A": {"tier": 1},
-                "C": {"tier": 2},
-            },
-        ):
-            result = self.handler.get_filtered_stock_codes_with_tier(
-                date="2024-01-04",
-                allowed_tiers=(1, 2),
-            )
-        self.assertEqual(result, ["A", "C"])
+    def test_legacy_weekly_candidate_helpers_removed(self):
+        self.assertFalse(hasattr(self.handler, "get_filtered_stock_codes_with_tier"))
+        self.assertFalse(hasattr(self.handler, "get_candidates_with_tier_fallback"))
+        self.assertFalse(hasattr(self.handler, "get_candidates_with_tier_fallback_pit"))
 
     @patch("pandas.read_sql")
     def test_get_pit_universe_codes_as_of_uses_snapshot_first(self, mock_read_sql):
@@ -131,7 +119,11 @@ class TestDataHandlerTierApis(unittest.TestCase):
                 "C": {"tier": 1, "liquidity_20d_avg_value": 200},
             },
         ):
-            codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=None,
+                min_tier12_coverage_ratio=None,
+            )
 
         self.assertEqual(codes, ["A", "C"])
         self.assertEqual(source, "TIER_1_SNAPSHOT_ASOF")
@@ -146,7 +138,11 @@ class TestDataHandlerTierApis(unittest.TestCase):
             "get_tiers_as_of",
             return_value={"B": {"tier": 2, "liquidity_20d_avg_value": 150}},
         ):
-            codes, source = self.handler.get_candidates_with_tier_fallback_pit("2024-01-04")
+            codes, source = self.handler.get_candidates_with_tier_fallback_pit_gated(
+                date="2024-01-04",
+                min_liquidity_20d_avg_value=None,
+                min_tier12_coverage_ratio=None,
+            )
 
         self.assertEqual(codes, ["B"])
         self.assertEqual(source, "TIER_2_FALLBACK_SNAPSHOT_ASOF")

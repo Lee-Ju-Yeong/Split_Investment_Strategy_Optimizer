@@ -23,7 +23,7 @@
 
 -   **원칙:** 신규 진입 후보군은 `DailyStockTier` 기반으로 구성합니다.
 -   **적용:** strict-only runtime에서는 `candidate_source_mode='tier'`만 허용합니다. 신호일(T-1) 기준 `Tier1`만 신규 진입 후보로 사용하고, `Tier2` fallback 결과는 신규 진입에서 skip합니다.
--   **비고:** runtime은 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`만 허용합니다. `weekly`/`hybrid_transition`은 역사적 설명용 표기만 남고 즉시 오류입니다.
+-   **비고:** runtime 표면은 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`로 고정합니다. 그 외 후보 모드는 active runtime/contracts에서 제거됐습니다.
 
 ### 2. 신규 진입 후보 선정 (New Entry)
 

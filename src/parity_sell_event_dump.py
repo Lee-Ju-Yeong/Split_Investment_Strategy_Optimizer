@@ -36,7 +36,6 @@ from .data_handler import DataHandler, build_pit_failure_record
 from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
-    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
     preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
@@ -437,7 +436,6 @@ def _run_gpu_and_collect_sell_events(
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -498,7 +496,6 @@ def _run_gpu_and_collect_sell_events(
             initial_cash=float(initial_cash),
             param_combinations=param_matrix,
             all_data_gpu=all_data_gpu,
-            weekly_filtered_gpu=weekly_filtered_gpu,
             trading_date_indices=trading_date_indices_gpu,
             trading_dates_pd_cpu=trading_dates_pd,
             all_tickers=all_tickers,

@@ -15,7 +15,6 @@ from .context import _ensure_gpu_deps
 def run_gpu_optimization(
     params_gpu,
     data_gpu,
-    weekly_filtered_gpu,
     all_tickers,
     trading_date_indices_gpu,
     trading_dates_pd,
@@ -32,7 +31,6 @@ def run_gpu_optimization(
         initial_cash=initial_cash_value,
         param_combinations=params_gpu,
         all_data_gpu=data_gpu,
-        weekly_filtered_gpu=weekly_filtered_gpu,
         trading_date_indices=trading_date_indices_gpu,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,

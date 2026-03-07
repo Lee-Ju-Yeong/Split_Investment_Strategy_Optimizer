@@ -20,7 +20,7 @@ class TestFinancialCollectorUniverse(unittest.TestCase):
         conn.cursor.return_value.__enter__.return_value = cursor
         return conn, cursor
 
-    def test_get_financial_ticker_universe_raises_without_legacy_fallback(self):
+    def test_get_financial_ticker_universe_raises_when_snapshot_and_history_are_empty(self):
         conn, cursor = self._mock_conn_with_fetchall_side_effect([[], []])
 
         with self.assertRaises(RuntimeError):
@@ -28,16 +28,14 @@ class TestFinancialCollectorUniverse(unittest.TestCase):
                 conn=conn,
                 end_date=date(2026, 2, 7),
                 mode="daily",
-                allow_legacy_fallback=False,
             )
         self.assertEqual(cursor.fetchall.call_count, 2)
 
-    def test_get_financial_ticker_universe_uses_legacy_when_allowed(self):
+    def test_get_financial_ticker_universe_returns_history_active_source(self):
         conn, _ = self._mock_conn_with_fetchall_side_effect(
             [
                 [],  # snapshot
-                [],  # active history
-                [("005930",)],  # weekly fallback
+                [("005930",)],  # active history
             ]
         )
 
@@ -45,36 +43,33 @@ class TestFinancialCollectorUniverse(unittest.TestCase):
             conn=conn,
             end_date=date(2026, 2, 7),
             mode="daily",
-            allow_legacy_fallback=True,
             return_source=True,
         )
 
         self.assertEqual(tickers, ["005930"])
-        self.assertEqual(source, "legacy_weekly")
+        self.assertEqual(source, "history_active")
 
     @patch("src.data.collectors.financial_collector.get_financial_ticker_universe")
-    def test_run_financial_batch_tracks_legacy_summary_fields(self, mock_get_universe):
-        mock_get_universe.return_value = ([], "legacy_weekly")
+    def test_run_financial_batch_uses_strict_universe_summary(self, mock_get_universe):
+        mock_get_universe.return_value = ([], "history_active")
         conn = MagicMock()
 
         summary = run_financial_batch(
             conn=conn,
             mode="daily",
             end_date_str="20260207",
-            allow_legacy_fallback=True,
             log_interval=0,
         )
 
-        self.assertEqual(summary["universe_source"], "legacy_weekly")
-        self.assertTrue(summary["allow_legacy_fallback"])
-        self.assertTrue(summary["legacy_fallback_used"])
-        self.assertEqual(summary["legacy_fallback_tickers"], 0)
-        self.assertEqual(summary["legacy_fallback_runs"], 1)
+        self.assertEqual(summary["universe_source"], "history_active")
+        self.assertNotIn("allow_legacy_fallback", summary)
+        self.assertNotIn("legacy_fallback_used", summary)
+        self.assertNotIn("legacy_fallback_tickers", summary)
+        self.assertNotIn("legacy_fallback_runs", summary)
         mock_get_universe.assert_called_once_with(
             conn,
             end_date=date(2026, 2, 7),
             mode="daily",
-            allow_legacy_fallback=True,
             return_source=True,
         )
 

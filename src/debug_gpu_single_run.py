@@ -22,7 +22,6 @@ from src.price_policy import (
 from src.tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from src.universe_policy import resolve_universe_mode
 from src.optimization.gpu.data_loading import (
-    build_empty_weekly_filtered_gpu as build_empty_weekly_filtered_gpu_shared,
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
     preload_tier_data_to_tensor as preload_tier_data_to_tensor_shared,
 )
@@ -107,11 +106,6 @@ def preload_all_data_to_gpu(
         universe_mode=universe_mode,
     )
 
-def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    _ = (engine, start_date, end_date)
-    print("⏭️ Skipping weekly filtered preload (tier-only runtime path).")
-    return build_empty_weekly_filtered_gpu_shared()
-
 def preload_tier_data_to_tensor(
     engine,
     start_date,
@@ -139,7 +133,7 @@ def preload_tier_data_to_tensor(
 # -----------------------------------------------------------------------------
 
 def run_gpu_backtest_kernel(params_gpu, data_gpu,
-                         weekly_filtered_gpu, all_tickers,
+                         all_tickers,
                          trading_date_indices_gpu,
                          trading_dates_pd,
                          initial_cash_value,
@@ -156,7 +150,6 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
         initial_cash=initial_cash_value,
         param_combinations=params_gpu,
         all_data_gpu=data_gpu,
-        weekly_filtered_gpu=weekly_filtered_gpu,
         trading_date_indices=trading_date_indices_gpu,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
@@ -234,7 +227,6 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
     
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -272,7 +264,6 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
         all_data_gpu, 
-        weekly_filtered_gpu,
         all_tickers, 
         trading_date_indices_gpu,
         trading_dates_pd,

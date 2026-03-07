@@ -118,7 +118,6 @@ def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
     all_data_gpu: cudf.DataFrame,
-    weekly_filtered_gpu: cudf.DataFrame,
     trading_date_indices: cp.ndarray,
     trading_dates_pd_cpu: pd.DatetimeIndex,
     all_tickers: list,

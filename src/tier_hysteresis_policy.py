@@ -13,6 +13,3 @@ def normalize_tier_hysteresis_mode(raw_value):
             f"{STRICT_TIER_HYSTERESIS_MODE!r}."
         )
     return mode
-
-
-resolve_tier_hysteresis_mode = normalize_tier_hysteresis_mode

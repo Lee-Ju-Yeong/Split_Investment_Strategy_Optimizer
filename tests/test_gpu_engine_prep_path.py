@@ -89,14 +89,13 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         self.assertEqual(available_slots, 0)
 
     @staticmethod
-    def _run_with_mode(mode, all_data_gpu, weekly_filtered_gpu):
+    def _run_with_mode(mode, all_data_gpu):
         # strict-only runtime에서는 valid tier policy만 허용한다.
         tier_tensor = cp.zeros((0, 1), dtype=cp.int8)
         return gpu_engine.run_magic_split_strategy_on_gpu(
             initial_cash=10_000_000.0,
             param_combinations=TestGpuEnginePrepPath._param_combinations(),
             all_data_gpu=all_data_gpu,
-            weekly_filtered_gpu=weekly_filtered_gpu,
             trading_date_indices=cp.asarray([], dtype=cp.int32),
             trading_dates_pd_cpu=pd.DatetimeIndex([]),
             all_tickers=["005930"],
@@ -110,11 +109,10 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         all_data_gpu = MagicMock()
         reset_view = self._mock_all_data_reset_view()
         all_data_gpu.reset_index.return_value = reset_view
-        weekly_filtered_gpu = MagicMock()
 
         mock_create_tensors.return_value = self._empty_tensors()
 
-        result = self._run_with_mode("tier", all_data_gpu, weekly_filtered_gpu)
+        result = self._run_with_mode("tier", all_data_gpu)
 
         self.assertEqual(result.shape, (1, 0))
         all_data_gpu.reset_index.assert_called_once_with()
@@ -122,17 +120,11 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         self.assertIn("ticker_idx", prepared_view.columns)
         self.assertEqual(int(len(prepared_view)), int(len(reset_view)))
 
-    @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
-    def test_skips_weekly_reset_in_tier_mode(self, mock_create_tensors):
-        all_data_gpu = MagicMock()
-        all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
-        weekly_filtered_gpu = MagicMock()
-
-        mock_create_tensors.return_value = self._empty_tensors()
-
-        self._run_with_mode("tier", all_data_gpu, weekly_filtered_gpu)
-
-        weekly_filtered_gpu.reset_index.assert_not_called()
+    def test_engine_signature_no_longer_exposes_weekly_filtered_frame(self):
+        self.assertNotIn(
+            "weekly_filtered_gpu",
+            gpu_engine.run_magic_split_strategy_on_gpu.__code__.co_varnames,
+        )
 
     def test_runtime_candidate_policy_rejects_weekly_mode(self):
         with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
@@ -155,7 +147,6 @@ class TestGpuEnginePrepPath(unittest.TestCase):
     ):
         all_data_gpu = MagicMock()
         all_data_gpu.reset_index.return_value = self._mock_all_data_reset_view()
-        weekly_filtered_gpu = MagicMock()
 
         mock_create_tensors.return_value = {
             "open": cp.array([[100000.0]], dtype=cp.float32),
@@ -195,7 +186,6 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             initial_cash=10_000_000.0,
             param_combinations=self._param_combinations(),
             all_data_gpu=all_data_gpu,
-            weekly_filtered_gpu=weekly_filtered_gpu,
             trading_date_indices=cp.asarray([0], dtype=cp.int32),
             trading_dates_pd_cpu=pd.DatetimeIndex(["2026-01-06"]),
             all_tickers=["005930"],
@@ -219,7 +209,6 @@ class TestGpuEnginePrepPath(unittest.TestCase):
                 initial_cash=10_000_000.0,
                 param_combinations=self._param_combinations(),
                 all_data_gpu=MagicMock(),
-                weekly_filtered_gpu=MagicMock(),
                 trading_date_indices=cp.asarray([], dtype=cp.int32),
                 trading_dates_pd_cpu=pd.DatetimeIndex([]),
                 all_tickers=["005930"],

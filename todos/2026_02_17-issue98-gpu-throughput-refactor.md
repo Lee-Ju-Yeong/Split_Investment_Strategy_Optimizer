@@ -1,16 +1,16 @@
 # Issue #98: GPU Throughput Refactor
 
 > Type: `implementation`
-> Status: `blocked`
+> Status: `ready`
 > Priority: `P1`
 > Last updated: 2026-03-07
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `blocked by release parity and runtime policy`
+> Gate status: `runtime governance approved; waiting on #98 evidence`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: baseline과 일부 cleanup은 진행됐지만, 최종 승격은 `#97`이 닫히기 전까지 보류입니다. `#56` synthetic parity와 `#67` runtime PIT candidate policy는 live evidence 기준으로 종결되었습니다.
+- Current status: baseline과 일부 cleanup은 진행됐고, `#97` Gate C + step 2 synthetic sample pack도 승인되었습니다. 이제 `#98`은 자체 성능 증적과 승격 판단만 남았습니다. `#56` synthetic parity와 `#67` runtime PIT candidate policy는 live evidence 기준으로 종결되었습니다.
 - Next action: fixed-data VRAM, daily ranking hot path, memory estimate 같은 현재 병목을 strict parity 전제로 정리합니다.
 
 ## 2. Plain-Language Rule
@@ -331,7 +331,7 @@
 - 반영 범위:
   - `src/backtest/gpu/engine.py`
     - `all_data_gpu.reset_index()` 결과를 텐서 빌더에 재사용(중복 materialize 제거)
-    - `candidate_source_mode=tier` 경로에서는 `weekly_filtered_gpu.reset_index()` 선계산 생략
+    - 이후 `#97 step 3`에서 tier-only runtime의 `weekly_filtered_gpu` dead plumbing 자체를 제거
   - `src/backtest/gpu/data.py`
     - 텐서 생성 시 `day_idx`/`ticker_idx`를 컬럼 반복마다 변환하지 않고 1회 계산 후 재사용
 - 의미/정합성:
@@ -339,8 +339,7 @@
   - strict parity gate 대상 변경 없음
 - 테스트:
   - 신규: `tests/test_gpu_engine_prep_path.py`
-    - tier 모드에서 weekly reset 생략 확인
-    - weekly 모드에서 weekly reset 유지 확인
+    - engine signature에서 weekly filtered frame 제거 확인
     - all_data reset 결과 재사용 확인
   - 기존 회귀: `tests/test_gpu_tier_tensor_pit.py`
 
@@ -497,7 +496,8 @@
 - 반영 범위(저위험 캐시/로딩 개선):
   - `src/optimization/gpu/data_loading.py`
     - DB 엔진 생성을 `_get_sql_engine`(LRU 캐시)로 통합해 동일 connection string에서 `create_engine` 재사용
-    - `preload_all_data_to_gpu`, `preload_weekly_filtered_stocks_to_gpu`, `preload_tier_data_to_tensor` 모두 공용 엔진 경로 사용
+    - `preload_all_data_to_gpu`, `preload_tier_data_to_tensor`를 공용 엔진 경로로 사용
+    - 주간 후보 preload helper는 이후 strict-only cleanup에서 제거됐고, tier-only runtime hot path만 유지
   - `src/data_handler.py`
     - `load_stock_data`의 캐시 키를 날짜 정규화(`YYYY-MM-DD`) 후 private cached helper로 위임
     - 동일 범위를 문자열/`Timestamp` 등 서로 다른 타입으로 호출해도 cache hit 되도록 정규화

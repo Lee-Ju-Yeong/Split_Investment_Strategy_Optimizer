@@ -22,7 +22,7 @@ strategy_params:
   #   candidate_lookup_error_policy: raise
   # - research-only / non-promotion:
   #   universe_mode: optimistic_survivor
-  #   tier_hysteresis_mode: strict_hysteresis_v1
+  #   candidate_lookup_error_policy: raise
 
   # Price basis for backtesting/simulation:
   # - adjusted: use adj_close/adj_ratio derived OHLC (recommended)
@@ -46,11 +46,9 @@ strategy_params:
   max_inactivity_period: 90
   
   # [Issue #67/#97] Strict-only runtime candidate policy
-  # - runtime에서 허용되는 값은 "tier" 하나뿐입니다.
-  # - legacy 값("weekly", "hybrid_transition")은 기록용 표현만 남고 runtime에서는 금지됩니다.
-  # - use_weekly_alpha_gate=true도 runtime 미지원입니다.
+  # - runtime 표면은 candidate_source_mode='tier' 하나만 사용합니다.
+  # - use_weekly_alpha_gate는 strict-only runtime에서 설정하지 않습니다.
   candidate_source_mode: "tier"
-  # use_weekly_alpha_gate: strict-only runtime에서는 설정하지 않습니다.
   min_liquidity_20d_avg_value: 0
   # Empirical baseline (2026-03-07):
   # - as-of sampled windows around low-coverage periods stayed above 0.45
@@ -62,7 +60,6 @@ strategy_params:
   #   "보유 중 추가매수를 Tier1~2까지만 허용할지"를 묶어 제어합니다.
   # - strict_hysteresis_v1:
   #   Entry는 Tier1 only(비면 신규진입 skip), Hold/Add는 Tier1~2만 허용
-  # - legacy: 제거 대상. runtime에서 더 이상 허용하지 않음
   tier_hysteresis_mode: "strict_hysteresis_v1"
   # Tier candidate lookup error handling:
   # - raise: 즉시 예외 발생(감사/재현 우선, 권장)
