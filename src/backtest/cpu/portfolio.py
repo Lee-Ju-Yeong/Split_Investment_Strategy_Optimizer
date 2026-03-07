@@ -54,7 +54,7 @@ class Trade:
         self.total_portfolio_value = total_portfolio_value
 
 class Portfolio:
-    def __init__(self, initial_cash, start_date, end_date):
+    def __init__(self, initial_cash, start_date, end_date, *, capture_daily_positions_snapshot=False):
         self.initial_cash = np.float32(initial_cash)
         self.cash = np.float32(initial_cash)
         self.start_date = start_date
@@ -65,6 +65,8 @@ class Portfolio:
         self.last_trade_day_indices = {}
         self.trade_history = []
         self.daily_snapshot_history = []
+        self.capture_daily_positions_snapshot = bool(capture_daily_positions_snapshot)
+        self.daily_positions_snapshot_history = []
 
     def update_cash(self, amount):
         self.cash += amount
@@ -125,6 +127,36 @@ class Portfolio:
             'stock_count': len(self.positions)
         }
         self.daily_snapshot_history.append(snapshot)
+
+    def record_positions_snapshot(self, date, positions_df):
+        snapshot_date = pd.to_datetime(date)
+        if positions_df is None or positions_df.empty:
+            self.daily_positions_snapshot_history.append({'date': snapshot_date, 'positions': []})
+            return
+
+        columns = [
+            "Ticker",
+            "Holdings",
+            "Quantity",
+            "Avg Buy Price",
+            "Current Price",
+            "Total Value",
+            "Weight",
+        ]
+        positions = []
+        for row in positions_df[columns].to_dict("records"):
+            positions.append(
+                {
+                    "Ticker": str(row["Ticker"]),
+                    "Holdings": int(row["Holdings"]),
+                    "Quantity": int(row["Quantity"]),
+                    "Avg Buy Price": float(row["Avg Buy Price"]),
+                    "Current Price": float(row["Current Price"]),
+                    "Total Value": float(row["Total Value"]),
+                    "Weight": float(row["Weight"]),
+                }
+            )
+        self.daily_positions_snapshot_history.append({'date': snapshot_date, 'positions': positions})
         
     def liquidate_ticker(self, ticker):
         if ticker in self.positions:
@@ -156,6 +188,7 @@ class Portfolio:
                 'Ticker': ticker,
                 'Name': data_handler.get_name_from_ticker(ticker) or 'N/A',
                 'Holdings': len(positions),
+                'Quantity': total_quantity,
                 'Avg Buy Price': avg_buy_price,
                 'Current Price': current_price,
                 'Unrealized P/L': unrealized_pnl,

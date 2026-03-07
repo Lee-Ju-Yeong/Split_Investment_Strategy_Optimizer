@@ -1,7 +1,55 @@
 import unittest
 from unittest.mock import patch
 
-from src.parity_sell_event_dump import BuyEvent, SellEvent, collect_trade_event_parity_report
+from src.parity_sell_event_dump import (
+    BuyEvent,
+    DailySnapshot,
+    PositionSnapshot,
+    SellEvent,
+    _parse_gpu_daily_snapshots,
+    _parse_gpu_position_snapshots,
+    collect_trade_event_parity_report,
+)
+
+
+def _daily_snapshots():
+    cpu_rows = [
+        DailySnapshot(source="cpu", date="2024-01-02", total_value=1_000_000.0, cash=319_900.0, stock_count=1),
+        DailySnapshot(source="cpu", date="2024-01-03", total_value=1_019_000.0, cash=1_019_000.0, stock_count=0),
+    ]
+    gpu_rows = [
+        DailySnapshot(source="gpu", date="2024-01-02", total_value=1_000_000.0, cash=319_900.0, stock_count=1),
+        DailySnapshot(source="gpu", date="2024-01-03", total_value=1_019_000.0, cash=1_019_000.0, stock_count=0),
+    ]
+    return cpu_rows, gpu_rows
+
+
+def _position_snapshots():
+    cpu_rows = [
+        PositionSnapshot(
+            source="cpu",
+            date="2024-01-02",
+            ticker="005930",
+            holdings=1,
+            quantity=10,
+            avg_buy_price=68000.0,
+            current_price=68000.0,
+            total_value=680000.0,
+        )
+    ]
+    gpu_rows = [
+        PositionSnapshot(
+            source="gpu",
+            date="2024-01-02",
+            ticker="005930",
+            holdings=1,
+            quantity=10,
+            avg_buy_price=68000.0,
+            current_price=68000.0,
+            total_value=680000.0,
+        )
+    ]
+    return cpu_rows, gpu_rows
 
 
 class TestParitySellEventDump(unittest.TestCase):
@@ -64,8 +112,10 @@ class TestParitySellEventDump(unittest.TestCase):
                 trigger_price=68000.0,
             )
         ]
-        mock_cpu_runner.return_value = (cpu_sell, cpu_buy)
-        mock_gpu_runner.return_value = (gpu_sell, gpu_buy, "[GPU_DEBUG]")
+        cpu_daily, gpu_daily = _daily_snapshots()
+        cpu_positions, gpu_positions = _position_snapshots()
+        mock_cpu_runner.return_value = (cpu_sell, cpu_buy, cpu_daily, cpu_positions)
+        mock_gpu_runner.return_value = (gpu_sell, gpu_buy, gpu_daily, gpu_positions, "[GPU_DEBUG]")
 
         payload = collect_trade_event_parity_report(
             config={"execution_params": {}, "strategy_params": {}, "database": {}},
@@ -80,10 +130,12 @@ class TestParitySellEventDump(unittest.TestCase):
         )
 
         self.assertTrue(payload["decision_level_zero_mismatch"])
-        self.assertEqual(payload["comparison_scope"], "structured_trade_events")
-        self.assertFalse(payload["release_decision_fields_complete"])
+        self.assertEqual(payload["comparison_scope"], "structured_trade_and_state_snapshots")
+        self.assertTrue(payload["release_decision_fields_complete"])
         self.assertEqual(payload["sell_mismatched_pairs"], 0)
         self.assertEqual(payload["buy_mismatched_pairs"], 0)
+        self.assertEqual(payload["daily_snapshot_mismatched_pairs"], 0)
+        self.assertEqual(payload["position_snapshot_mismatched_pairs"], 0)
         self.assertEqual(payload["cpu_sell_events_count"], 1)
         self.assertEqual(payload["gpu_buy_events_count"], 1)
         self.assertEqual(payload["sell_pairs"][0]["matched"], True)
@@ -124,6 +176,8 @@ class TestParitySellEventDump(unittest.TestCase):
                     trigger_price=67500.0,
                 )
             ],
+            _daily_snapshots()[0],
+            _position_snapshots()[0],
         )
         mock_gpu_runner.return_value = (
             [
@@ -152,6 +206,8 @@ class TestParitySellEventDump(unittest.TestCase):
                     trigger_price=68000.0,
                 )
             ],
+            _daily_snapshots()[1],
+            _position_snapshots()[1],
             "",
         )
 
@@ -197,6 +253,8 @@ class TestParitySellEventDump(unittest.TestCase):
                     trigger_price=67500.0,
                 )
             ],
+            _daily_snapshots()[0],
+            _position_snapshots()[0],
         )
         mock_gpu_runner.return_value = (
             [],
@@ -213,6 +271,8 @@ class TestParitySellEventDump(unittest.TestCase):
                     trigger_price=67500.0,
                 )
             ],
+            _daily_snapshots()[1],
+            _position_snapshots()[1],
             "",
         )
 
@@ -298,8 +358,8 @@ class TestParitySellEventDump(unittest.TestCase):
                 trigger_price=71000.0,
             ),
         ]
-        mock_cpu_runner.return_value = (cpu_sell, [])
-        mock_gpu_runner.return_value = (gpu_sell, [], "")
+        mock_cpu_runner.return_value = (cpu_sell, [], _daily_snapshots()[0], _position_snapshots()[0])
+        mock_gpu_runner.return_value = (gpu_sell, [], _daily_snapshots()[1], _position_snapshots()[1], "")
 
         payload = collect_trade_event_parity_report(
             config={"execution_params": {}, "strategy_params": {}, "database": {}},
@@ -353,6 +413,8 @@ class TestParitySellEventDump(unittest.TestCase):
                 ),
             ],
             [],
+            _daily_snapshots()[0],
+            _position_snapshots()[0],
         )
         mock_gpu_runner.return_value = (
             [
@@ -391,6 +453,8 @@ class TestParitySellEventDump(unittest.TestCase):
                 ),
             ],
             [],
+            _daily_snapshots()[1],
+            _position_snapshots()[1],
             "",
         )
 
@@ -413,6 +477,56 @@ class TestParitySellEventDump(unittest.TestCase):
         self.assertEqual(len(unmatched_rows), 1)
         self.assertIsNone(unmatched_rows[0]["cpu"])
         self.assertEqual(unmatched_rows[0]["gpu"]["ticker"], "035420")
+
+    @patch("src.parity_sell_event_dump._run_gpu_and_collect_sell_events")
+    @patch("src.parity_sell_event_dump._run_cpu_and_collect_trade_events")
+    def test_collect_trade_event_parity_report_flags_snapshot_cash_mismatch(
+        self,
+        mock_cpu_runner,
+        mock_gpu_runner,
+    ):
+        cpu_daily, gpu_daily = _daily_snapshots()
+        cpu_positions, gpu_positions = _position_snapshots()
+        gpu_daily = [
+            DailySnapshot(source="gpu", date="2024-01-02", total_value=1_000_000.0, cash=300_000.0, stock_count=1),
+            gpu_daily[1],
+        ]
+        mock_cpu_runner.return_value = ([], [], cpu_daily, cpu_positions)
+        mock_gpu_runner.return_value = ([], [], gpu_daily, gpu_positions, "")
+
+        payload = collect_trade_event_parity_report(
+            config={"execution_params": {}, "strategy_params": {}, "database": {}},
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_cash=1_000_000.0,
+            params={"max_stocks": 10},
+            candidate_source_mode="tier",
+            use_weekly_alpha_gate=False,
+            parity_mode="strict",
+            universe_mode="strict_pit",
+        )
+
+        self.assertFalse(payload["decision_level_zero_mismatch"])
+        self.assertTrue(payload["release_decision_fields_complete"])
+        self.assertEqual(payload["daily_snapshot_mismatched_pairs"], 1)
+        self.assertEqual(payload["daily_snapshot_pairs"][0]["diff"]["cash_diff"], 19900.0)
+
+    def test_parse_gpu_snapshot_markers(self):
+        log_text = "\n".join(
+            [
+                "[PARITY_SNAPSHOT_DAILY] date=2024-01-02|total_value=1000000.000000|cash=319900.000000|stock_count=1",
+                "[PARITY_SNAPSHOT_POSITION] date=2024-01-02|ticker=005930|holdings=1|quantity=10|avg_buy_price=68000.000000|current_price=68000.000000|total_value=680000.000000",
+            ]
+        )
+
+        daily_rows = _parse_gpu_daily_snapshots(log_text)
+        position_rows = _parse_gpu_position_snapshots(log_text)
+
+        self.assertEqual(len(daily_rows), 1)
+        self.assertEqual(daily_rows[0].cash, 319900.0)
+        self.assertEqual(len(position_rows), 1)
+        self.assertEqual(position_rows[0].quantity, 10)
+        self.assertEqual(position_rows[0].ticker, "005930")
 
 
 if __name__ == "__main__":

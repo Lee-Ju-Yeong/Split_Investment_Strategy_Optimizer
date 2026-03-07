@@ -99,7 +99,10 @@ class TestCpuGpuParityTopk(unittest.TestCase):
             }
         )
         trading_dates = pd.DatetimeIndex(pd.to_datetime(["2024-01-02"]))
-        pit_mask = cp.asarray([[1, 1, 0, 0]], dtype=cp.int8)
+        try:
+            pit_mask = cp.asarray([[1, 1, 0, 0]], dtype=cp.int8)
+        except Exception as exc:  # pragma: no cover - depends on local CUDA runtime
+            self.skipTest(f"cupy device unavailable: {exc}")
 
         with self.assertRaisesRegex(ValueError, "Tier coverage gate failed"):
             _load_tier_tensor(

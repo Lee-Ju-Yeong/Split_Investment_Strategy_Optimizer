@@ -215,7 +215,8 @@
   - [x] 증적 범위 명시(2026-03-07): `curve_level_parity_zero_mismatch`와 `decision_level_parity_zero_mismatch`를 분리하고 `decision_level_evidence_missing`를 리포트에 기록
   - [x] decision evidence 자동수집 연결(2026-03-07): `--decision-evidence-mode` + `parity_sell_event_dump.collect_trade_event_parity_report()`로 representative/all-row structured trade-event diff 수집
   - [x] selected-row decision evidence 자동수집(2026-03-07): `--decision-evidence-mode` + row별 detail JSON artifact 저장
-  - [x] release gate 보수화(2026-03-07): 기본 `representative` 수집은 `decision_level_evidence_partial(...)`로, 전 row를 다 모아도 `cash/positions` 미포함이면 `decision_fields_not_covered`로 승격 해제를 금지
+  - [x] release gate 보수화(2026-03-07): 기본 `representative` 수집은 `decision_level_evidence_partial(...)`로 승격 해제를 금지
+  - [x] state snapshot diff 연결(2026-03-07): `parity_sell_event_dump`가 일별 `cash/total_value/stock_count` + `date,ticker`별 positions snapshot을 함께 비교하고 `release_decision_fields_complete`를 계산
   - [x] parity harness curve/coverage 보수화(2026-03-07): curve 비교는 missing date를 mismatch로 계산하고 Tier coverage gate 분모를 PIT universe count와 일치시킴
   - [ ] 하드 게이트: parity mismatch `0건`만 pass (Release Gate 미충족, 5거래일 `tier top-k=5` mismatch 잔존)
   - [x] `candidate_source_mode`별(`weekly`, `hybrid_transition`, `tier`) parity 배치 검증 추가

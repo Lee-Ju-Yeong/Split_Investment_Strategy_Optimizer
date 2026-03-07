@@ -473,6 +473,8 @@ def _summarize_decision_evidence_payload(row_index: int, payload: dict, *, detai
         "gpu_sell_events_count": int(payload.get("gpu_sell_events_count", 0) or 0),
         "cpu_buy_events_count": int(payload.get("cpu_buy_events_count", 0) or 0),
         "gpu_buy_events_count": int(payload.get("gpu_buy_events_count", 0) or 0),
+        "daily_snapshot_mismatched_pairs": int(payload.get("daily_snapshot_mismatched_pairs", 0) or 0),
+        "position_snapshot_mismatched_pairs": int(payload.get("position_snapshot_mismatched_pairs", 0) or 0),
         "detail_path": detail_path,
     }
 
