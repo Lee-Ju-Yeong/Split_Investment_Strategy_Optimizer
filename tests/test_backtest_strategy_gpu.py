@@ -421,6 +421,59 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
 
         self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
 
+    def test_additional_buy_preserves_per_sim_rank_processing(self):
+        portfolio_state = cp.array(
+            [
+                [150.0, 100.0],
+                [250.0, 100.0],
+            ],
+            dtype=cp.float32,
+        )
+        positions_state = cp.zeros((2, 2, 3, 3), dtype=cp.float32)
+        positions_state[:, 0, 0, 0] = 1.0
+        positions_state[:, 0, 0, 1] = 100.0
+        positions_state[:, 0, 0, 2] = 0.0
+        positions_state[:, 1, 0, 0] = 1.0
+        positions_state[:, 1, 0, 1] = 110.0
+        positions_state[:, 1, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.zeros((2, 2), dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((2, 2), dtype=cp.bool_)
+        params = cp.array(
+            [
+                [10, 0.02, 0.05, 0.10, 0, -0.50, 10, 999],
+                [10, 0.02, 0.05, 0.10, 0, -0.50, 10, 999],
+            ],
+            dtype=cp.float32,
+        )
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([90.0, 100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0, 110.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0, 100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.0,
+            log_buffer=cp.zeros((8, 5), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["A", "B"],
+        )
+
+        self.assertEqual(
+            [float(value) for value in portfolio_state_after[:, 0].get().tolist()],
+            [60.0, 60.0],
+        )
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 1.0)
+        self.assertEqual(float(positions_after[0, 1, 1, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[1, 0, 1, 0].item()), 1.0)
+        self.assertEqual(float(positions_after[1, 1, 1, 0].item()), 1.0)
+
     def test_sell_forces_liquidation_when_tier_is_3_under_strict_hysteresis(self):
         portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
         positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)

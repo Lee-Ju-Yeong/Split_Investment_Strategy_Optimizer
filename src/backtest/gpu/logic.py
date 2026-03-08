@@ -495,11 +495,11 @@ def _process_additional_buy_signals_gpu(
     sorted_priority_scores = priority_scores[sorted_indices]
 
     # 4. CPU parity semantics: 순위 순차 처리 + 비싸면 skip, 다음 후보 계속 시도
-    unique_sims, sim_start_indices = cp.unique(sorted_sims, return_index=True)
-    run_lengths = cp.diff(cp.concatenate((sim_start_indices, cp.array([len(sorted_sims)]))))
-    run_lengths_list = run_lengths.tolist()
-    sim_start_broadcast = cp.repeat(sim_start_indices, run_lengths_list).astype(cp.int32)
-    rank_in_sim = cp.arange(sorted_sims.size, dtype=cp.int32) - sim_start_broadcast
+    _, sim_start_indices = cp.unique(sorted_sims, return_index=True)
+    candidate_offsets = cp.arange(sorted_sims.size, dtype=cp.int32)
+    run_owner = cp.searchsorted(sim_start_indices, candidate_offsets, side="right") - 1
+    sim_start_broadcast = sim_start_indices[run_owner].astype(cp.int32, copy=False)
+    rank_in_sim = candidate_offsets - sim_start_broadcast
 
     remaining_capital = portfolio_state[:, 0].copy()
     final_buy_mask = cp.zeros(sorted_sims.shape[0], dtype=cp.bool_)
