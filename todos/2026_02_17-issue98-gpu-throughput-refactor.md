@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-08
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; waiting on #98 evidence`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; waiting on ranking parity fixtures`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: `PR-98C` slice 1/2가 반영되어 CPU runtime cache, GPU zero-tensor reuse, `prepared_market_data` 재사용, fixed-data VRAM accounting까지 들어갔습니다. 다음 큰 후보는 `PR-98B-2`의 ranking hot path이지만, 아직 바로 착수하지 않고 선행 증적 2개를 먼저 닫는 상태입니다.
-- Next action: `prepared_market_data` slice의 target-hardware before/after median 2-run 증적과 `direct composite-rank parity fixture + multi-sim active-set rerank parity`를 먼저 고정한 뒤 `PR-98B-2`를 단독으로 진행합니다.
+- Current status: `PR-98C` slice 1/2가 반영되어 CPU runtime cache, GPU zero-tensor reuse, `prepared_market_data` 재사용, fixed-data VRAM accounting까지 들어갔습니다. `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` canonical profile의 target-hardware 2-run baseline도 확보했습니다.
+- Next action: 남은 선행조건은 `direct composite-rank parity fixture + multi-sim active-set rerank parity` 2개뿐이며, 이를 고정한 뒤 `PR-98B-2`를 단독으로 진행합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -39,7 +39,14 @@
 - 즉, “하지 않는 일”이 아니라 “들어가기 전 준비물 2개가 남은 일”입니다.
 
 ### 2-5. 보류 해제 조건 2개
-- 조건 1: `prepared_market_data` slice의 target-hardware before/after median 2-run 증적
+- 조건 1: `prepared_market_data` slice의 target-hardware canonical 2-run baseline
+  - 상태: 완료
+  - 증적: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+  - 핵심 수치:
+    - `median_kernel_s = 1106.09`
+    - `median_wall_s = 1146.35` (`19분 06초`)
+    - `batch_count = 4 / 4`
+    - `oom_retry = false / false`
   - 왜 필요한가: 방금 넣은 안전한 최적화가 실제로 얼마만큼 도움이 되는지 먼저 고정해야, 다음 PC 변경의 효과를 분리해서 볼 수 있습니다.
 - 조건 2: ranking parity fixture 보강
   - `direct composite-rank parity fixture`
@@ -70,9 +77,10 @@
 ## 6. Key Evidence
 - 이미 있는 것:
   - baseline log: `results/perf_baseline_strict_hyst_20260220_024023.log`
+  - canonical local baseline summary: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
   - release gate board: `docs/operations/2026-03-06-hybrid-release-gate-board.md`
 - 아직 없는 것:
-  - 최신 병목 항목에 대한 release-grade before/after
+  - ranking hot path 변경 전용 parity fixture 2개
   - `PC` 변경 후 longer-window strict parity 증적
 
 ## 7. Reading Guide
@@ -670,8 +678,9 @@
 - OOM 미발생
 - C1 대비 `kernel time <= +1.0%` (목표: `<= 0%`)
 - 측정 규격:
-  - 동일 입력 2회 실행, 첫 실행은 warm-up으로만 사용
-  - 판정값은 `median kernel time` 사용
+  - warm-up 1회는 선택 사항이다
+  - 판정용 run은 동일 입력 `run1`, `run2` 2회로 고정한다
+  - 판정값은 `run1/run2`의 `median kernel time` 사용
   - branch hit-rate(`signal_day_idx<0`)와 host-sync 지표(`tolist()/to_pylist()`)를 함께 기록
 
 ### 17-5. 실행 체크리스트(신규 참여자용)
@@ -719,3 +728,258 @@
   - Gate B(정합성)는 본 검증 범위에서 충족됨
   - Issue #98 범위는 문서/증적 기준으로 `main` 머지 진행 가능 상태
   - 단, throughput 개선 항목(`R-*`)은 별도 PR로 분리해 gate를 다시 적용
+
+## 19. 현재 단계 측정 Runbook (2026-03-08)
+### 19-1. 목적
+- 현재 단계의 목적은 `PR-98C slice 2` 이후 성능 변화를 `target hardware`에서 반복 가능하게 측정하는 것이다.
+- 이 runbook은 `release-grade coverage 검증`이 아니라 `throughput tracking`을 위한 것이다.
+- 따라서 coverage gate drift가 성능 측정을 방해하지 않도록, canonical config는 `research-only`로 고정한다.
+
+### 19-2. 초심자용 한 줄 설명
+- 지금은 “전략이 더 좋아졌는지”를 보는 단계가 아니라, “같은 종류의 짧은 시험을 2번 돌려서 GPU가 얼마나 빨라졌는지 비교할 기준점을 만드는 단계”다.
+
+### 19-3. canonical 측정 프로파일
+- 기준 config:
+  - `config/config.issue98_perf_multibatch_janfeb_2024_research020.yaml`
+- 기준 기간:
+  - `2024-01-01 ~ 2024-02-29`
+- 기준 조합 수:
+  - `360 sims`
+- 기준 batch cap:
+  - `simulation_batch_size=90`
+  - 기대 batch 수: `4`
+- coverage threshold:
+  - `min_tier12_coverage_ratio=0.2`
+  - 의미: `release gate`가 아니라 `throughput measurement`에 집중하기 위한 research-only 완화값이다.
+- 현재 장비 기준 예상 시간:
+  - 1회: 약 `25분 ~ 40분`
+  - `run1 + run2`: 약 `50분 ~ 80분`
+- 정리 원칙:
+  - 이전 `perf_2024`, `smoke_q1`, `multibatch_2024`, `research043` config는 삭제한다.
+  - 앞으로 `#98` 성능 비교는 이 canonical profile 하나로만 진행한다.
+  - 과거 `results/perf_baseline_strict_hyst_20260219_212900.log`는 참고용 아카이브일 뿐, 이 짧은 창과 직접 delta 비교하지 않는다.
+
+### 19-4. 산출물
+- `results/issue98_measure/<label>_<timestamp>/env.txt`
+- `results/issue98_measure/<label>_<timestamp>/input_snapshot.json`
+- `results/issue98_measure/<label>_<timestamp>/run1.log`
+- `results/issue98_measure/<label>_<timestamp>/run1.gpu.csv`
+- `results/issue98_measure/<label>_<timestamp>/run2.log`
+- `results/issue98_measure/<label>_<timestamp>/run2.gpu.csv`
+- `results/issue98_measure/<label>_<timestamp>/summary.json`
+- 첫 성공 측정본은 이후 slice 비교용 local baseline으로 유지한다.
+- 현재 고정된 local baseline:
+  - `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+  - `run1 kernel=1092.74s`, `run2 kernel=1119.44s`, `median_kernel_s=1106.09`
+  - `run1 wall=18:52.13`, `run2 wall=19:20.57`, `median_wall_s=1146.35`
+  - `oom_retry=false / false`
+
+### 19-5. 실행 전 준비
+- 전제:
+  - `rapids-env` 사용
+  - 다른 대형 GPU 작업 종료
+  - `MAGICSPLIT_CONFIG_PATH`가 아래 canonical config를 가리켜야 한다
+- 추천 label:
+  - `pr98c_slice2_janfeb2024_cov020`
+  - 이후 비교 run은 `pr98b2_janfeb2024_cov020`, `pr98b2_retry1` 같은 식으로 고정한다.
+
+### 19-6. 복붙용 명령 세트
+#### 19-6-1. 세팅
+```bash
+export MAGICSPLIT_CONFIG_PATH="config/config.issue98_perf_multibatch_janfeb_2024_research020.yaml"
+export ISSUE98_LABEL="pr98c_slice2_janfeb2024_cov020"
+export ISSUE98_TS="$(date +%Y%m%d_%H%M%S)"
+export ISSUE98_OUTDIR="results/issue98_measure/${ISSUE98_LABEL}_${ISSUE98_TS}"
+mkdir -p "$ISSUE98_OUTDIR"
+```
+
+#### 19-6-2. 환경/입력 스냅샷
+```bash
+{
+  echo "timestamp=$ISSUE98_TS"
+  echo "label=$ISSUE98_LABEL"
+  echo "config_path=$MAGICSPLIT_CONFIG_PATH"
+  echo "git_head=$(git rev-parse HEAD)"
+  echo "git_branch=$(git rev-parse --abbrev-ref HEAD)"
+  CONDA_NO_PLUGINS=true conda run -n rapids-env python -V
+  CONDA_NO_PLUGINS=true conda run -n rapids-env python -c "import cupy, cudf; print('cupy', cupy.__version__); print('cudf', cudf.__version__)"
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+  sha256sum "$MAGICSPLIT_CONFIG_PATH"
+} | tee "$ISSUE98_OUTDIR/env.txt"
+```
+
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env python - <<'PY' > "$ISSUE98_OUTDIR/input_snapshot.json"
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import yaml
+
+config_path = Path(os.environ["MAGICSPLIT_CONFIG_PATH"]).resolve()
+config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+backtest = config.get("backtest_settings", {})
+strategy = config.get("strategy_params", {})
+
+print(json.dumps({
+    "config_path": str(config_path),
+    "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+    "start_date": backtest.get("start_date"),
+    "end_date": backtest.get("end_date"),
+    "initial_cash": backtest.get("initial_cash"),
+    "simulation_batch_size": backtest.get("simulation_batch_size"),
+    "candidate_source_mode": strategy.get("candidate_source_mode"),
+    "tier_hysteresis_mode": strategy.get("tier_hysteresis_mode"),
+    "price_basis": strategy.get("price_basis"),
+    "min_tier12_coverage_ratio": strategy.get("min_tier12_coverage_ratio"),
+}, ensure_ascii=False, indent=2))
+PY
+```
+
+#### 19-6-3. 실행 함수
+```bash
+issue98_perf_run() {
+  local run_tag="$1"
+  (
+    set -euo pipefail
+    nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used --format=csv,noheader -l 5 \
+      > "$ISSUE98_OUTDIR/${run_tag}.gpu.csv" &
+    local smi_pid=$!
+    trap 'kill "$smi_pid" >/dev/null 2>&1 || true' EXIT
+
+    /usr/bin/time -v \
+      env MAGICSPLIT_CONFIG_PATH="$MAGICSPLIT_CONFIG_PATH" CONDA_NO_PLUGINS=true \
+      conda run -n rapids-env python -m src.parameter_simulation_gpu \
+      2>&1 | tee "$ISSUE98_OUTDIR/${run_tag}.log"
+
+    kill "$smi_pid" >/dev/null 2>&1 || true
+    wait "$smi_pid" 2>/dev/null || true
+    trap - EXIT
+  )
+}
+```
+
+#### 19-6-4. run1 / run2
+```bash
+issue98_perf_run run1
+issue98_perf_run run2
+```
+
+#### 19-6-5. summary 생성
+```bash
+cat > /tmp/issue98_make_summary.py <<'PY'
+import json
+import re
+import statistics
+import sys
+from pathlib import Path
+
+outdir = Path(sys.argv[1])
+
+def parse_wall_to_seconds(value: str):
+    parts = value.strip().split(":")
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return int(minutes) * 60 + float(seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    return None
+
+def parse_run_log(path: Path):
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    kernel_match = re.search(r"Total GPU Kernel Execution Time: ([0-9.]+)s", text)
+    wall_match = re.search(r"Elapsed \\(wall clock\\) time .*: (.+)", text)
+    batch_count = len(re.findall(r"--- Running Batch ", text))
+    return {
+        "path": str(path),
+        "kernel_s": float(kernel_match.group(1)) if kernel_match else None,
+        "wall_clock": wall_match.group(1).strip() if wall_match else None,
+        "wall_clock_s": parse_wall_to_seconds(wall_match.group(1)) if wall_match else None,
+        "batch_count": batch_count,
+        "oom_retry": "[GPU_WARNING] OOM" in text,
+    }
+
+def parse_gpu_csv(path: Path):
+    if not path.exists():
+        return {"samples": 0, "gpu_util_median": None, "gpu_mem_used_max_mib": None}
+    utils = []
+    mem_used = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        try:
+            utils.append(int(parts[1].replace(" %", "").replace("%", "").strip()))
+            mem_used.append(int(parts[3].replace(" MiB", "").replace("MiB", "").strip()))
+        except ValueError:
+            continue
+    return {
+        "samples": len(utils),
+        "gpu_util_median": statistics.median(utils) if utils else None,
+        "gpu_mem_used_max_mib": max(mem_used) if mem_used else None,
+    }
+
+run1 = parse_run_log(outdir / "run1.log")
+run2 = parse_run_log(outdir / "run2.log")
+run1.update(parse_gpu_csv(outdir / "run1.gpu.csv"))
+run2.update(parse_gpu_csv(outdir / "run2.gpu.csv"))
+
+kernel_values = [value for value in [run1["kernel_s"], run2["kernel_s"]] if value is not None]
+wall_values = [value for value in [run1["wall_clock_s"], run2["wall_clock_s"]] if value is not None]
+
+summary = {
+    "canonical_profile": "issue98_janfeb2024_multibatch_research020",
+    "research_only": True,
+    "run1": run1,
+    "run2": run2,
+    "median_kernel_s": statistics.median(kernel_values) if kernel_values else None,
+    "median_wall_s": statistics.median(wall_values) if wall_values else None,
+}
+print(json.dumps(summary, ensure_ascii=False, indent=2))
+PY
+
+CONDA_NO_PLUGINS=true conda run -n rapids-env python /tmp/issue98_make_summary.py "$ISSUE98_OUTDIR" > "$ISSUE98_OUTDIR/summary.json"
+
+cat "$ISSUE98_OUTDIR/summary.json"
+```
+
+### 19-7. 판정 규칙
+- 합격:
+  - `run1/run2` 모두 exit `0`
+  - `run1/run2` 모두 `oom_retry=false`
+  - `run1/run2` 모두 `batch_count >= 4`
+  - `summary.json` 생성 성공
+- 재실행 권고:
+  - `run1`과 `run2`의 `wall_clock_s` 차이가 `10%`를 넘는 경우
+  - 한쪽만 비정상적으로 느리거나 `gpu_util_median`이 급락한 경우
+- 기록 원칙:
+  - 첫 성공 `summary.json`을 `#98`의 local baseline으로 본다.
+  - 다음 slice부터는 같은 canonical profile로 다시 측정해 직접 비교한다.
+
+### 19-7-1. 현재 고정된 baseline (2026-03-08)
+- artifact:
+  - `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+- 판정:
+  - `run1`, `run2` 모두 exit `0`
+  - `oom_retry=false / false`
+  - `batch_count=4 / 4`
+  - run 간 wall 편차 약 `2.5%`
+- 해석:
+  - 현재 canonical profile에서 `PR-98C slice 2`는 안정적으로 재현 가능하다.
+  - 이 값은 이후 `PR-98B-2`의 직접 비교 기준으로 사용한다.
+
+### 19-8. OOM stress는 별도 단계
+- `1500 sims / batch 500` 같은 큰 workload는 이 runbook의 기본 단계가 아니다.
+- 이유:
+  - 목적이 `throughput tracking`이 아니라 `OOM/stability stress`이기 때문이다.
+  - workload 자체가 커지면, 성능 변화와 workload 변화가 섞여 원인 분리가 어려워진다.
+- 따라서 OOM stress는 나중의 `stability stress` 또는 `promotion 직전 soak` 단계에서 별도 config로 수행한다.
+
+### 19-9. 다음 단계 연결
+- 이 canonical baseline이 잡히면 그 다음은 바로 대형 stress가 아니다.
+- 먼저 아래 2개를 닫는다.
+  - `direct composite-rank parity fixture`
+  - `multi-sim active-set rerank parity`
+- 그 뒤 `PR-98B-2` (`daily as-of ranking precompute + hot-path ranking/gather`)를 단독으로 진행한다.
