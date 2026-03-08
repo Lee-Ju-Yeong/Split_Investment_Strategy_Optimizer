@@ -4,7 +4,10 @@ test_backtest_strategy_gpu.py
 Unit tests for the GPU-accelerated backtesting logic to ensure its results
 are consistent with the original CPU-based implementation.
 """
+import json
 import unittest
+from pathlib import Path
+
 import numpy as np
 import cupy as cp
 import pandas as pd
@@ -14,6 +17,21 @@ from src.backtest.gpu.logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_sell_signals_gpu,
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ISSUE98_CANONICAL_PROFILE = "issue98_janfeb2024_multibatch_research020"
+ISSUE98_BASELINE_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json"
+)
+ISSUE98_SLICE2A_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98b2_slice2a_janfeb2024_cov020_20260308_152446/summary.json"
+)
+ISSUE98_SLICE1ONLY_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98b2_slice1only_janfeb2024_cov020_20260308_162509/summary.json"
 )
 
 # A mock Position class to simulate the structure of the original data
@@ -80,10 +98,6 @@ class TestBacktestStrategyGPU(unittest.TestCase):
         
         self.current_date = pd.to_datetime('2023-01-10')
         
-    def test_calculate_portfolio_value_gpu(self):
-        # ... (previous test remains here) ...
-        pass
-
     def test_calculate_monthly_investment_gpu(self):
         """
         Tests if the vectorized monthly investment calculation is correct.
@@ -128,6 +142,189 @@ class TestBacktestStrategyGPU(unittest.TestCase):
             cp.allclose(expected_results, updated_portfolio_state),
             "GPU monthly investment calculation does not match CPU result."
         )
+
+def _build_issue98_summary(*, profile, run1_kernel_s, run2_kernel_s, run1_wall_s, run2_wall_s):
+    return {
+        "canonical_profile": profile,
+        "run1": {
+            "kernel_s": float(run1_kernel_s),
+            "wall_clock_s": float(run1_wall_s),
+            "batch_count": 4,
+            "oom_retry": False,
+        },
+        "run2": {
+            "kernel_s": float(run2_kernel_s),
+            "wall_clock_s": float(run2_wall_s),
+            "batch_count": 4,
+            "oom_retry": False,
+        },
+    }
+
+def _load_issue98_summary(summary_path):
+    with Path(summary_path).open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+def _summary_median(summary, metric_key, median_key):
+    median_value = summary.get(median_key)
+    if median_value is not None:
+        return float(median_value)
+    run_values = [float(summary["run1"][metric_key]), float(summary["run2"][metric_key])]
+    return float(np.median(run_values))
+
+def _profile_violations(*, baseline_summary, candidate_summary, required_profile):
+    if baseline_summary.get("canonical_profile") != required_profile:
+        return ["baseline canonical_profile mismatch"]
+    if candidate_summary.get("canonical_profile") != required_profile:
+        return ["candidate canonical_profile mismatch"]
+    return []
+
+def _run_health_violations(*, candidate_summary):
+    violations = []
+    for run_key in ("run1", "run2"):
+        run_summary = candidate_summary.get(run_key)
+        if not isinstance(run_summary, dict):
+            violations.append(f"{run_key} missing")
+            continue
+        if bool(run_summary.get("oom_retry")):
+            violations.append(f"{run_key} has OOM retry")
+        if int(run_summary.get("batch_count", 0)) < 4:
+            violations.append(f"{run_key} batch_count < 4")
+    return violations
+
+def _metric_budget_violations(*, baseline_summary, candidate_summary, max_kernel_regression_pct, max_wall_regression_pct):
+    violations = []
+    metric_budgets = (
+        ("kernel_s", "median_kernel_s", "median_kernel_s", max_kernel_regression_pct),
+        ("wall_clock_s", "median_wall_s", "median_wall_s", max_wall_regression_pct),
+    )
+    for metric_key, median_key, label, budget_pct in metric_budgets:
+        baseline_median = _summary_median(baseline_summary, metric_key, median_key)
+        candidate_median = _summary_median(candidate_summary, metric_key, median_key)
+        regression_pct = ((candidate_median - baseline_median) / baseline_median) * 100.0
+        if regression_pct > budget_pct:
+            violations.append(
+                f"{label}: regression_pct={regression_pct:.2f}% > budget_pct={budget_pct:.2f}%"
+            )
+    return violations
+
+def _collect_issue98_perf_budget_violations(
+    *,
+    baseline_summary,
+    candidate_summary,
+    required_profile,
+    max_kernel_regression_pct,
+    max_wall_regression_pct,
+):
+    violations = _profile_violations(
+        baseline_summary=baseline_summary,
+        candidate_summary=candidate_summary,
+        required_profile=required_profile,
+    )
+    if violations:
+        return violations
+    violations = _run_health_violations(candidate_summary=candidate_summary)
+    if violations:
+        return violations
+    return _metric_budget_violations(
+        baseline_summary=baseline_summary,
+        candidate_summary=candidate_summary,
+        max_kernel_regression_pct=max_kernel_regression_pct,
+        max_wall_regression_pct=max_wall_regression_pct,
+    )
+
+class TestIssue98PerfRegressionGuard(unittest.TestCase):
+    canonical_profile = ISSUE98_CANONICAL_PROFILE
+
+    def _artifact_summary(self, summary_path):
+        self.assertTrue(summary_path.is_file(), f"missing perf artifact: {summary_path}")
+        return _load_issue98_summary(summary_path)
+
+    def test_pr98d_budget_guard_accepts_baseline_artifact(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=baseline,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, [])
+
+    def test_pr98d_budget_guard_detects_slice2a_artifact_regression(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        candidate = self._artifact_summary(ISSUE98_SLICE2A_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        joined = " | ".join(violations)
+        self.assertIn("median_kernel_s", joined)
+        self.assertIn("median_wall_s", joined)
+
+    def test_pr98d_budget_guard_detects_slice1only_rollback_artifact_regression(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        candidate = self._artifact_summary(ISSUE98_SLICE1ONLY_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        joined = " | ".join(violations)
+        self.assertIn("median_kernel_s", joined)
+        self.assertIn("median_wall_s", joined)
+
+    def test_pr98d_budget_guard_accepts_small_regression_within_budget(self):
+        baseline = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1092.74,
+            run2_kernel_s=1119.44,
+            run1_wall_s=1132.13,
+            run2_wall_s=1160.57,
+        )
+        candidate = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1107.00,
+            run2_kernel_s=1108.00,
+            run1_wall_s=1148.00,
+            run2_wall_s=1150.00,
+        )
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=1.0,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, [])
+
+    def test_pr98d_budget_guard_rejects_canonical_profile_mismatch(self):
+        baseline = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1092.74,
+            run2_kernel_s=1119.44,
+            run1_wall_s=1132.13,
+            run2_wall_s=1160.57,
+        )
+        candidate = _build_issue98_summary(
+            profile="non_canonical_profile",
+            run1_kernel_s=1090.00,
+            run2_kernel_s=1090.00,
+            run1_wall_s=1130.00,
+            run2_wall_s=1130.00,
+        )
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=1.0,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, ["candidate canonical_profile mismatch"])
 
 
 class TestIssue56TierSignalExecutionParity(unittest.TestCase):

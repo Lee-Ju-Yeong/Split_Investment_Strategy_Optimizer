@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-08
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98B-2 slice 2a complete`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98D artifact guard active; slice 2a retained locally (baseline promotion pending)`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: `PR-98C` slice 1/2와 canonical baseline 고정이 끝났고, `PR-98B-2` slice 1(candidate rank tensor precompute + tensor gather routing)과 slice 2a(additional-buy run-owner host-sync 제거)까지 반영했습니다.
-- Next action: canonical profile에서 `slice 2a`를 직접 재측정한 뒤, 남은 execution-loop hot path를 더 줄일지 `PR-98D`로 먼저 넘어갈지 고정합니다.
+- Current status: `slice 2a`는 canonical remeasure에서 baseline보다 약간 느렸지만, `slice 1 only` rollback canonical 2-run이 더 크게 느려서 현재 작업 트리는 `slice 2a`를 유지합니다. 다만 baseline 대비 throughput win은 아직 증명되지 않아 승격은 보류입니다.
+- Next action: `PR-98D`는 actual `summary.json` artifact 기반으로 고정했고, 다음 판단은 `large-batch / long-window + strict parity` 증적에서 내립니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -76,7 +76,7 @@
 - [x] PR-98A: batch-size fallback / legacy universe fallback 일부 정리
 - [ ] PR-98B: candidate hot path (`PC`)
 - [ ] PR-98C: CPU I/O / cache / data loading (`PO`)
-- [ ] PR-98D: perf regression guard / benchmark
+- [x] PR-98D: perf regression guard / benchmark
 - [ ] before/after 문서화
 - [ ] `#56` strict parity 재검증
 
@@ -84,9 +84,10 @@
 - 이미 있는 것:
   - baseline log: `results/perf_baseline_strict_hyst_20260220_024023.log`
   - canonical local baseline summary: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+  - `slice 2a` canonical remeasure summary: `results/issue98_measure/pr98b2_slice2a_janfeb2024_cov020_20260308_152446/summary.json`
+  - `slice 1 only` rollback canonical remeasure summary: `results/issue98_measure/pr98b2_slice1only_janfeb2024_cov020_20260308_162509/summary.json`
   - release gate board: `docs/operations/2026-03-06-hybrid-release-gate-board.md`
 - 아직 없는 것:
-  - `slice 2a` canonical remeasure 결과
   - `PC` 변경 후 longer-window strict parity 증적
 
 ## 7. Reading Guide
@@ -162,7 +163,7 @@
 - [x] PR-98A: `P-001~P-004` fallback 축소/정리
 - [ ] PR-98B(PC): `P-005/P-006/P-008/P-009` CPU/GPU 동시 수정 + parity 통과
 - [ ] PR-98C(PO): `P-007/P-010/P-011/P-012/P-013/P-015` 캐시/동기화/I/O 최적화
-- [ ] PR-98D: `P-014` 성능 회귀 가드/벤치마크 테스트 반영
+- [x] PR-98D: `P-014` 성능 회귀 가드/벤치마크 테스트 반영
 - [ ] 성능 측정 결과 문서화(before/after)
 - [ ] `#56` strict parity 재검증(`0 mismatch`)
 - [ ] Gate B 승인 완료
@@ -252,9 +253,10 @@
   - CPU wall-time 개선 확인
 
 ### 8-5. PR-98D 게이트 자동화
-- [ ] `tests/test_backtest_strategy_gpu.py`
+- [x] `tests/test_backtest_strategy_gpu.py`
   - `pass` placeholder 제거
-  - 고정 입력 성능 스모크/예산 테스트 추가
+  - canonical profile actual `summary.json` artifact 기반 `median 2-run` 성능 예산 가드 테스트 추가
+  - baseline / `slice2a` / `slice1only rollback` artifact smoke coverage 추가
 - [ ] 문서/리포트 템플릿 정비
   - before/after 표준 포맷
   - parity 증적 링크 규격
@@ -790,7 +792,32 @@
   - 이후 비교 run은 `pr98b2_janfeb2024_cov020`, `pr98b2_retry1` 같은 식으로 고정한다.
 
 ### 19-6. 복붙용 명령 세트
-#### 19-6-1. 세팅
+#### 19-6-0. 권장: `issue98_perf_measure` CLI
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m src.issue98_perf_measure \
+  --label pr98c_slice2_janfeb2024_cov020
+```
+
+- 이 CLI는 아래 산출물을 자동으로 만든다.
+  - `env.txt`
+  - `input_snapshot.json`
+  - `run1.log`, `run1.gpu.csv`
+  - `run2.log`, `run2.gpu.csv`
+  - `summary.json`
+- 기본값:
+  - `config_path`: `MAGICSPLIT_CONFIG_PATH` 또는 canonical config
+  - `runs=2`
+  - `gpu_sample_interval_sec=5`
+- 예시:
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m src.issue98_perf_measure \
+  --label pr98b2_slice2a_janfeb2024_cov020 \
+  --config-path config/config.issue98_perf_multibatch_janfeb_2024_research020.yaml
+```
+
+#### 19-6-1. 수동 fallback 세팅
 ```bash
 export MAGICSPLIT_CONFIG_PATH="config/config.issue98_perf_multibatch_janfeb_2024_research020.yaml"
 export ISSUE98_LABEL="pr98c_slice2_janfeb2024_cov020"
@@ -1038,3 +1065,53 @@ cat "$ISSUE98_OUTDIR/summary.json"
   - 지금의 다음 우선순위는 더 큰 구현이 아니라 canonical remeasure다.
   - `slice 2a`를 같은 Jan-Feb profile로 다시 재고, 개선폭이 충분하면 다음 execution-loop hot path로 간다.
   - 개선폭이 작으면 `PR-98D` perf regression guard를 먼저 여는 것이 더 합리적이다.
+
+### 19-12. PR-98B-2 slice 2a canonical remeasure 결과 (2026-03-08)
+- artifact:
+  - baseline: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+  - remeasure: `results/issue98_measure/pr98b2_slice2a_janfeb2024_cov020_20260308_152446/summary.json`
+  - limitation: `slice2a` remeasure 디렉터리에는 현재 `summary.json`만 있고 `env.txt`/`input_snapshot.json`이 없다.
+- run health:
+  - baseline/remeasure 모두 `run1/run2 exit=0`
+  - baseline/remeasure 모두 `batch_count=4/4`, `oom_retry=false/false`
+- median 비교:
+  - `median_kernel_s`: `1106.09s -> 1115.86s` (`+9.77s`, `-0.88%`)
+  - `median_wall_s`: `1146.35s -> 1161.25s` (`+14.90s`, `-1.30%`)
+- 판정:
+  - 이번 `slice 2a`는 canonical 기준에서 throughput 개선이 확인되지 않았다.
+  - 따라서 이 시점의 1차 판정은 `baseline 미승격 + PR-98D 우선`이다.
+  - rollback 여부는 별도 canonical remeasure(`19-13`, `19-14`)로 최종 결정한다.
+
+### 19-13. 롤백 실험 및 재측정 필요성 (2026-03-08)
+- 실험 목적:
+  - `slice 2a`를 뺀 `slice 1 only` 상태가 정말 더 나은지 canonical 2-run으로 확인한다.
+- 왜 재측정이 필요한가:
+  - 현재 고정 baseline artifact(`pr98c_slice2_janfeb2024_cov020_20260308_131130`)의 `git_head`는 `b4204bb`다.
+  - rollback 재측정 artifact(`pr98b2_slice1only_janfeb2024_cov020_20260308_162509`)의 실제 `git_head`는 `5673cfe`다.
+  - 즉 baseline과 rollback remeasure는 서로 다른 코드 상태다.
+  - 따라서 과거 baseline 숫자를 그대로 재사용하면 안 되고, `slice 1 only` 상태에서 canonical 2-run을 새로 찍어야 공정 비교가 된다.
+- 운영 규칙:
+  - rollback 여부는 추정이 아니라 canonical 재측정 결과로 결정한다.
+
+### 19-14. `slice 1 only` rollback canonical remeasure 결과 (2026-03-08)
+- artifact:
+  - rollback remeasure: `results/issue98_measure/pr98b2_slice1only_janfeb2024_cov020_20260308_162509/summary.json`
+- run health:
+  - `run1/run2 exit=0`
+  - `batch_count=4/4`, `oom_retry=false/false`
+- median 비교:
+  - baseline(`pr98c_slice2`):
+    - `median_kernel_s`: `1106.09s -> 1185.30s` (`+79.21s`, `-7.16%`)
+    - `median_wall_s`: `1146.35s -> 1227.15s` (`+80.80s`, `-7.05%`)
+  - `slice2a` remeasure:
+    - `median_kernel_s`: `1115.86s -> 1185.30s` (`+69.44s`, `-6.22%`)
+    - `median_wall_s`: `1161.25s -> 1227.15s` (`+65.90s`, `-5.68%`)
+- 해석:
+  - “원복했는데 재측정이 꼭 필요한가?”에 대한 실측 답은 “필요하다”이다.
+  - 실제로 rollback 상태가 기존 기준보다 큰 폭으로 느려졌고, `slice2a`보다도 더 나빴다.
+  - 즉, baseline 재사용만으로는 판단이 틀릴 수 있으며, 코드 상태별 canonical 재측정이 필요하다.
+  - 따라서 현재 운영 후보는 rollback이 아니라 `slice2a`를 유지하는 편이 더 낫다.
+- authoritative decision:
+  - 현재 작업 트리는 `slice2a`를 유지한다.
+  - 다만 `slice2a`는 baseline 대비 throughput win이 확인되지 않았으므로 아직 승격/병합 완료 상태는 아니다.
+  - `PR-98D`는 actual artifact gate로 유지하고, 다음 승격 판단은 `large-batch / long-window + strict parity` 증적까지 모은 뒤 다시 내린다.
