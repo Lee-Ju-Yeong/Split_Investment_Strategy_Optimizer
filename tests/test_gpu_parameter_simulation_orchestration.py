@@ -183,7 +183,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertAlmostEqual(float(tier_kwargs["min_tier12_coverage_ratio"]), 0.45, places=6)
         mock_prepare_market_data.assert_called_once()
         _, batch_kwargs = mock_batch_size.call_args
-        self.assertEqual(batch_kwargs["fixed_data_memory_bytes"], 2120)
+        self.assertEqual(batch_kwargs["fixed_data_memory_bytes"], 2248)
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[6]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[6]["use_weekly_alpha_gate"])

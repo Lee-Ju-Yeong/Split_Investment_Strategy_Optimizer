@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-08
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; waiting on ranking parity fixtures`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98B-2 slice 1 in progress`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: `PR-98C` slice 1/2가 반영되어 CPU runtime cache, GPU zero-tensor reuse, `prepared_market_data` 재사용, fixed-data VRAM accounting까지 들어갔습니다. `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` canonical profile의 target-hardware 2-run baseline도 확보했습니다.
-- Next action: 남은 선행조건은 `direct composite-rank parity fixture + multi-sim active-set rerank parity` 2개뿐이며, 이를 고정한 뒤 `PR-98B-2`를 단독으로 진행합니다.
+- Current status: `PR-98C` slice 1/2와 canonical baseline 고정이 끝났고, 이어서 `PR-98B-2` slice 1로 candidate rank tensor precompute, tensor gather routing, ranking parity fixture 2개까지 반영했습니다.
+- Next action: 남은 일은 `PR-98B-2`의 다음 slice에서 더 큰 hot-path 축소를 넣고, 같은 canonical profile로 직접 비교하는 것입니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -52,6 +52,10 @@
   - `direct composite-rank parity fixture`
   - `multi-sim active-set rerank parity`
   - 왜 필요한가: 후보 정렬/선정 경로를 바꿀 때 CPU 기준과 drift가 없는지 바로 잡아내기 위해서입니다.
+  - 상태: 완료
+  - 증적:
+    - `tests/test_gpu_candidate_payload_builder.py::test_direct_composite_rank_parity_fixture_matches_cpu_history`
+    - `tests/test_gpu_new_entry_signals.py::test_multi_sim_active_set_rerank_matches_python_reference`
 
 ## 3. Plain-Language Rule
 - `PO (Perf-Only)`: 결과를 바꾸지 않는 최적화
@@ -59,11 +63,11 @@
 - `PC`는 반드시 `#56` strict parity 증적을 다시 통과해야 합니다.
 
 ## 4. Current Priority Bottlenecks
-- [ ] fixed-data VRAM blind spot
+- [x] fixed-data VRAM blind spot
 - [ ] daily as-of ranking precompute
 - [ ] ranking scratch memory estimate 보강
 - [ ] strict fallback telemetry 고정
-- [ ] multi-sim active-set rerank parity
+- [x] multi-sim active-set rerank parity
 - [ ] CPU I/O / session cache / engine reuse 정리
 
 ## 5. Current Plan
@@ -978,8 +982,38 @@ cat "$ISSUE98_OUTDIR/summary.json"
 - 따라서 OOM stress는 나중의 `stability stress` 또는 `promotion 직전 soak` 단계에서 별도 config로 수행한다.
 
 ### 19-9. 다음 단계 연결
-- 이 canonical baseline이 잡히면 그 다음은 바로 대형 stress가 아니다.
-- 먼저 아래 2개를 닫는다.
+- 이 canonical baseline이 잡힌 뒤, 대형 stress로 바로 가지 않았다.
+- 먼저 아래 2개를 고정했다.
   - `direct composite-rank parity fixture`
   - `multi-sim active-set rerank parity`
-- 그 뒤 `PR-98B-2` (`daily as-of ranking precompute + hot-path ranking/gather`)를 단독으로 진행한다.
+- 그 다음부터 `PR-98B-2` (`daily as-of ranking precompute + hot-path ranking/gather`)를 slice 단위로 진행한다.
+
+### 19-10. PR-98B-2 slice 1 반영 (2026-03-08)
+- 무엇을 했나:
+  - `src/backtest/gpu/data.py`
+    - candidate ranking용 `atr_14_ratio`, `flow5_mcap`, `cheap_score_effective`, `market_cap_q` tensor를 1회 생성하고 as-of forward-fill하는 helper를 추가했다.
+    - 후보 subset에 대해서만 tensor gather로 small metrics frame을 만드는 경로를 추가했다.
+    - `flow5_mcap NaN`이 ranking percentile을 왜곡하지 않도록 결측을 `0`으로 바꾸지 않고 유지하게 고쳤다.
+    - ranking용 tensor는 `float64`를 유지하게 바꿔 CPU/legacy 경로와 rounding 경계가 어긋나지 않도록 맞췄다.
+  - `src/backtest/gpu/engine.py`
+    - ranking metrics 조회를 legacy cudf as-of filter 대신 `prepared_market_data["candidate_rank_tensors"]` 기반 gather로 우선 라우팅한다.
+    - strict single-sim rerank 경로도 동일 helper를 사용하도록 맞췄다.
+  - `src/optimization/gpu/parameter_simulation.py`
+    - prepared market-data의 fixed memory 추정에 ranking tensor 4개 + retained prepared bundle footprint를 반영하도록 바꿨다.
+    - reusable bundle 생성에서 GPU OOM이 나면 전체 run을 죽이지 않고 legacy per-batch preparation으로 후퇴하게 했다.
+- 왜 중요한가:
+  - 이전에는 거래일마다 후보군에 대해 cudf filter/sort/drop-duplicates를 다시 하면서 host-side 비용이 누적됐다.
+  - 지금은 “미리 만든 tensor에서 필요한 후보만 꺼내는” 쪽으로 바뀌었기 때문에, 다음 slice에서 더 큰 hot-path 축소를 넣기 위한 바닥 공사가 끝났다.
+- 이번 slice에서 고정한 테스트:
+  - `tests/test_gpu_candidate_payload_builder.py::test_direct_composite_rank_parity_fixture_matches_cpu_history`
+  - `tests/test_gpu_new_entry_signals.py::test_multi_sim_active_set_rerank_matches_python_reference`
+  - `tests/test_gpu_candidate_metrics_asof.py::test_tensor_gather_matches_legacy_asof_ranking_payload`
+  - `tests/test_gpu_candidate_metrics_asof.py::test_tensor_gather_preserves_nan_flow_ranking_semantics`
+  - `tests/test_gpu_engine_prep_path.py::test_prepared_rank_tensors_bypass_legacy_asof_lookup`
+  - `tests/test_gpu_parameter_simulation_orchestration.py::test_find_optimal_parameters_uses_tier_only_runtime_inputs`
+- 검증:
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_candidate_payload_builder tests.test_gpu_new_entry_signals tests.test_parity_sell_event_dump tests.test_cpu_candidate_priority tests.test_cpu_strategy_entry_context tests.test_gpu_candidate_metrics_asof tests.test_gpu_engine_prep_path tests.test_gpu_parameter_simulation_orchestration -v`
+  - 결과: `57 tests OK`
+- 현재 판단:
+  - `fixture 2개 대기` 상태는 끝났다.
+  - 이제 `PR-98B-2` 다음 slice에서 remaining hot-path reduction을 넣고, canonical baseline(`summary.json`)과 직접 비교하면 된다.

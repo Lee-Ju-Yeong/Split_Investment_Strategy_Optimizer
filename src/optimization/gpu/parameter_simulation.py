@@ -49,7 +49,7 @@ from .kernel import get_optimal_batch_size, prepare_market_data_bundle, run_gpu_
 DEFAULT_FALLBACK_TARGET_BATCHES = 8
 DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
-PREPARED_MARKET_TENSOR_COUNT = 4
+PREPARED_MARKET_BYTES_PER_CELL = 48
 
 
 def _is_gpu_oom_error(error, cp_module):
@@ -136,9 +136,45 @@ def _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers):
     return (
         int(max(num_trading_days, 0))
         * int(max(num_tickers, 0))
-        * PREPARED_MARKET_TENSOR_COUNT
-        * 4
+        * PREPARED_MARKET_BYTES_PER_CELL
     )
+
+
+def _measure_prepared_market_data_bytes(
+    prepared_market_data,
+    *,
+    num_trading_days,
+    num_tickers,
+):
+    if not prepared_market_data:
+        return 0
+
+    measured_bytes = 0
+
+    all_data_reset_idx = prepared_market_data.get("all_data_reset_idx")
+    if all_data_reset_idx is not None and hasattr(all_data_reset_idx, "memory_usage"):
+        measured_bytes += int(all_data_reset_idx.memory_usage(deep=True).sum())
+
+    for key in (
+        "open_prices_tensor",
+        "close_prices_tensor",
+        "high_prices_tensor",
+        "low_prices_tensor",
+        "zero_signal_prices_gpu",
+        "zero_signal_tiers_gpu",
+    ):
+        value = prepared_market_data.get(key)
+        if value is not None and hasattr(value, "nbytes"):
+            measured_bytes += int(value.nbytes)
+
+    rank_tensors = prepared_market_data.get("candidate_rank_tensors") or {}
+    for value in rank_tensors.values():
+        if hasattr(value, "nbytes"):
+            measured_bytes += int(value.nbytes)
+
+    if measured_bytes > 0:
+        return measured_bytes
+    return _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers)
 
 
 # -----------------------------------------------------------------------------
@@ -240,10 +276,33 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         trading_dates_pd,
     )
 
+    prepared_market_data = None
+    prepared_bundle_bytes = 0
+    try:
+        prepared_market_data = prepare_market_data_bundle(
+            all_data_gpu,
+            all_tickers,
+            trading_dates_pd,
+            execution_params,
+        )
+        prepared_bundle_bytes = _measure_prepared_market_data_bytes(
+            prepared_market_data,
+            num_trading_days=len(trading_dates_pd),
+            num_tickers=len(all_tickers),
+        )
+    except Exception as err:
+        if not _is_gpu_oom_error(err, cp):
+            raise
+        _release_gpu_memory(cp)
+        print(
+            "[GPU_WARNING] OOM while preparing reusable market-data bundle. "
+            "Falling back to legacy per-batch preparation."
+        )
+
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
     fixed_mem += int(pit_universe_mask_tensor.nbytes)
-    fixed_mem += _estimate_prepared_market_tensor_bytes(len(trading_dates_pd), len(all_tickers))
+    fixed_mem += int(prepared_bundle_bytes)
 
     optimal_batch_size = get_optimal_batch_size(
         config=config,
@@ -278,13 +337,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         "  - Total Simulations: "
         f"{ctx.num_combinations} | Batch Size: {batch_size} | "
         f"Estimated Batches: {estimated_batches}"
-    )
-
-    prepared_market_data = prepare_market_data_bundle(
-        all_data_gpu,
-        all_tickers,
-        trading_dates_pd,
-        execution_params,
     )
 
     num_days = len(trading_dates_pd)
