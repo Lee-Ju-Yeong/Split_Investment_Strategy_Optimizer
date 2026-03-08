@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-08
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98B-2 slice 1 in progress`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98B-2 slice 2a complete`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: `PR-98C` slice 1/2와 canonical baseline 고정이 끝났고, 이어서 `PR-98B-2` slice 1로 candidate rank tensor precompute, tensor gather routing, ranking parity fixture 2개까지 반영했습니다.
-- Next action: 남은 일은 `PR-98B-2`의 다음 slice에서 더 큰 hot-path 축소를 넣고, 같은 canonical profile로 직접 비교하는 것입니다.
+- Current status: `PR-98C` slice 1/2와 canonical baseline 고정이 끝났고, `PR-98B-2` slice 1(candidate rank tensor precompute + tensor gather routing)과 slice 2a(additional-buy run-owner host-sync 제거)까지 반영했습니다.
+- Next action: canonical profile에서 `slice 2a`를 직접 재측정한 뒤, 남은 execution-loop hot path를 더 줄일지 `PR-98D`로 먼저 넘어갈지 고정합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -21,11 +21,12 @@
 - 즉, “결과를 바꾸지 않는 안전한 최적화”는 먼저 깔아둔 상태입니다.
 
 ### 2-2. 지금 보류 중인 것은 무엇인가
-- 보류 중인 것은 `daily as-of ranking precompute + hot-path ranking/gather 재구성`입니다.
-- 이건 속도 이득이 더 클 가능성이 있지만, 후보 순서와 정렬 규칙에 닿기 때문에 `PC (Parity-Coupled)`입니다.
+- 보류 중인 것은 `remaining execution-loop hot-path reduction`입니다.
+- 지금 남은 후보는 주로 `additional_buy`의 남은 rank loop 축소, 더 공격적인 `new-entry` loop 축소, 그리고 `PR-98D` 성능 회귀 가드입니다.
+- 이 중 GPU execution loop는 속도 이득이 더 클 가능성이 있지만, 후보 순서와 자본 차감 규칙에 닿기 때문에 `PC (Parity-Coupled)`입니다.
 - 쉬운 말로 하면:
   - 이미 끝난 것: “같은 계산을 두 번 하지 않게 정리”
-  - 아직 보류한 것: “후보를 고르는 방식 자체의 계산 경로를 다시 설계”
+  - 아직 보류한 것: “매수 실행 루프 자체를 더 공격적으로 줄이는 일”
 
 ### 2-3. 왜 아직 바로 안 들어가나
 - 이 항목은 빨라질 가능성은 크지만, CPU와 GPU가 같은 후보를 같은 순서로 뽑는지까지 다시 증명해야 합니다.
@@ -35,10 +36,10 @@
 - 이 프로젝트는 CPU가 기준(`SSOT`)이므로, 두 질문을 분리해서 확인해야 합니다.
 
 ### 2-4. 그래서 현재 상태를 한 줄로 말하면
-- `무기한 보류`가 아니라 `Ready-after-2-prereqs`입니다.
-- 즉, “하지 않는 일”이 아니라 “들어가기 전 준비물 2개가 남은 일”입니다.
+- `무기한 보류`가 아니라 `Ready-after-remeasure`입니다.
+- 즉, “하지 않는 일”이 아니라 “이번 slice의 실제 개선폭을 먼저 확인한 뒤 여는 일”입니다.
 
-### 2-5. 보류 해제 조건 2개
+### 2-5. 이번 단계 전제조건 2개
 - 조건 1: `prepared_market_data` slice의 target-hardware canonical 2-run baseline
   - 상태: 완료
   - 증적: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
@@ -64,10 +65,11 @@
 
 ## 4. Current Priority Bottlenecks
 - [x] fixed-data VRAM blind spot
-- [ ] daily as-of ranking precompute
+- [x] daily as-of ranking precompute
 - [ ] ranking scratch memory estimate 보강
 - [ ] strict fallback telemetry 고정
 - [x] multi-sim active-set rerank parity
+- [x] additional-buy run-owner host sync 제거
 - [ ] CPU I/O / session cache / engine reuse 정리
 
 ## 5. Current Plan
@@ -84,7 +86,7 @@
   - canonical local baseline summary: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
   - release gate board: `docs/operations/2026-03-06-hybrid-release-gate-board.md`
 - 아직 없는 것:
-  - ranking hot path 변경 전용 parity fixture 2개
+  - `slice 2a` canonical remeasure 결과
   - `PC` 변경 후 longer-window strict parity 증적
 
 ## 7. Reading Guide
@@ -1017,3 +1019,22 @@ cat "$ISSUE98_OUTDIR/summary.json"
 - 현재 판단:
   - `fixture 2개 대기` 상태는 끝났다.
   - 이제 `PR-98B-2` 다음 slice에서 remaining hot-path reduction을 넣고, canonical baseline(`summary.json`)과 직접 비교하면 된다.
+
+### 19-11. PR-98B-2 slice 2a 반영 (2026-03-08)
+- 무엇을 했나:
+  - `src/backtest/gpu/logic.py`
+    - `_process_additional_buy_signals_gpu`에서 `run_lengths.tolist()` 기반 host sync를 제거했다.
+    - `cp.unique(..., return_index=True)`로 얻은 `sim_start_indices`에 `cp.searchsorted`를 적용해, 각 candidate의 per-sim rank를 device 쪽에서 직접 계산하도록 바꿨다.
+  - `tests/test_backtest_strategy_gpu.py`
+    - 다중 시뮬레이션/다중 후보에서 추가매수 rank 처리와 순차 자본 차감 semantics가 유지되는 회귀 테스트를 추가했다.
+- 왜 중요한가:
+  - 현재 canonical baseline은 GPU kernel 자체보다 host orchestration 비중이 아직 높다.
+  - 따라서 큰 `new-entry` 의미론 변경 전에, blast radius가 가장 작은 host sync 제거부터 넣는 것이 더 안전하다.
+- 검증:
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu tests.test_gpu_new_entry_signals -v`
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_parity_sell_event_dump -v`
+  - 결과: `16 tests OK`, `17 tests OK`
+- 다음 판단:
+  - 지금의 다음 우선순위는 더 큰 구현이 아니라 canonical remeasure다.
+  - `slice 2a`를 같은 Jan-Feb profile로 다시 재고, 개선폭이 충분하면 다음 execution-loop hot path로 간다.
+  - 개선폭이 작으면 `PR-98D` perf regression guard를 먼저 여는 것이 더 합리적이다.
