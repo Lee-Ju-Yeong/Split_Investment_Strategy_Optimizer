@@ -29,13 +29,13 @@
 | `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | In Progress | `PR-98C` 일부 반영 완료. CPU runtime lookup cache, tier batch query + cached multi-ticker row/price access path, GPU zero-tensor reuse까지 적용했고 before/after evidence는 계속 축적 중 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | In Progress | `PR-98C` slice 1 + slice 2 진행. CPU runtime lookup cache, tier batch query + cached multi-ticker row/price access path, GPU zero-tensor reuse, prepared market-data reuse + fixed-data VRAM accounting까지 반영 중이며 before/after evidence는 계속 축적 중 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선이 먼저 들어감 | fixed-data VRAM + prepared market-data reuse before/after 계측 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선 다음으로 GPU fixed-data 재사용까지 들어감 | target-hardware before/after median 2-run + ranking parity fixture 2개를 고정한 뒤 `PR-98B-2` 착수 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Backlog Summary

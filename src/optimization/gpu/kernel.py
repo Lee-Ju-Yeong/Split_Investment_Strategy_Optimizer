@@ -22,6 +22,7 @@ def run_gpu_optimization(
     exec_params,
     tier_tensor=None,
     pit_universe_mask_tensor=None,
+    prepared_market_data=None,
 ):
     cp, _, _, run_magic_split_strategy_on_gpu = _ensure_gpu_deps()
 
@@ -38,9 +39,30 @@ def run_gpu_optimization(
         max_splits_limit=max_splits_from_params,
         tier_tensor=tier_tensor,
         pit_universe_mask_tensor=pit_universe_mask_tensor,
+        prepared_market_data=prepared_market_data,
     )
     print("🎉 GPU backtesting kernel finished.")
     return daily_portfolio_values
+
+
+def prepare_market_data_bundle(
+    data_gpu,
+    all_tickers,
+    trading_dates_pd,
+    exec_params,
+):
+    _ensure_gpu_deps()
+    try:
+        from ...backtest.gpu.engine import prepare_market_data_for_gpu
+    except ImportError:  # pragma: no cover
+        from backtest.gpu.engine import prepare_market_data_for_gpu  # type: ignore
+
+    return prepare_market_data_for_gpu(
+        all_data_gpu=data_gpu,
+        all_tickers=all_tickers,
+        trading_dates_pd_cpu=trading_dates_pd,
+        execution_params=exec_params,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -155,6 +177,7 @@ def get_optimal_batch_size(
 
 
 __all__ = [
+    "prepare_market_data_bundle",
     "run_gpu_optimization",
     "get_optimal_batch_size",
 ]

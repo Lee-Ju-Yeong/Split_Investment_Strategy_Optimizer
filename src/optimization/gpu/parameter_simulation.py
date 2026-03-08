@@ -43,12 +43,13 @@ from .data_loading import (
     preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
 )
-from .kernel import get_optimal_batch_size, run_gpu_optimization
+from .kernel import get_optimal_batch_size, prepare_market_data_bundle, run_gpu_optimization
 
 
 DEFAULT_FALLBACK_TARGET_BATCHES = 8
 DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+PREPARED_MARKET_TENSOR_COUNT = 4
 
 
 def _is_gpu_oom_error(error, cp_module):
@@ -129,6 +130,15 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
 
     batch_size = _resolve_adaptive_fallback_batch_size(num_combinations)
     return batch_size, "adaptive-safe-default"
+
+
+def _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers):
+    return (
+        int(max(num_trading_days, 0))
+        * int(max(num_tickers, 0))
+        * PREPARED_MARKET_TENSOR_COUNT
+        * 4
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -233,6 +243,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum())
     fixed_mem += int(tier_tensor.nbytes)
     fixed_mem += int(pit_universe_mask_tensor.nbytes)
+    fixed_mem += _estimate_prepared_market_tensor_bytes(len(trading_dates_pd), len(all_tickers))
 
     optimal_batch_size = get_optimal_batch_size(
         config=config,
@@ -267,6 +278,13 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         "  - Total Simulations: "
         f"{ctx.num_combinations} | Batch Size: {batch_size} | "
         f"Estimated Batches: {estimated_batches}"
+    )
+
+    prepared_market_data = prepare_market_data_bundle(
+        all_data_gpu,
+        all_tickers,
+        trading_dates_pd,
+        execution_params,
     )
 
     num_days = len(trading_dates_pd)
@@ -305,6 +323,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
                     execution_params,
                     tier_tensor=tier_tensor,
                     pit_universe_mask_tensor=pit_universe_mask_tensor,
+                    prepared_market_data=prepared_market_data,
                 )
                 daily_values_result_cpu[start_idx:end_idx] = _to_cpu_array(
                     daily_values_batch,

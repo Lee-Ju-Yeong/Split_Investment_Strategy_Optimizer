@@ -76,6 +76,25 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             dtype=cp.float32,
         )
 
+    @staticmethod
+    def _prepared_market_data(num_tickers=1):
+        return {
+            "all_data_reset_idx": cudf.DataFrame(
+                {
+                    "ticker": [],
+                    "date": [],
+                    "ticker_idx": [],
+                }
+            ),
+            "month_start_indices": [],
+            "open_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
+            "close_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
+            "high_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
+            "low_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
+            "zero_signal_prices_gpu": cp.zeros((num_tickers,), dtype=cp.float32),
+            "zero_signal_tiers_gpu": cp.zeros((num_tickers,), dtype=cp.int8),
+        }
+
     def test_single_sim_available_slots_counts_held_stocks(self):
         positions_state = cp.zeros((1, 3, 2, 1), dtype=cp.float32)
         positions_state[0, 0, 0, 0] = 10.0
@@ -133,6 +152,26 @@ class TestGpuEnginePrepPath(unittest.TestCase):
     def test_runtime_candidate_policy_rejects_weekly_alpha_gate(self):
         with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
             normalize_runtime_candidate_policy("tier", True)
+
+    @patch("src.backtest.gpu.engine.create_gpu_data_tensors")
+    def test_prepared_market_data_bypasses_tensor_rebuild(self, mock_create_tensors):
+        all_data_gpu = MagicMock()
+        result = gpu_engine.run_magic_split_strategy_on_gpu(
+            initial_cash=10_000_000.0,
+            param_combinations=self._param_combinations(),
+            all_data_gpu=all_data_gpu,
+            trading_date_indices=cp.asarray([], dtype=cp.int32),
+            trading_dates_pd_cpu=pd.DatetimeIndex([]),
+            all_tickers=["005930"],
+            execution_params=self._execution_params(mode="tier"),
+            tier_tensor=cp.zeros((0, 1), dtype=cp.int8),
+            prepared_market_data=self._prepared_market_data(),
+            debug_mode=False,
+        )
+
+        self.assertEqual(result.shape, (1, 0))
+        all_data_gpu.reset_index.assert_not_called()
+        mock_create_tensors.assert_not_called()
 
     @patch("src.backtest.gpu.engine._process_additional_buy_signals_gpu")
     @patch("src.backtest.gpu.engine._process_new_entry_signals_gpu")
