@@ -29,13 +29,13 @@
 | `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | In Progress | `PR-98C` slice 1 + slice 2 진행. CPU runtime lookup cache, tier batch query + cached multi-ticker row/price access path, GPU zero-tensor reuse, prepared market-data reuse + fixed-data VRAM accounting까지 반영 중이며 before/after evidence는 계속 축적 중 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | In Progress | `PR-98C` slice 1 + slice 2 반영 완료 후 canonical Jan-Feb baseline 고정. `PR-98B-2` slice 1로 candidate rank tensor precompute + tensor gather routing + parity fixture 2개까지 반영됨 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선 다음으로 GPU fixed-data 재사용까지 들어감. canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run baseline도 확보됨 | ranking parity fixture 2개를 닫고 `PR-98B-2` 착수 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `P1` | `#98` GPU throughput refactor | In Progress | canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run baseline 확보 후 `direct composite-rank parity fixture`, `multi-sim active-set rerank parity`, candidate rank tensor precompute + tensor gather routing까지 반영됨 | `PR-98B-2` 다음 slice(remaining hot-path reduction) 구현 후 canonical baseline과 직접 비교 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Backlog Summary

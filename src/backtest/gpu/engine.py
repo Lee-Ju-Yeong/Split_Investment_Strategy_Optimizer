@@ -14,6 +14,8 @@ from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .data import (
     _collect_candidate_rank_metrics_asof,
     build_ranked_candidate_payload,
+    collect_candidate_rank_metrics_from_tensors,
+    create_candidate_rank_tensors,
     create_gpu_data_tensors,
     ensure_cheap_score_columns,
 )
@@ -114,6 +116,31 @@ def _get_single_sim_available_slots(*, positions_state: cp.ndarray, max_stocks: 
     return max(0, max_stocks_int - current_num_stocks)
 
 
+def _collect_candidate_rank_metrics(
+    *,
+    all_data_reset_idx: cudf.DataFrame,
+    candidate_rank_tensors: dict | None,
+    final_candidate_indices: cp.ndarray,
+    signal_date,
+    signal_day_idx: int,
+    all_tickers: list[str],
+):
+    if signal_date is None:
+        return None
+    if candidate_rank_tensors is not None:
+        return collect_candidate_rank_metrics_from_tensors(
+            rank_metric_tensors=candidate_rank_tensors,
+            final_candidate_indices=final_candidate_indices,
+            signal_day_idx=signal_day_idx,
+            all_tickers=all_tickers,
+        )
+    return _collect_candidate_rank_metrics_asof(
+        all_data_reset_idx=all_data_reset_idx,
+        final_candidate_indices=final_candidate_indices,
+        signal_date=signal_date,
+    )
+
+
 def prepare_market_data_for_gpu(
     *,
     all_data_gpu: cudf.DataFrame,
@@ -151,6 +178,11 @@ def prepare_market_data_for_gpu(
     month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
 
     data_tensors = create_gpu_data_tensors(all_data_reset_idx, all_tickers, trading_dates_pd_cpu)
+    candidate_rank_tensors = create_candidate_rank_tensors(
+        all_data_reset_idx,
+        all_tickers,
+        trading_dates_pd_cpu,
+    )
     close_prices_tensor = data_tensors["close"]
     high_prices_tensor = data_tensors["high"]
     low_prices_tensor = data_tensors["low"]
@@ -168,6 +200,7 @@ def prepare_market_data_for_gpu(
         "close_prices_tensor": close_prices_tensor,
         "high_prices_tensor": high_prices_tensor,
         "low_prices_tensor": low_prices_tensor,
+        "candidate_rank_tensors": candidate_rank_tensors,
         "zero_signal_prices_gpu": cp.zeros(num_tickers, dtype=cp.float32),
         "zero_signal_tiers_gpu": cp.zeros(num_tickers, dtype=cp.int8),
     }
@@ -181,6 +214,7 @@ def _validate_prepared_market_data(prepared_market_data: dict) -> None:
         "close_prices_tensor",
         "high_prices_tensor",
         "low_prices_tensor",
+        "candidate_rank_tensors",
         "zero_signal_prices_gpu",
         "zero_signal_tiers_gpu",
     )
@@ -273,6 +307,7 @@ def run_magic_split_strategy_on_gpu(
     close_prices_tensor = prepared_market_data["close_prices_tensor"]
     high_prices_tensor = prepared_market_data["high_prices_tensor"]
     low_prices_tensor = prepared_market_data["low_prices_tensor"]
+    candidate_rank_tensors = prepared_market_data["candidate_rank_tensors"]
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
     zero_signal_prices_gpu = prepared_market_data["zero_signal_prices_gpu"]
     zero_signal_tiers_gpu = prepared_market_data["zero_signal_tiers_gpu"]
@@ -336,10 +371,13 @@ def run_magic_split_strategy_on_gpu(
             # (CompositeScore -> MarketCap -> Ticker)
             ranked_records_for_day = []
             if final_candidate_indices.size > 0 and signal_date is not None:
-                valid_candidate_metrics_df = _collect_candidate_rank_metrics_asof(
+                valid_candidate_metrics_df = _collect_candidate_rank_metrics(
                     all_data_reset_idx=all_data_reset_idx,
+                    candidate_rank_tensors=candidate_rank_tensors,
                     final_candidate_indices=final_candidate_indices,
                     signal_date=signal_date,
+                    signal_day_idx=signal_day_idx,
+                    all_tickers=all_tickers,
                 )
 
                 if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
@@ -402,10 +440,13 @@ def run_magic_split_strategy_on_gpu(
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                     ranked_records_for_day = []
                 else:
-                    filtered_metrics_df = _collect_candidate_rank_metrics_asof(
+                    filtered_metrics_df = _collect_candidate_rank_metrics(
                         all_data_reset_idx=all_data_reset_idx,
+                        candidate_rank_tensors=candidate_rank_tensors,
                         final_candidate_indices=filtered_candidate_indices,
                         signal_date=signal_date,
+                        signal_day_idx=signal_day_idx,
+                        all_tickers=all_tickers,
                     )
                     if filtered_metrics_df is None or filtered_metrics_df.empty:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)

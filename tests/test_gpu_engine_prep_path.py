@@ -91,6 +91,12 @@ class TestGpuEnginePrepPath(unittest.TestCase):
             "close_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
             "high_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
             "low_prices_tensor": cp.zeros((0, num_tickers), dtype=cp.float32),
+            "candidate_rank_tensors": {
+                "atr_14_ratio": cp.zeros((0, num_tickers), dtype=cp.float32),
+                "flow5_mcap": cp.zeros((0, num_tickers), dtype=cp.float32),
+                "cheap_score_effective": cp.zeros((0, num_tickers), dtype=cp.float32),
+                "market_cap_q": cp.zeros((0, num_tickers), dtype=cp.int64),
+            },
             "zero_signal_prices_gpu": cp.zeros((num_tickers,), dtype=cp.float32),
             "zero_signal_tiers_gpu": cp.zeros((num_tickers,), dtype=cp.int8),
         }
@@ -332,6 +338,75 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         self.assertIs(captured["add_signal_close"], captured["add_signal_low"])
         self.assertEqual(int(cp.count_nonzero(captured["sell_signal_close"]).item()), 0)
         self.assertEqual(int(cp.count_nonzero(captured["add_signal_close"]).item()), 0)
+
+    @patch("src.backtest.gpu.engine._process_additional_buy_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_new_entry_signals_gpu")
+    @patch("src.backtest.gpu.engine._process_sell_signals_gpu")
+    @patch("src.backtest.gpu.engine._collect_candidate_rank_metrics_asof")
+    @patch("src.backtest.gpu.engine.collect_candidate_rank_metrics_from_tensors")
+    def test_prepared_rank_tensors_bypass_legacy_asof_lookup(
+        self,
+        mock_collect_from_tensors,
+        mock_collect_legacy,
+        mock_process_sell,
+        mock_process_new_entry,
+        mock_process_additional_buy,
+    ):
+        prepared_market_data = {
+            **self._prepared_market_data(num_tickers=1),
+            "month_start_indices": [0],
+            "open_prices_tensor": cp.array([[100000.0], [100000.0]], dtype=cp.float32),
+            "close_prices_tensor": cp.array([[100000.0], [100000.0]], dtype=cp.float32),
+            "high_prices_tensor": cp.array([[100000.0], [100000.0]], dtype=cp.float32),
+            "low_prices_tensor": cp.array([[100000.0], [100000.0]], dtype=cp.float32),
+            "candidate_rank_tensors": {
+                "atr_14_ratio": cp.array([[0.1], [0.1]], dtype=cp.float32),
+                "flow5_mcap": cp.array([[100.0], [100.0]], dtype=cp.float32),
+                "cheap_score_effective": cp.array([[0.6], [0.6]], dtype=cp.float32),
+                "market_cap_q": cp.array([[100], [100]], dtype=cp.int64),
+            },
+        }
+        mock_collect_from_tensors.return_value = cudf.DataFrame(
+            {
+                "ticker_idx": [0],
+                "ticker": ["005930"],
+                "atr_14_ratio": [0.1],
+                "flow5_mcap": [100.0],
+                "cheap_score_effective": [0.6],
+                "market_cap_q": [100],
+            }
+        )
+        mock_collect_legacy.side_effect = AssertionError("legacy as-of lookup should not run")
+
+        def _sell_stub(*args, **_kwargs):
+            return args[0], args[1], args[2], args[3], cp.zeros((1, 1), dtype=cp.bool_)
+
+        def _entry_stub(*args, **_kwargs):
+            return args[0], args[1], args[2]
+
+        def _add_stub(*args, **_kwargs):
+            return args[0], args[1], args[2]
+
+        mock_process_sell.side_effect = _sell_stub
+        mock_process_new_entry.side_effect = _entry_stub
+        mock_process_additional_buy.side_effect = _add_stub
+
+        result = gpu_engine.run_magic_split_strategy_on_gpu(
+            initial_cash=10_000_000.0,
+            param_combinations=self._param_combinations(),
+            all_data_gpu=MagicMock(),
+            trading_date_indices=cp.asarray([0, 1], dtype=cp.int32),
+            trading_dates_pd_cpu=pd.DatetimeIndex(["2026-01-06", "2026-01-07"]),
+            all_tickers=["005930"],
+            execution_params=self._execution_params(mode="tier"),
+            tier_tensor=cp.asarray([[1], [1]], dtype=cp.int8),
+            prepared_market_data=prepared_market_data,
+            debug_mode=False,
+        )
+
+        self.assertEqual(result.shape, (1, 2))
+        mock_collect_from_tensors.assert_called()
+        mock_collect_legacy.assert_not_called()
 
 
 if __name__ == "__main__":
