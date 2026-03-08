@@ -35,7 +35,7 @@
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선 다음으로 GPU fixed-data 재사용까지 들어감 | target-hardware before/after median 2-run + ranking parity fixture 2개를 고정한 뒤 `PR-98B-2` 착수 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `P1` | `#98` GPU throughput refactor | In Progress | 의미론/거버넌스 blocker는 정리됐고 `PR-98C`의 CPU cache/runtime lookup 개선 다음으로 GPU fixed-data 재사용까지 들어감. canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run baseline도 확보됨 | ranking parity fixture 2개를 닫고 `PR-98B-2` 착수 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Backlog Summary
