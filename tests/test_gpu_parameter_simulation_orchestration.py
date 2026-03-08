@@ -133,6 +133,7 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
     @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
     @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
+    @patch("src.optimization.gpu.parameter_simulation.prepare_market_data_bundle")
     @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
@@ -148,7 +149,8 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_all,
         mock_preload_pit_mask,
         mock_preload_tier,
-        _mock_batch_size,
+        mock_batch_size,
+        mock_prepare_market_data,
         mock_run_gpu,
         mock_analyze,
     ):
@@ -158,6 +160,8 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_preload_all.return_value = self._fake_all_data_gpu()
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
         mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
+        prepared_market_data = {"prepared": True}
+        mock_prepare_market_data.return_value = prepared_market_data
         mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
             (param_batch.shape[0], 2), dtype=np.float32
         )
@@ -177,10 +181,14 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertEqual(tier_kwargs["universe_mode"], "optimistic_survivor")
         self.assertEqual(tier_kwargs["min_liquidity_20d_avg_value"], 123)
         self.assertAlmostEqual(float(tier_kwargs["min_tier12_coverage_ratio"]), 0.45, places=6)
+        mock_prepare_market_data.assert_called_once()
+        _, batch_kwargs = mock_batch_size.call_args
+        self.assertEqual(batch_kwargs["fixed_data_memory_bytes"], 2120)
         run_call = mock_run_gpu.call_args
         self.assertEqual(run_call.args[6]["candidate_source_mode"], "tier")
         self.assertFalse(run_call.args[6]["use_weekly_alpha_gate"])
         self.assertEqual(run_call.args[6]["universe_mode"], "optimistic_survivor")
+        self.assertIs(run_call.kwargs["prepared_market_data"], prepared_market_data)
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
     def test_runtime_candidate_policy_rejects_weekly_mode(self):

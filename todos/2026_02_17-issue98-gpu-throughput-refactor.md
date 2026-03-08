@@ -10,15 +10,48 @@
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: baseline과 일부 cleanup은 진행됐고, `#97` Gate C + step 2 synthetic sample pack도 승인되었습니다. 이제 `#98`은 자체 성능 증적과 승격 판단만 남았습니다. `#56` synthetic parity와 `#67` runtime PIT candidate policy는 live evidence 기준으로 종결되었습니다.
-- Next action: fixed-data VRAM, daily ranking hot path, memory estimate 같은 현재 병목을 strict parity 전제로 정리합니다.
+- Current status: `PR-98C` slice 1/2가 반영되어 CPU runtime cache, GPU zero-tensor reuse, `prepared_market_data` 재사용, fixed-data VRAM accounting까지 들어갔습니다. 다음 큰 후보는 `PR-98B-2`의 ranking hot path이지만, 아직 바로 착수하지 않고 선행 증적 2개를 먼저 닫는 상태입니다.
+- Next action: `prepared_market_data` slice의 target-hardware before/after median 2-run 증적과 `direct composite-rank parity fixture + multi-sim active-set rerank parity`를 먼저 고정한 뒤 `PR-98B-2`를 단독으로 진행합니다.
 
-## 2. Plain-Language Rule
+## 2. 초심자용 현재 판단 (2026-03-08)
+### 2-1. 지금 무엇이 끝났나
+- `PR-98C`의 안전한 성능 개선 2개는 이미 들어갔습니다.
+  - CPU 쪽: 같은 날 같은 종목 데이터를 반복 조회하던 낭비를 줄였습니다.
+  - GPU 쪽: batch마다 같은 market-data tensor를 다시 만들지 않게 했습니다.
+- 즉, “결과를 바꾸지 않는 안전한 최적화”는 먼저 깔아둔 상태입니다.
+
+### 2-2. 지금 보류 중인 것은 무엇인가
+- 보류 중인 것은 `daily as-of ranking precompute + hot-path ranking/gather 재구성`입니다.
+- 이건 속도 이득이 더 클 가능성이 있지만, 후보 순서와 정렬 규칙에 닿기 때문에 `PC (Parity-Coupled)`입니다.
+- 쉬운 말로 하면:
+  - 이미 끝난 것: “같은 계산을 두 번 하지 않게 정리”
+  - 아직 보류한 것: “후보를 고르는 방식 자체의 계산 경로를 다시 설계”
+
+### 2-3. 왜 아직 바로 안 들어가나
+- 이 항목은 빨라질 가능성은 크지만, CPU와 GPU가 같은 후보를 같은 순서로 뽑는지까지 다시 증명해야 합니다.
+- 지금 바로 넣으면 아래 두 질문이 한 번에 섞입니다.
+  - 정말 빨라졌는가?
+  - 결과 의미가 바뀌지 않았는가?
+- 이 프로젝트는 CPU가 기준(`SSOT`)이므로, 두 질문을 분리해서 확인해야 합니다.
+
+### 2-4. 그래서 현재 상태를 한 줄로 말하면
+- `무기한 보류`가 아니라 `Ready-after-2-prereqs`입니다.
+- 즉, “하지 않는 일”이 아니라 “들어가기 전 준비물 2개가 남은 일”입니다.
+
+### 2-5. 보류 해제 조건 2개
+- 조건 1: `prepared_market_data` slice의 target-hardware before/after median 2-run 증적
+  - 왜 필요한가: 방금 넣은 안전한 최적화가 실제로 얼마만큼 도움이 되는지 먼저 고정해야, 다음 PC 변경의 효과를 분리해서 볼 수 있습니다.
+- 조건 2: ranking parity fixture 보강
+  - `direct composite-rank parity fixture`
+  - `multi-sim active-set rerank parity`
+  - 왜 필요한가: 후보 정렬/선정 경로를 바꿀 때 CPU 기준과 drift가 없는지 바로 잡아내기 위해서입니다.
+
+## 3. Plain-Language Rule
 - `PO (Perf-Only)`: 결과를 바꾸지 않는 최적화
 - `PC (Parity-Coupled)`: 후보군, 정렬, 체결 의미론에 영향을 줄 수 있는 최적화
 - `PC`는 반드시 `#56` strict parity 증적을 다시 통과해야 합니다.
 
-## 3. Current Priority Bottlenecks
+## 4. Current Priority Bottlenecks
 - [ ] fixed-data VRAM blind spot
 - [ ] daily as-of ranking precompute
 - [ ] ranking scratch memory estimate 보강
@@ -26,7 +59,7 @@
 - [ ] multi-sim active-set rerank parity
 - [ ] CPU I/O / session cache / engine reuse 정리
 
-## 4. Current Plan
+## 5. Current Plan
 - [x] PR-98A: batch-size fallback / legacy universe fallback 일부 정리
 - [ ] PR-98B: candidate hot path (`PC`)
 - [ ] PR-98C: CPU I/O / cache / data loading (`PO`)
@@ -34,7 +67,7 @@
 - [ ] before/after 문서화
 - [ ] `#56` strict parity 재검증
 
-## 5. Key Evidence
+## 6. Key Evidence
 - 이미 있는 것:
   - baseline log: `results/perf_baseline_strict_hyst_20260220_024023.log`
   - release gate board: `docs/operations/2026-03-06-hybrid-release-gate-board.md`
@@ -42,11 +75,11 @@
   - 최신 병목 항목에 대한 release-grade before/after
   - `PC` 변경 후 longer-window strict parity 증적
 
-## 6. Reading Guide
+## 7. Reading Guide
 - 이 문서는 “어떻게 더 빠르게 만들까”보다 먼저 “어떤 최적화가 결과 의미를 바꾸는가”를 분리하는 문서입니다.
 - 세부 병목 인벤토리는 아래 본문을 필요할 때만 읽으세요.
 
-## 7. Detailed History And Working Log
+## 8. Detailed History And Working Log
 ### 0. 분리 원칙 (Issue #97/#56/#67 관계)
 - #97: 레거시 자산 정리 거버넌스(삭제/아카이브/승인 게이트)
 - #98: 성능 리팩토링(throughput, kernel launch, host-device sync, I/O)
@@ -246,6 +279,27 @@
   - 이 slice는 correctness-safe perf-only 정리이며, throughput improvement는 별도 before/after 계측으로 확정해야 한다
   - `tests.test_gpu_engine_prep_path`는 CUDA/OS 제약 환경에서 skip 될 수 있다
   - 다음 큰 GPU 개선 후보는 batch별 market-data prep 재사용(`prepared_market_data` bundle)이다
+
+## 12. PR-98C slice 2 진행 현황 (2026-03-08)
+- What:
+  - optimizer worker에서 fixed market-data preparation을 1회만 수행하고 batch 간 재사용하는 `prepared_market_data` bundle 경로 추가
+  - batch-size estimator의 fixed-data VRAM 계산에 prepared price tensor bytes를 반영
+- Why:
+  - 기존에는 같은 `all_data_gpu`/`all_tickers`/`trading_dates_pd`에 대해 batch마다 `reset_index`, `ticker_idx` 매핑, OHLC tensor build, strict as-of forward-fill을 반복했다
+  - RTX 5060 class 장비에서는 이 재준비 비용보다 OOM 없이 안정적으로 batch를 유지하는 것이 더 중요하므로, reuse와 VRAM accounting을 함께 묶는 것이 안전하다
+- Files:
+  - `src/backtest/gpu/engine.py`
+  - `src/optimization/gpu/kernel.py`
+  - `src/optimization/gpu/parameter_simulation.py`
+  - `tests/test_gpu_engine_prep_path.py`
+  - `tests/test_gpu_parameter_simulation_orchestration.py`
+- Verification:
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_engine_prep_path tests.test_gpu_parameter_simulation_orchestration tests.test_gpu_kernel_batch_size -v`
+  - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests -p 'test_*.py'`
+- Notes:
+  - 이번 slice는 `PO`만 건드린다. candidate ranking/as-of precompute는 다음 `PC` slice로 분리한다
+  - standalone baseline이 `1 batch`인 경우 wall-time 절감폭이 작을 수 있으므로, throughput 증적은 multi-batch 창에서도 같이 수집해야 한다
+  - `prepared_market_data`는 optional 인자로 유지해 direct caller(`debug_gpu_single_run`, parity harness)와 호환성을 보존한다
 - `src/optimization/gpu/kernel.py`
   - 가용 GPU 메모리 조회 경로를 `nvidia-smi` -> `cupy.runtime.memGetInfo` 순서로 확장
   - 메모리 조회 불가/부족 원인을 배치 크기 계산 로그에 명확히 출력

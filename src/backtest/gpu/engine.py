@@ -114,6 +114,84 @@ def _get_single_sim_available_slots(*, positions_state: cp.ndarray, max_stocks: 
     return max(0, max_stocks_int - current_num_stocks)
 
 
+def prepare_market_data_for_gpu(
+    *,
+    all_data_gpu: cudf.DataFrame,
+    all_tickers: list,
+    trading_dates_pd_cpu: pd.DatetimeIndex,
+    execution_params: dict,
+) -> dict:
+    num_tickers = len(all_tickers)
+    ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
+    all_data_reset_idx = all_data_gpu.reset_index()
+    ticker_to_idx_gdf = cudf.Series(ticker_to_idx)
+    all_data_reset_idx["ticker_idx"] = (
+        all_data_reset_idx["ticker"].map(ticker_to_idx_gdf).fillna(-1).astype("int32")
+    )
+    all_data_reset_idx = all_data_reset_idx[all_data_reset_idx["ticker_idx"] >= 0]
+    missing_cheap_columns = ensure_cheap_score_columns(all_data_reset_idx)
+    if missing_cheap_columns:
+        missing_str = ", ".join(missing_cheap_columns)
+        print(
+            f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
+            "Fallback to zeros enabled."
+        )
+
+    candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
+        execution_params.get("candidate_source_mode", "tier"),
+        execution_params.get("use_weekly_alpha_gate", False),
+    )
+    print(
+        "Data prepared for GPU backtest. "
+        f"Mode: {candidate_source_mode}, weekly_gate={use_weekly_alpha_gate}"
+    )
+
+    monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq="MS"))
+    month_first_dates = monthly_grouper.first().dropna()
+    month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
+
+    data_tensors = create_gpu_data_tensors(all_data_reset_idx, all_tickers, trading_dates_pd_cpu)
+    close_prices_tensor = data_tensors["close"]
+    high_prices_tensor = data_tensors["high"]
+    low_prices_tensor = data_tensors["low"]
+
+    parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
+    if parity_mode == "strict":
+        close_prices_tensor = _forward_fill_asof_tensor(close_prices_tensor)
+        high_prices_tensor = _forward_fill_asof_tensor(high_prices_tensor)
+        low_prices_tensor = _forward_fill_asof_tensor(low_prices_tensor)
+
+    return {
+        "all_data_reset_idx": all_data_reset_idx,
+        "month_start_indices": month_start_indices,
+        "open_prices_tensor": data_tensors["open"],
+        "close_prices_tensor": close_prices_tensor,
+        "high_prices_tensor": high_prices_tensor,
+        "low_prices_tensor": low_prices_tensor,
+        "zero_signal_prices_gpu": cp.zeros(num_tickers, dtype=cp.float32),
+        "zero_signal_tiers_gpu": cp.zeros(num_tickers, dtype=cp.int8),
+    }
+
+
+def _validate_prepared_market_data(prepared_market_data: dict) -> None:
+    required_keys = (
+        "all_data_reset_idx",
+        "month_start_indices",
+        "open_prices_tensor",
+        "close_prices_tensor",
+        "high_prices_tensor",
+        "low_prices_tensor",
+        "zero_signal_prices_gpu",
+        "zero_signal_tiers_gpu",
+    )
+    missing_keys = [key for key in required_keys if key not in prepared_market_data]
+    if missing_keys:
+        raise ValueError(
+            "prepared_market_data missing required keys: "
+            + ", ".join(sorted(missing_keys))
+        )
+
+
 def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
@@ -126,6 +204,7 @@ def run_magic_split_strategy_on_gpu(
     debug_mode: bool = False,
     tier_tensor: cp.ndarray = None,  # [Issue #67]
     pit_universe_mask_tensor: cp.ndarray = None,
+    prepared_market_data: dict = None,
 ):
     # --- 1. 상태 배열 초기화 ---
     num_combinations = param_combinations.shape[0]
@@ -170,48 +249,35 @@ def run_magic_split_strategy_on_gpu(
     # 포맷: [day, sim_idx, stock_idx, capital_before, cost]
     log_buffer = cp.zeros((1000, 5), dtype=cp.float32)
     log_counter = cp.zeros(1, dtype=cp.int32)
-    
-    ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
-    all_data_reset_idx = all_data_gpu.reset_index()
-    ticker_to_idx_gdf = cudf.Series(ticker_to_idx)
-    all_data_reset_idx["ticker_idx"] = (
-        all_data_reset_idx["ticker"].map(ticker_to_idx_gdf).fillna(-1).astype("int32")
-    )
-    all_data_reset_idx = all_data_reset_idx[all_data_reset_idx["ticker_idx"] >= 0]
-    missing_cheap_columns = ensure_cheap_score_columns(all_data_reset_idx)
-    if missing_cheap_columns:
-        missing_str = ", ".join(missing_cheap_columns)
-        print(
-            f"[Warning] Missing cheap-score columns in GPU source ({missing_str}). "
-            "Fallback to zeros enabled."
-        )
-    print(
-        "Data prepared for GPU backtest. "
-        f"Mode: {candidate_source_mode}, weekly_gate={use_weekly_alpha_gate}"
-    )
+
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
     progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
     run_start_ts = time.time()
     processed_days = 0
 
+    if prepared_market_data is None:
+        if all_data_gpu is None:
+            raise ValueError("all_data_gpu is required when prepared_market_data is not provided.")
+        prepared_market_data = prepare_market_data_for_gpu(
+            all_data_gpu=all_data_gpu,
+            all_tickers=all_tickers,
+            trading_dates_pd_cpu=trading_dates_pd_cpu,
+            execution_params=execution_params,
+        )
+    else:
+        _validate_prepared_market_data(prepared_market_data)
+
+    all_data_reset_idx = prepared_market_data["all_data_reset_idx"]
+    month_start_indices = prepared_market_data["month_start_indices"]
+    open_prices_tensor = prepared_market_data["open_prices_tensor"]
+    close_prices_tensor = prepared_market_data["close_prices_tensor"]
+    high_prices_tensor = prepared_market_data["high_prices_tensor"]
+    low_prices_tensor = prepared_market_data["low_prices_tensor"]
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-    zero_signal_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
-    zero_signal_tiers_gpu = cp.zeros(num_tickers, dtype=cp.int8)
+    zero_signal_prices_gpu = prepared_market_data["zero_signal_prices_gpu"]
+    zero_signal_tiers_gpu = prepared_market_data["zero_signal_tiers_gpu"]
+
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
-    
-    #  각 월의 첫 거래일 인덱스를 미리 계산
-    monthly_grouper = trading_dates_pd_cpu.to_series().groupby(pd.Grouper(freq='MS'))
-    month_first_dates = monthly_grouper.first().dropna()
-    month_start_indices = trading_dates_pd_cpu.get_indexer(month_first_dates).tolist()
-    data_tensors = create_gpu_data_tensors(all_data_reset_idx, all_tickers, trading_dates_pd_cpu)
-    open_prices_tensor = data_tensors["open"]
-    close_prices_tensor = data_tensors["close"]
-    high_prices_tensor = data_tensors["high"]
-    low_prices_tensor = data_tensors["low"]
-    if parity_mode == "strict":
-        close_prices_tensor = _forward_fill_asof_tensor(close_prices_tensor)
-        high_prices_tensor = _forward_fill_asof_tensor(high_prices_tensor)
-        low_prices_tensor = _forward_fill_asof_tensor(low_prices_tensor)
     # 월 블록 루프 시작
     for i in range(len(month_start_indices)):
         start_idx = month_start_indices[i]
