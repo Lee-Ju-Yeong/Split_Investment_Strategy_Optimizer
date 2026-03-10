@@ -11,20 +11,20 @@
 
 - **목표**: 한국 주식 시장 데이터를 수집하고, CPU/GPU 백테스터로 분할 투자 전략을 검증하며, Walk-Forward Optimization(WFO)을 통해 과최적화를 방지하고 강건한 파라미터를 도출
 - **기술 스택**: Python, Pandas, CuPy, cuDF (NVIDIA CUDA), MySQL, Flask, OOP
-- **실행 환경**: GPU 사용 시 `conda activate rapids-env` 필요
+- **실행 환경**: GPU 사용 시 별도 수동 준비된 `rapids-env` 필요
 
 ---
 
 ## 2. Quick Commands
 
-> Last Verified: 2026-02-08
+> Last Verified: 2026-03-10
 > 엔트리포인트/CLI 옵션 변경 시 이 섹션을 즉시 갱신합니다.
 
 ```bash
 # 환경 설정
 conda env create -f environment.yml
 conda activate stock_optimizer_env  # CPU
-conda activate rapids-env           # GPU (CuPy, cuDF)
+conda activate rapids-env           # GPU (CuPy, cuDF, 별도 수동 준비)
 
 # 설정 파일
 cp config/config.example.yaml config/config.yaml  # 후 DB 정보 수정
@@ -50,8 +50,9 @@ python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-inte
 python -m src.main_backtest        # CPU 백테스트 (Source of Truth)
 python -m src.debug_gpu_single_run # GPU 단일 파라미터 백테스트
 
-# 파라미터 최적화
+# 파라미터 최적화 및 성능 측정
 python -m src.parameter_simulation_gpu     # GPU 대규모 파라미터 최적화
+python -m src.issue98_perf_measure --label issue98_baseline --runs 3  # GPU 시뮬레이션 성능 측정 (Throughput)
 
 # Walk-Forward Optimization
 python -m src.walk_forward_analyzer        # WFO 전체 파이프라인
@@ -83,8 +84,9 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `ticker_universe_batch.py`: 상폐 포함 PIT 유니버스 스냅샷/히스토리 배치
 - `ohlcv_batch.py`: `DailyStockPrice` 장기 백필 배치
 - `main_backtest.py`: CPU 백테스트 실행 (결과 검증 기준)
-- `parameter_simulation_gpu.py`: GPU 대규모 파라미터 최적화
+- `parameter_simulation_gpu.py`: GPU 대규모 파라미터 최적화 (Engine Wrapper)
 - `walk_forward_analyzer.py`: WFO 전체 프로세스 제어
+- `issue98_perf_measure.py`: GPU 시뮬레이션 Throughput 측정 및 프로파일링
 
 **CPU Backtester (OOP, Single-threaded):**
 - `backtest/cpu/backtester.py`: BacktestEngine - 시간 순회 엔진
@@ -93,9 +95,10 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `backtest/cpu/execution.py`: BasicExecutionHandler - 주문 체결, 수수료/호가 단위 처리
 
 **GPU Backtester (State Arrays, Vectorized):**
-- `backtest/gpu/engine.py`: GPU 시뮬레이션 엔진
+- `backtest/gpu/engine.py`: GPU 시뮬레이션 엔진 (Core Logic)
 - `backtest/gpu/logic.py`: GPU 매매 로직 커널
 - `debug_gpu_single_run.py`: GPU 단일 실행 및 CPU 결과 비교 검증
+- `candidate_runtime_policy.py`: CPU/GPU 공용 strict-only runtime candidate policy helper
 
 **Data Layer:**
 - `data_handler.py`: DataHandler - DB 조회 및 캐싱
@@ -111,6 +114,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 2. **State Arrays**: GPU에서는 객체 대신 `(N, ...)` 형태의 다차원 배열로 N개 시뮬레이션 상태 관리
 3. **데이터 텐서화**: 백테스트 루프 전 전체 가격 데이터를 GPU 텐서로 사전 로딩
 4. **실행 순서**: 매도 → 신규 매수 → 추가 매수 순으로 처리
+5. **Strict-only Governance**: 운영/승격용 런타임은 `candidate_source_mode='tier'`와 `strict_pit` 유니버스만 사용
 
 ---
 
@@ -129,9 +133,12 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `data_pipeline.paths`: `condition_search_files_folder`, `processed_data_folder`, `filtered_stocks_csv_path`
 - `data_pipeline.flags`: `use_gpu`, `update_company_info_db`, `process_hts_csv_files`, `load_filtered_stocks_csv`, `collect_ohlcv_data`, `force_recollect_ohlcv`, `calculate_indicators`
 
-**Strategy Parameters:**
+**Strategy Parameters (Strict-only Governance):**
 - `price_basis`: 가격 기준 (`adjusted` | `raw`)
 - `adjusted_price_gate_start_date`: 수정주가 모드 허용 시작일(기본 `2013-11-20`)
+- `universe_mode`: 유니버스 모드. 운영/승격 경로는 `strict_pit`, `optimistic_survivor`는 연구 전용
+- `candidate_source_mode`: 운영 runtime은 `tier`만 허용
+- `tier_hysteresis_mode`: 운영 runtime은 `strict_hysteresis_v1`만 허용
 - `max_stocks`: 최대 보유 종목 수
 - `order_investment_ratio`: 1회 주문당 투자 비율
 - `additional_buy_drop_rate`: 추가 매수 트리거 하락률
@@ -145,17 +152,17 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 **Note (`additional_buy_priority`):**
 - CPU 엔진(`src.backtest.cpu.strategy`)은 `lowest_order`가 아니면 하락폭 우선 분기로 처리합니다. 운영/문서 기본값은 `"highest_drop"`를 사용합니다.
 - GPU/최적화 스크립트는 내부적으로 `0/1`로 매핑합니다(0=`lowest_order`, 1=`highest_drop`).
-- `"biggest_drop"` 표기는 레거시 문서 표현으로 간주하며 신규 설정/문서에서는 사용하지 않습니다.
+- `candidate_source_mode != tier` 또는 `use_weekly_alpha_gate=True`는 strict-only runtime에서 즉시 오류입니다.
 
 **WFO Settings:**
 - `total_folds`: WFO Fold 수
 - `period_length_days`: 각 기간 길이 (일)
+- `cpu_certification_enabled`: GPU 결과 상위 N개를 CPU로 재검증할지 여부
 
 ### Database Tables
 
 - `DailyStockPrice`: OHLCV 원본 데이터
 - `CalculatedIndicators`: MA, ATR 등 기술적 지표
-- `WeeklyFilteredStocks`: 주간 필터링된 종목 유니버스 (Legacy)
 - `CompanyInfo`: 종목코드-회사명 매핑
 - `FinancialData`: 재무 팩터(PER/PBR/EPS/BPS/DPS/DIV/ROE)
 - `InvestorTradingTrend`: 투자자별 순매수 데이터
@@ -171,6 +178,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - **float32 정밀도**: CPU-GPU 일관성을 위해 명시적으로 float32 사용
 - **호가 단위**: 모든 체결가는 한국 주식 시장 호가 단위에 맞춰 올림 처리 (`adjust_price_up`)
 - **설정 중앙화**: 모든 매직 넘버는 `config.yaml`에서 관리, 하드코딩 금지
+- **Evidence SSOT**: 모든 전략 승격은 `todos/*.md`에 링크된 결과 리포트와 Parity 검증 증적을 동반해야 함
 
 ---
 
@@ -231,24 +239,23 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 ## 7. Current Mission
 
-> 기준일: 2026-02-17
+> 기준일: 2026-03-10
 > 단일 상태 소스: `TODO.md`
 
-### Immediate (P0: 운영 데이터 정합성)
-- `#66`: Financial/Investor/Tier 배치 운영 적용(백필 1회 + 일배치 전환)
-- 운영 DB 스키마 반영 및 인덱스 검증 (`create_tables`, `SHOW INDEX`)
-- `DailyStockPrice` 전기간 재적재 완료 + `docs/database/backfill_validation_runbook.md` 검증 실행
+### Immediate (P0: 운영 안정성 및 인프라)
+- `ShortSellingDaily` publication lag 정책 확정 및 PIT 리스크 제거
+- k3s 클러스터 배포 적합성 검토 및 서버 시뮬레이션 환경(GPU Job) 구축 연구
+- `DailyStockPrice` 전기간 재적재 데이터 정합성 최종 검증
 
-### Next (P1: 운영 안정화)
-- `#71`: pykrx 확장 데이터셋 + Tier v2 로드맵 실행
-- `#67`: PIT 조인 확장 + `tier<=2` fallback 조회
-- `#54`: 데이터 파이프라인 모듈화(DataPipeline) 및 레거시 스크립트 정리
-- `#93`: Wrapper deprecation/removal 단계적 정리
+### Next (P1: 성능 최적화 및 전략 고도화)
+- `#98`: GPU throughput refactor (slice 2a 측정 및 남은 루프 최적화)
+- `#68`: Robust WFO / Ablation 공식 스코어링 로직 고정
+- `#72`: Ticker continuity (합병/분할 시 포지션 상속) 설계 및 구현
 
-### Future (P2: 전략 고도화)
-- `#68`: 멀티팩터 랭킹 + WFO/Ablation
-- `#57`: 도메인 모델/캐시 통합(Position, CompanyInfo 캐시)
-- WFO 결과 심층 분석, Web UI 고도화, 실시간 매매 신호 생성
+### Future (P2: 연구 트랙)
+- `#101`: Deterministic Tier1 bias 완화 (Scenario-based selection)
+- `GPU-native WFO v2`: 데이터 텐서화 기반의 초고속 WFO 아키텍처 연구
+- Web UI 고도화 및 실시간 매매 신호 인터페이스 연동
 
 ---
 
