@@ -65,11 +65,15 @@
 - 성능/안정성 우선순위 재검토 메모: [review](todos/2026_03_06-performance-stability-review.md)
 - 백테스트/최적화 재검토 메모: [review](todos/2026_03_07-backtest-optimizer-review.md)
 - 사업화 포함 로드맵 점검 메모: [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md)
+- 사업모델/시장성 검토 메모: [review](todos/2026_03_10-business-model-marketability-review.md)
 
 ## Research & Review Notes
 - [로드맵/사업화 점검 메모](todos/2026_03_10-roadmap-commercialization-checkpoint.md)
   - 성격: `review`
   - 읽는 시점: 내부 검증 단계와 외부 출시 가능 시점을 다시 확인할 때
+- [사업모델/시장성 검토 메모](todos/2026_03_10-business-model-marketability-review.md)
+  - 성격: `review`
+  - 읽는 시점: 어떤 BM을 먼저 잡아야 하는지 또는 공개레포에 남길 사업 문서의 범위를 정할 때
 - [GPU-native WFO v2 design](todos/2026_03_06-gpu-native-wfo-v2-design.md)
   - 성격: `research`
   - 읽는 시점: 공식 경로 대체를 고민할 때
