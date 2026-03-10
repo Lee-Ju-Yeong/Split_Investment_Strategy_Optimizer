@@ -8,7 +8,7 @@
 > Gate status: `reference only`
 
 ## 1. Summary
-- What: `#98`을 바로 열어도 되는지 멀티에이전트로 다시 본 메모입니다.
+- What: `#98`을 바로 열어도 되는지 다시 점검한 메모입니다.
 - Why: 성능 최적화를 먼저 당기면 parity/PIT/strict scope가 흐려질 수 있기 때문입니다.
 - Final verdict: immediate `#98` promotion은 `No-Go`였습니다.
 - Next action: `#56 -> #67 -> #97 -> #98` 순서를 유지합니다.
