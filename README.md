@@ -1,144 +1,111 @@
-# 분할 투자 전략 최적화 (Split Investment Strategy Optimizer)
+# 매직스플릿 투자 전략 최적화 (Split Investment Strategy Optimizer)
 
-분할 매수/분할 매도(Magic Split) 전략을 데이터 파이프라인, CPU/GPU 백테스터, WFO 분석으로 검증하는 프로젝트입니다.
+**매직스플릿(Magic Split) 분할 투자 전략**의 백테스팅 및 GPU 기반 파라미터 최적화 시스템입니다. 한국 주식 시장의 방대한 데이터를 활용하여 과최적화를 방지하고, Walk-Forward Optimization(WFO)을 통해 실제 시장에서 작동하는 강건한 파라미터를 도출하는 것을 목표로 합니다.
 
-## 현재 상태 (2026-02 기준)
-- `PIT(Point-in-Time)` 보호 로직 적용: T-1 신호/룩어헤드 방지 (`src/data_handler.py`, `src/strategy.py`)
-- 재무/수급/Tier 스키마 확장 완료: `FinancialData`, `InvestorTradingTrend`, `DailyStockTier` (`src/db_setup.py`)
-- 배치 오케스트레이터 도입: 백필/일배치 분리 실행 (`src/pipeline_batch.py`)
-- Historical Universe Phase 1 추가: `TickerUniverseSnapshot`/`TickerUniverseHistory` 배치 (`src/ticker_universe_batch.py`)
-- 상세 로드맵과 진행 상태는 `TODO.md`를 기준으로 관리
+---
 
-## 아키텍처
-1. **Data Pipeline**: 종목/주가/지표 수집 (`src/main_script.py`)
-2. **Batch Precompute**: 재무/수급 수집 + Tier 사전 계산 (`src/pipeline_batch.py`)
-3. **Backtest (CPU/GPU)**: 전략 검증/파라미터 탐색 (`src/main_backtest.py`, `src/parameter_simulation_gpu.py`)
-4. **Robustness (WFO/Clustering)**: 강건 파라미터 분석 (`src/walk_forward_analyzer.py`)
+## 🚀 프로젝트 핵심 가치
 
-## 디렉토리
-- `src/`: 핵심 코드
-- `tests/`: 단위/통합/GPU 테스트 (`tests/README.md` 참고)
-- `config/`: `config.yaml` 템플릿
-- `docs/`: 전략/스키마 문서
-- `todos/`: 이슈 단위 작업 문서
+- **CPU=SSOT (Source of Truth)**: 모든 전략 승격 판단은 CPU 백테스터를 기준으로 하며, GPU 경로는 parity evidence로 검증합니다.
+- **Strict PIT-Oriented Runtime**: 핵심 runtime은 엄격한 시점별 유니버스와 수정주가 gate를 사용하며, lag-sensitive 데이터 정책은 별도 gate로 관리합니다.
+- **GPU Throughput Refactor**: 대규모 파라미터 탐색을 더 빠르게 만들기 위해 벡터화 hot path와 측정 도구를 지속적으로 개선하고 있습니다.
+- **Cluster-Oriented Design**: k3s/Kubernetes 기반 GPU job 운영은 연구 및 인프라 로드맵으로 관리하고 있습니다.
 
-## 빠른 시작
+---
+
+## 📅 현재 상태 (2026-03 기준)
+
+- **거버넌스 확정 (Issue #97)**: 운영 및 승격용 런타임 정책(Strict-only)을 확정하여 전략의 신뢰성을 확보했습니다.
+- **GPU 성능 개선 진행 (Issue #98)**: 랭킹 텐서 사전 계산 및 실행 루프 최적화를 중심으로 시뮬레이션 처리량(Throughput)을 계속 측정하고 개선하고 있습니다.
+- **데이터 인프라 운영 중**: 상폐 종목을 포함한 Historical Universe(PIT), 재무/수급/Tier 사전 계산 배치를 운영하고 있습니다.
+- **인프라 현대화**: 로컬 PC를 넘어 k3s 클러스터 기반의 서버급 GPU 자원 활용 연구가 진행 중입니다.
+
+---
+
+## 🛠 아키텍처 (5-Stage Pipeline)
+
+1.  **Data Pipeline**: pykrx 기반 OHLCV 및 기술적 지표 ETL (`src/main_script.py`)
+2.  **Batch Precompute**: PIT 유니버스, 재무/수급, 종목 Tier 사전 계산 (`src/pipeline_batch.py`)
+3.  **CPU Backtester**: OOP 기반의 정밀한 시뮬레이션 및 결과 검증 (`src/main_backtest.py`)
+4.  **GPU Optimizer**: 다차원 배열(State Arrays) 기반의 대규모 파라미터 시뮬레이션 (`src/parameter_simulation_gpu.py`)
+5.  **WFO Analysis**: Walk-Forward Optimization을 통한 전략 강건성 검증 (`src/walk_forward_analyzer.py`)
+
+---
+
+## ⚙️ 빠른 시작
 
 ### 1) 환경 구성
 ```bash
-# conda 권장 (CPU 기본 환경: environment.yml)
+# CPU 환경 (Standard)
 conda env create -f environment.yml
 conda activate stock_optimizer_env
 
-# GPU 실행 시 (별도 RAPIDS 환경)
+# GPU 환경 (RAPIDS/CUDA 필수, 별도 수동 준비)
 conda activate rapids-env
-
-# 또는 pip
-pip install -r requirement.txt
 ```
 
-### 2) 설정 파일
-- `config/config.example.yaml` -> `config/config.yaml` 복사 후 수정
-- 단일 설정 소스: `config/config.yaml` (필요 시 `MAGICSPLIT_CONFIG_PATH`로 override)
-  - `database`: DB 접속 정보
-  - `data_pipeline`: `src/main_script.py` 경로/플래그 (하드코딩 제거)
+`rapids-env`는 이 저장소의 `environment.yml`로 생성되지 않습니다. CUDA/RAPIDS가 설치된 호스트에서 별도로 준비된 GPU 환경을 사용합니다.
 
-### 3) DB 스키마 생성/갱신
+### 2) 설정 및 DB 초기화
 ```bash
+# 설정 파일 복사 및 수정
+cp config/config.example.yaml config/config.yaml
+
+# DB 스키마 생성
 python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"
 ```
 
-## 실행 명령
-
-> Last Verified: 2026-02-08
-
-### 데이터 파이프라인(OHLCV/지표)
+### 3) 주요 실행 명령
 ```bash
+# 데이터 파이프라인 및 지표 계산
 python -m src.main_script
-```
 
-### 재무·수급·Tier 배치 (신규)
-```bash
-# 초기 백필
-python -m src.pipeline_batch --mode backfill --start-date 20150101 --end-date <YYYYMMDD>
-
-# 일배치
+# 재무·수급·Tier 배치
+python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
 python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
-```
 
-### Historical Universe 배치 (신규, 상폐 포함 유니버스)
-```bash
-# Phase 1 백필 (권장: workers=1부터 시작)
-python -m src.ticker_universe_batch --mode backfill --start-date 20100101 --end-date <YYYYMMDD> --step-days 7 --workers 1
-
-# 일배치 (당일 스냅샷 + history 갱신)
+# PIT 유니버스 배치
+python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
 python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
-```
 
-### 백테스트 / 최적화 / 분석
-```bash
 # CPU 백테스트
 python -m src.main_backtest
 
-# GPU 파라미터 시뮬레이션
+# GPU 파라미터 최적화
 python -m src.parameter_simulation_gpu
 
-# WFO 분석
-python -m src.walk_forward_analyzer
-```
+# GPU 시뮬레이션 성능 측정 (`--label` 필수)
+python -m src.issue98_perf_measure --label issue98_baseline --runs 3
 
-### Web UI
-```bash
+# WFO 분석 파이프라인 실행
+python -m src.walk_forward_analyzer
+
+# 테스트 / 웹 UI
+python -m unittest discover -s tests -p 'test_*.py'
 python -m src.app
 ```
 
-## 데이터 스키마 핵심
-- 가격: `DailyStockPrice`
-- 지표: `CalculatedIndicators`
-- 유니버스: `WeeklyFilteredStocks`, `CompanyInfo`
-- PIT 유니버스(신규): `TickerUniverseSnapshot`, `TickerUniverseHistory`
-- 재무: `FinancialData`
-- 수급: `InvestorTradingTrend`
-- 사전 계산 Tier: `DailyStockTier`
+---
 
-스키마 상세: `docs/database/schema.md`
-Tier 규칙 상세(운영 기준): `docs/database/daily_stock_tier_rules.md`
+## 📋 현재 포커스
 
-## 테스트
-```bash
-python -m unittest discover -s tests
-```
+최신 우선순위와 상태는 `TODO.md`를 단일 소스(SSOT)로 관리합니다. README에는 현재 읽기 시작할 때 필요한 포커스만 요약합니다.
 
-권장(rapids-env):
-```bash
-conda run -n rapids-env python -m unittest discover -s tests
-```
+### 지금 먼저 볼 것
+- `ShortSellingDaily publication lag`: PIT 리스크가 남아 있어 정책 확정이 먼저 필요합니다.
+- `#98 GPU throughput refactor`: canonical baseline 재측정과 다음 hot-path 판단이 진행 중입니다.
+- `#68 Robust WFO / Ablation`: 공식 스코어링 로직을 고정하는 다음 단계입니다.
 
-테스트 분류/의존성: `tests/README.md`
+### 참고
+- `#72`, `#101`, `GPU-native WFO v2` 같은 backlog/research 항목은 README에서 고정 우선순위를 다시 쓰지 않고 `TODO.md`에서만 추적합니다.
 
-## 로드맵
-최신 우선순위는 `TODO.md`를 단일 소스로 유지합니다.
+---
 
-### P0 (신뢰도/데이터 정합성)
-- [x] #64 PIT 규칙 및 룩어헤드 방지
-- [x] #65 스키마/인덱스 확장
-- [ ] #66 재무·수급 수집기 분리 + Tier 사전 계산 배치 운영 적용(백필/일배치)
-- [x] #70 상폐 포함 Historical Universe 구축 (Phase 1/2 코드 반영 및 운영 검증 완료)
+## 📚 주요 문서
+- **전략 원칙**: [MAGIC_SPLIT_STRATEGY_PRINCIPLES.md](docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md)
+- **DB 스키마**: [schema.md](docs/database/schema.md)
+- **테스트 가이드**: [tests/README.md](tests/README.md)
+- **작업 백로그**: [TODO.md](TODO.md)
 
-### P1 (운영 안정화)
-- [ ] #67 Tier fallback/PIT 조인 고도화
-- [ ] #53 설정 소스 표준화
-- [ ] #54 데이터 파이프라인 모듈화
-- [ ] #55 구조화 로깅
-
-### P2 (전략 고도화)
-- [ ] #68 멀티팩터 랭킹 + WFO/Ablation
-- [ ] #56 CPU/GPU Parity 하네스 강화
-
-## 문서 맵
-- 전략 원칙: `docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md`
-- DB 스키마: `docs/database/schema.md`
-- 운영 문서 정책: `docs/operations/README.md`
-- KRX 핫스팟/DB 터널 Runbook(공개판): `docs/operations/krx_hotspot_db_tunnel_runbook.md`
-- 작업 백로그: `TODO.md`
-- 이슈 작업 문서: `todos/`
+---
+**Maintainer**: 퀀트-J (Senior Quant System Developer)
