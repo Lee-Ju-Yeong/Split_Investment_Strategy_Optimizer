@@ -1115,3 +1115,86 @@ cat "$ISSUE98_OUTDIR/summary.json"
   - 현재 작업 트리는 `slice2a`를 유지한다.
   - 다만 `slice2a`는 baseline 대비 throughput win이 확인되지 않았으므로 아직 승격/병합 완료 상태는 아니다.
   - `PR-98D`는 actual artifact gate로 유지하고, 다음 승격 판단은 `large-batch / long-window + strict parity` 증적까지 모은 뒤 다시 내린다.
+
+### 19-15. `issue98_perf_measure` candidate smoke 확인 (2026-03-08)
+- 목적:
+  - 새 측정 CLI가 실제 GPU 실행에서도 `env.txt` / `input_snapshot.json` / `run*.log` / `run*.gpu.csv` / `summary.json`을 한 세트로 남기는지 확인한다.
+- artifact:
+  - smoke run: `results/issue98_measure/pr98_smoke_candidate_janfeb2024_cov020_20260308_174843/summary.json`
+- 결과:
+  - 산출물: `env.txt`, `input_snapshot.json`, `run1.log`, `run1.gpu.csv`, `summary.json` 생성 확인
+  - `run1 exit_code=0`
+  - `kernel_s=1208.90s`
+  - `wall_clock_s=1247.33s`
+  - `batch_count=4`
+  - `oom_retry=false`
+- 해석:
+  - smoke 목적이었던 “artifact 형식 검증”은 통과했다.
+  - 이 수치는 1-run smoke이므로 baseline delta 판단이나 승격 근거로 사용하지 않는다.
+- 다음 작업:
+  - large-workload는 기존 canonical gate와 분리된 탐색 트랙으로 취급한다.
+  - 초기 권장은 `long-window only` 또는 `large-batch only` 중 한 축만 바꾼 새 perf config를 만든 뒤 candidate 1-run smoke를 먼저 보는 것이었다.
+  - 이후 사용자 결정으로 `long-window + large-batch combo`를 먼저 수행하는 research+screening lane을 채택했다.
+  - combo config 초안: `config/config.issue98_perf_combo_2017_2021_research044.yaml`
+  - 이 combo lane은 실제 투자 후보 파라미터 mining과 throughput screening을 겸하지만, canonical perf gate 승격 근거로 직접 사용하지 않는다.
+  - strict parity는 existing parity config(`config.parity_research_043.yaml` 우선, 필요 시 `044`)로 별도 재검증한다.
+
+### 19-16. long-window + large-batch combo mining report (2026-03-10)
+- 목적:
+  - `long-window + large-batch` candidate combo run을 performance stress + parameter mining lane으로 사용하고, 결과 CSV를 재현 가능한 report artifact로 고정한다.
+- source artifacts:
+  - combo measure summary: `results/issue98_measure/pr98_slice2a_combo_2017_2021_cov020_20260308_183948/summary.json`
+  - standalone results CSV: `results/standalone_simulation_results_20260310_003636.csv`
+  - generated mining report JSON: `results/issue98_measure/pr98_slice2a_combo_2017_2021_cov020_20260308_183948/mining_report/combo_mining_report.json`
+  - generated mining report Markdown: `results/issue98_measure/pr98_slice2a_combo_2017_2021_cov020_20260308_183948/mining_report/combo_mining_report.md`
+  - report generator: `python -m src.analysis.issue98_combo_mining_report`
+- run health:
+  - `run1 exit_code=0`
+  - `median_kernel_s=93515.12s` (`25.98h`)
+  - `median_wall_s=107808.0s` (`29.95h`)
+  - `batch_count=31`
+  - `oom_retry=true`
+  - retry trace:
+    - batch 1: `1200 -> 600`
+    - batch 4: `600 -> 300 -> 150 -> 75`
+- 판정:
+  - 이 run은 `candidate combo workload` 완주에는 성공했지만, 공격적 cap(`1200`)이 실제 안정 batch가 아님이 확인됐다.
+  - 따라서 본 artifact는 `perf proof`가 아니라 `research mining artifact`로 채택한다.
+  - same-workload baseline 대비 throughput 입증은 여전히 별도 baseline combo run이 필요하다.
+- report 재생성 명령:
+  - `python -m src.analysis.issue98_combo_mining_report --csv-path results/standalone_simulation_results_20260310_003636.csv --report-dir results/issue98_measure/pr98_slice2a_combo_2017_2021_cov020_20260308_183948/mining_report`
+- metric distribution (`calmar_ratio` 기준):
+  - 전체 `3600` row
+  - `calmar_ratio`: `min=-0.0483`, `p25=0.1249`, `median=0.1736`, `p75=0.2339`, `max=0.5106`
+  - `cagr`: `min=-0.0286`, `median=0.0926`, `max=0.2161`
+  - `mdd`: `min=-0.6468`, `median=-0.5327`, `max=-0.3804`
+- main-effect 요약 (`mean calmar spread` 기준):
+  - strongest:
+    - `order_investment_ratio`: spread `0.1172` (`0.0350` best, `0.0150` worst)
+    - `max_inactivity_period`: spread `0.0892` (`126` best, `504` worst)
+    - `sell_profit_rate`: spread `0.0739` (`0.2500` best mean, `0.1600` worst mean)
+  - mid:
+    - `additional_buy_priority`: spread `0.0421` (`0` > `1`)
+    - `additional_buy_drop_rate`: spread `0.0413` (`0.0500` best mean, `0.0900` worst mean)
+  - weak:
+    - `stop_loss_rate`: spread `0.0241` (`-0.9000` > `-0.6000`)
+    - `max_splits_limit`: spread `0.0014` (`10` ~= `15`)
+- top 5% concentration:
+  - `order_investment_ratio`: `0.0350`가 `41.1%`, `0.0300`까지 합치면 `73.3%`
+  - `max_inactivity_period`: `126`이 `85.0%`
+  - `additional_buy_priority`: `0`이 `72.2%`
+  - `additional_buy_drop_rate`: `0.05~0.07` 구간이 `87.2%`
+  - `sell_profit_rate`: `0.25`가 최빈이지만 `0.10`도 `25.0%`로 강한 보조 peak를 보인다.
+  - `stop_loss_rate`는 평균 기준으로는 `-0.9000`이 낫지만, top 5% 빈도는 `-0.6000`이 `55.0%`로 더 높다. 즉 단일 mean effect만으로 닫기보다 interaction 후보로 남겨야 한다.
+- immediate shortlist for parity canary:
+  - `A`: `order_investment_ratio=0.0350`, `additional_buy_drop_rate=0.0500`, `sell_profit_rate=0.2500`, `additional_buy_priority=0`, `stop_loss_rate=-0.9000`, `max_splits_limit=10`, `max_inactivity_period=252`
+  - `B`: `order_investment_ratio=0.0250`, `additional_buy_drop_rate=0.0500`, `sell_profit_rate=0.2500`, `additional_buy_priority=0`, `stop_loss_rate=-0.9000`, `max_splits_limit=10`, `max_inactivity_period=252`
+  - `C`: `order_investment_ratio=0.0300`, `additional_buy_drop_rate=0.0700`, `sell_profit_rate=0.1000`, `additional_buy_priority=0`, `stop_loss_rate=-0.9000`, `max_splits_limit=10`, `max_inactivity_period=126`
+  - `D`: `order_investment_ratio=0.0300`, `additional_buy_drop_rate=0.0500`, `sell_profit_rate=0.1900`, `additional_buy_priority=0`, `stop_loss_rate=-0.6000`, `max_splits_limit=10`, `max_inactivity_period=126`
+- why these four:
+  - `A/B`는 top-calmar plateau를 대표한다.
+  - `C`는 `126-day inactivity` + `0.10 sell` 쪽 strong local mode를 대표한다.
+  - `D`는 top-5% 빈도에서 살아남은 `-0.6000` challenger를 남겨 mean-effect vs interaction tension을 검증하기 위한 후보다.
+- continuation rule:
+  - future combo CSV가 생기면 동일 스크립트로 `combo_mining_report.{json,md}`를 다시 생성한다.
+  - report 해석은 `mining / sensitivity / parity shortlist` 용도로만 사용하고, `Issue #98 perf gate` 판단은 별도 baseline combo summary와 함께 내린다.
