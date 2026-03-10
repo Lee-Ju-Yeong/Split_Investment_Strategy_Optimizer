@@ -336,7 +336,7 @@
   - `tests/test_gpu_kernel_batch_size.py` (`nvidia-smi`/runtime fallback 순서 검증)
   - 실행: `conda run -n rapids-env python -m unittest tests.test_pipeline_batch tests.test_ohlcv_batch tests.test_financial_collector_universe tests.test_gpu_parameter_batch_fallback tests.test_gpu_kernel_batch_size`
 
-## 11. Tier-only 병목 검토 메모 (멀티에이전트, 2026-02-18)
+## 11. Tier-only 병목 추가 검토 메모 (2026-02-18)
 - 검토 범위: `candidate_source_mode=tier` 경로
 - 제약: CPU=SSOT, strict parity `mismatch=0`, 전략/체결 규칙 불변
 - 관찰 요약:

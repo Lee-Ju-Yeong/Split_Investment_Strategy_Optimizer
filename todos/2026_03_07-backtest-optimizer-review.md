@@ -1,4 +1,4 @@
-# Review Memo: Gemini + Codex 백테스트/최적화 재검토
+# Review Memo: 백테스트/최적화 재검토
 
 > Type: `review`
 > Status: `reference`
