@@ -167,5 +167,13 @@ docs/operations/*values*.md
 config/ops.local.*
 *.secrets.yaml
 
+# Private business / legal notes for public repo hygiene
+docs/business/private/
+docs/business/*.local.md
+docs/business/*confidential*.md
+docs/legal/private/
+docs/legal/*.local.md
+docs/legal/*confidential*.md
+
 # Codex local settings
 .codex/
