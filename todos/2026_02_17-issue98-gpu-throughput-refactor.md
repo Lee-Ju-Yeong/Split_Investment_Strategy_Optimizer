@@ -1,17 +1,17 @@
 # Issue #98: GPU Throughput Refactor
 
 > Type: `implementation`
-> Status: `in_progress`
+> Status: `ready_for_mr`
 > Priority: `P1`
-> Last updated: 2026-03-08
+> Last updated: 2026-03-12
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; canonical Jan-Feb throughput baseline fixed; ranking parity fixtures fixed; PR-98D artifact guard active; slice 2a retained locally (baseline promotion pending)`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput win reconfirmed on current HEAD; PR-98D artifact guard active; current HEAD strict parity canary re-passed; ready for MR`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
-- Current status: `slice 2a`는 canonical remeasure에서 baseline보다 약간 느렸지만, `slice 1 only` rollback canonical 2-run이 더 크게 느려서 현재 작업 트리는 `slice 2a`를 유지합니다. 다만 baseline 대비 throughput win은 아직 증명되지 않아 승격은 보류입니다.
-- Next action: `PR-98D`는 actual `summary.json` artifact 기반으로 고정했고, 다음 판단은 `large-batch / long-window + strict parity` 증적에서 내립니다.
+- Current status: current HEAD 기준 canonical `Jan-Feb 2024` 2-run에서 baseline 대비 약 `+8.5%` throughput win을 다시 확인했고, current HEAD 기준 `A-D` strict parity canary도 `0 mismatch`로 재통과했습니다. 이번 라운드의 `#98` 핵심 목표는 기술적으로 닫힌 상태입니다.
+- Next action: 문서/대시보드를 최신 증적으로 동기화하고 MR을 생성합니다. 더 공격적인 `P-008/P-009` 벡터화는 `#98` close blocker가 아니라 follow-up backlog로 분리 검토합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -20,13 +20,15 @@
   - GPU 쪽: batch마다 같은 market-data tensor를 다시 만들지 않게 했습니다.
 - 즉, “결과를 바꾸지 않는 안전한 최적화”는 먼저 깔아둔 상태입니다.
 
-### 2-2. 지금 보류 중인 것은 무엇인가
-- 보류 중인 것은 `remaining execution-loop hot-path reduction`입니다.
-- 지금 남은 후보는 주로 `additional_buy`의 남은 rank loop 축소, 더 공격적인 `new-entry` loop 축소, 그리고 `PR-98D` 성능 회귀 가드입니다.
-- 이 중 GPU execution loop는 속도 이득이 더 클 가능성이 있지만, 후보 순서와 자본 차감 규칙에 닿기 때문에 `PC (Parity-Coupled)`입니다.
+### 2-2. 지금 남은 것은 무엇인가
+- 이번 `#98` close 기준으로는 필수 개발 항목이 남아 있지 않습니다.
+- 다만 follow-up backlog는 남아 있습니다.
+  - 더 공격적인 `new-entry` full vectorization
+  - `cp.lexsort` 기반 후보 정렬 치환
+  - CPU I/O / cache / engine reuse 계열 PO 정리
 - 쉬운 말로 하면:
-  - 이미 끝난 것: “같은 계산을 두 번 하지 않게 정리”
-  - 아직 보류한 것: “매수 실행 루프 자체를 더 공격적으로 줄이는 일”
+  - 이번에 끝난 것: “현재 경로를 실제로 더 빠르게 만들고, CPU와도 다시 맞는지 확인”
+  - 이후로 넘길 것: “더 욕심내는 다음 최적화”
 
 ### 2-3. 왜 아직 바로 안 들어가나
 - 이 항목은 빨라질 가능성은 크지만, CPU와 GPU가 같은 후보를 같은 순서로 뽑는지까지 다시 증명해야 합니다.
@@ -36,8 +38,8 @@
 - 이 프로젝트는 CPU가 기준(`SSOT`)이므로, 두 질문을 분리해서 확인해야 합니다.
 
 ### 2-4. 그래서 현재 상태를 한 줄로 말하면
-- `무기한 보류`가 아니라 `Ready-after-remeasure`입니다.
-- 즉, “하지 않는 일”이 아니라 “이번 slice의 실제 개선폭을 먼저 확인한 뒤 여는 일”입니다.
+- `Ready for MR`입니다.
+- 즉, 이번 라운드의 성능/정합 질문은 닫혔고, 남은 것은 최종 문서화와 merge 절차입니다.
 
 ### 2-5. 이번 단계 전제조건 2개
 - 조건 1: `prepared_market_data` slice의 target-hardware canonical 2-run baseline
@@ -1341,3 +1343,69 @@ cat "$ISSUE98_OUTDIR/summary.json"
   - 이번 변경은 candidate ordering을 바꾸지 않는 내부 pruning이라 correctness-safe에 가깝다.
   - 아직 canonical throughput remeasure는 하지 않았고, 이번 턴의 목표는 `P-008` 경로를 parity-safe하게 잘게 쪼개는 것이다.
   - 다음 선택지는 `new-entry` 추가 축소 계측 또는 남은 `P-008` 순차 스캔의 더 공격적인 벡터화 검토다.
+
+### 19-22. current HEAD canonical final remeasure (2026-03-12)
+- 목적:
+  - latest hot-path slice까지 반영된 current HEAD 기준으로 canonical `Jan-Feb 2024` throughput 상태를 최종 확인한다.
+- execution:
+  - command:
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.issue98_perf_measure --config-path config/config.issue98_perf_multibatch_janfeb_2024_research020.yaml --canonical-profile issue98_janfeb2024_multibatch_research020 --label pr98_head_final_janfeb2024_cov020 --runs 2`
+- artifacts:
+  - current HEAD summary: `results/issue98_measure/pr98_head_final_janfeb2024_cov020_20260312_223231/summary.json`
+  - baseline summary: `results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json`
+- result summary:
+  - current HEAD:
+    - `median_kernel_s = 1011.795`
+    - `median_wall_s = 1049.52`
+    - `batch_count = 4 / 4`
+    - `oom_retry = false / false`
+  - baseline:
+    - `median_kernel_s = 1106.09`
+    - `median_wall_s = 1146.35`
+- improvement vs baseline:
+  - kernel:
+    - delta: `-94.295s`
+    - improvement: `+8.52%`
+  - wall:
+    - delta: `-96.83s`
+    - improvement: `+8.45%`
+- interpretation:
+  - current HEAD는 canonical lane에서도 baseline 대비 명확한 throughput win을 보였다.
+  - 따라서 earlier `slice 2a baseline pending` 상태는 더 이상 현재 HEAD 판정에 적용되지 않는다.
+
+### 19-23. current HEAD parity canary reconfirmation (2026-03-12)
+- 목적:
+  - hot-path 추가 slice 이후에도 `A-D` strict parity canary가 current HEAD에서 그대로 유지되는지 재확인한다.
+- execution:
+  - runner:
+    - `results/issue98_measure/parity_canary/run_issue98_parity_canary_ad_all.sh`
+- artifact:
+  - report: `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312_report_all.json`
+- result summary:
+  - `failed=0`, `passed=4`
+  - `total_mismatches=0`
+  - `max_abs_diff=0.0`
+  - `curve_level_parity_zero_mismatch=true`
+  - `decision_level_parity_zero_mismatch=true`
+  - `promotion_blocked=false`
+  - `evidence_gaps=[]`
+- interpretation:
+  - current HEAD에서도 `A-D` 4개는 CPU/GPU strict parity를 그대로 유지했다.
+  - 따라서 이번 라운드 hot-path 변경은 현재 증적 범위 안에서 parity blocker를 만들지 않았다.
+
+### 19-24. close recommendation for `#98` (2026-03-12)
+- 결론:
+  - 이번 라운드의 `#98` 핵심 목표는 닫혔다고 본다.
+- why:
+  - current HEAD canonical lane에서 baseline 대비 throughput win이 다시 확인되었다.
+  - current HEAD strict parity canary도 재통과했다.
+  - `PR-98D` artifact guard가 이미 활성화되어 이후 regression도 자동 감시 가능하다.
+- close scope:
+  - `#98`은 “이번 tranche의 throughput refactor + evidence capture + parity reconfirmation”까지를 완료 범위로 본다.
+- deferred follow-up backlog:
+  - 더 공격적인 `P-008` full vectorization
+  - `P-009` 후보 정렬 GPU 치환
+  - CPU I/O / cache / engine reuse 계열 PO 정리
+- next action:
+  - final doc sync 후 MR 생성
+  - merge 뒤 `#98` close

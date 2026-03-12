@@ -1,6 +1,6 @@
 # Project Status Dashboard
 
-> Last updated: 2026-03-10
+> Last updated: 2026-03-12
 > Role: 이 파일은 현재 진행 중인 일을 빠르게 파악하는 관제판입니다.
 > Rule: 상세 계획, 작업 로그, 증적은 각 `todos/*.md` 문서가 담당합니다.
 
@@ -30,14 +30,14 @@
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `외부 출시 경계` | Open | 내부 검증 단계와 외부 출시 단계를 분리해서 관리해야 함 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | In Progress | `PR-98C` slice 1 + slice 2 반영 완료 후 canonical Jan-Feb baseline 고정. `PR-98B-2` slice 1(rank tensor precompute/gather) + slice 2a(additional-buy run-owner host-sync 제거)까지 반영됨 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | Ready for MR | current HEAD 기준 canonical `Jan-Feb 2024` 2-run에서 baseline 대비 약 `+8.5%` throughput win 확인, `A-D` strict parity canary도 current HEAD에서 재통과 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
-| `P1` | `#98` GPU throughput refactor | In Progress | canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run baseline 확보 후 ranking parity fixture, candidate rank tensor precompute/gather, additional-buy run-owner host-sync 제거까지 반영됨 | same canonical profile로 `slice 2a`를 재측정한 뒤, 남은 execution-loop hot path를 더 줄일지 `PR-98D`를 먼저 고정할지 확정 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `P1` | `#98` GPU throughput refactor | Ready for MR | current HEAD 기준 canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run이 baseline 대비 개선됐고, current HEAD `A-D` strict parity canary도 `0 mismatch`로 재확인됨 | final doc sync 후 MR 생성, merge 뒤 `#98` close. 더 공격적인 `P-008/P-009`는 follow-up backlog로 분리 검토 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Roadmap Checkpoint (2026-03-10)
