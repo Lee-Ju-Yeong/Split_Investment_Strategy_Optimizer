@@ -1198,3 +1198,146 @@ cat "$ISSUE98_OUTDIR/summary.json"
 - continuation rule:
   - future combo CSV가 생기면 동일 스크립트로 `combo_mining_report.{json,md}`를 다시 생성한다.
   - report 해석은 `mining / sensitivity / parity shortlist` 용도로만 사용하고, `Issue #98 perf gate` 판단은 별도 baseline combo summary와 함께 내린다.
+
+### 19-17. same-workload combo baseline 1-run 비교 확정 (2026-03-12)
+- 목적:
+  - candidate combo run과 baseline combo run을 동일 workload에서 1-run씩 비교해 exploratory combo perf question을 닫는다.
+- artifacts:
+  - candidate summary: `results/issue98_measure/pr98_slice2a_combo_2017_2021_cov020_20260308_183948/summary.json`
+  - baseline summary: `results/issue98_measure/pr98_baseline_combo_2017_2021_cov020_20260310_102234/summary.json`
+  - baseline env: `results/issue98_measure/pr98_baseline_combo_2017_2021_cov020_20260310_102234/env.txt`
+- baseline provenance:
+  - `git_head=b4204bb`
+  - config sha matches candidate combo config (`config/config.issue98_perf_combo_2017_2021_research044.yaml`)
+  - `oom_retry=false`
+  - `batch_count=3`
+- candidate vs baseline:
+  - kernel:
+    - baseline: `208560.03s`
+    - candidate: `93515.12s`
+    - delta: `-115044.91s`
+    - improvement: `+55.16%`
+  - wall:
+    - baseline: `208740.0s`
+    - candidate: `107808.0s`
+    - delta: `-100932.0s`
+    - improvement: `+48.35%`
+- interpretation:
+  - candidate run은 `oom_retry=true`, `batch_count=31`로 불안정했지만, 그 조건에서도 baseline보다 큰 폭으로 빨랐다.
+  - baseline은 `oom_retry=false`, `batch_count=3`으로 안정적으로 완주했음에도 wall/kernel 모두 candidate보다 훨씬 느렸다.
+  - 따라서 `same-workload exploratory combo lane`에서는 candidate(`slice2a` head)가 baseline(`b4204bb`) 대비 명확한 throughput win을 보였다고 판단한다.
+  - 이 결론은 `canonical Jan-Feb gate`를 대체하지 않는다. 즉, canonical gate는 별도 트랙으로 유지하되, combo lane의 질문은 충분히 닫혔다.
+- next step:
+  - perf question을 exploratory lane 기준으로 닫았으므로, 다음 우선순위는 `19-16`에서 고른 parity canary shortlist `A-D`를 CPU SSOT 기준으로 검증하는 것이다.
+
+### 19-18. parity canary shortlist `A-D` 실행 결과 (2026-03-12)
+- 목적:
+  - combo mining shortlist `A-D`가 strict PIT short-window에서도 CPU SSOT와 curve-level parity를 유지하는지 확인한다.
+- execution assets:
+  - config: `config/config.issue98_parity_canary_20251201_20260131_strict.yaml`
+  - params csv: `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312.csv`
+  - runner: `results/issue98_measure/parity_canary/run_issue98_parity_canary_ad.sh`
+- report artifacts:
+  - summary report: `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312_report.json`
+  - representative decision evidence: `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312_report.decision_evidence_row0.json`
+- result summary:
+  - `failed=0`, `passed=4`
+  - `total_mismatches=0`
+  - `max_abs_diff=0.0`
+  - `curve_level_parity_zero_mismatch=true`
+  - `policy_ready_for_release_gate=true`
+  - `decision_level_parity_zero_mismatch=false`
+  - `promotion_blocked=true`
+  - `promotion_block_reasons=['decision_level_evidence_partial(1/4)']`
+- row-level:
+  - `A`: `mismatch_count=0`
+  - `B`: `mismatch_count=0`
+  - `C`: `mismatch_count=0`
+  - `D`: `mismatch_count=0`
+- interpretation:
+  - shortlist `A-D`는 short-window strict PIT canary에서 equity curve 기준으로는 전부 CPU/GPU 완전 일치했다.
+  - 다만 이번 실행은 `decision_evidence_mode=representative`였기 때문에 event-level evidence는 row0 한 건만 수집되었고, release-grade decision gate는 아직 닫히지 않았다.
+  - 따라서 현재 상태는 `curve-level canary pass / decision-level release gate partial`로 기록한다.
+- next step:
+  - 동일 입력물로 `decision_evidence_mode=all` 재실행해 `4/4` row의 event-level evidence를 수집한다.
+  - runner: `results/issue98_measure/parity_canary/run_issue98_parity_canary_ad_all.sh`
+  - 그 결과까지 `decision_level_parity_zero_mismatch=true`이면 combo shortlist `A-D`는 strict parity 후보군으로 승격하고, 이후 WFO/추가 OOS 검증으로 넘긴다.
+
+### 19-19. parity canary shortlist `A-D` decision evidence all 완료 (2026-03-12)
+- 목적:
+  - `19-18`의 partial decision evidence 상태를 닫고, shortlist `A-D`의 release-grade strict parity readiness를 확인한다.
+- execution asset:
+  - runner: `results/issue98_measure/parity_canary/run_issue98_parity_canary_ad_all.sh`
+- report artifacts:
+  - summary report: `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312_report_all.json`
+- result summary:
+  - `failed=0`, `passed=4`
+  - `total_mismatches=0`
+  - `max_abs_diff=0.0`
+  - `curve_level_parity_zero_mismatch=true`
+  - `decision_level_parity_zero_mismatch=true`
+  - `event_level_diff_collected=true`
+  - `promotion_blocked=false`
+  - `decision_evidence_rows_checked=4`
+  - `decision_evidence_rows_passed=4`
+  - `decision_evidence_all_rows_covered=true`
+  - `decision_evidence_release_fields_complete=true`
+  - `evidence_gaps=[]`
+- interpretation:
+  - shortlist `A-D`는 short-window strict PIT canary에서 curve-level뿐 아니라 decision-level evidence까지 `4/4` 모두 통과했다.
+  - 따라서 현재 기준으로 `A-D`는 `strict parity candidate set`으로 승격 가능하다.
+  - combo mining에서 확보한 후보군 중 최소 `A-D`는 CPU SSOT와 의미론적으로도 맞는 쪽으로 방어되었다고 본다.
+- next step:
+  - `A-D`를 다음 WFO / 추가 OOS 검증 lane의 우선 후보군으로 사용한다.
+  - 필요 시 `A-D` 외 top plateau 후보를 같은 harness로 추가 검증해 shortlist를 확장한다.
+
+### 19-20. PR-98C small PO slice: zero workspace reuse (2026-03-12)
+- 목적:
+  - 장기 구간에서 반복되는 `cp.zeros(...)` 재할당을 더 줄여 allocator churn을 완화한다.
+- scope:
+  - `src/backtest/gpu/engine.py`
+  - `src/backtest/gpu/logic.py`
+  - `tests/test_backtest_strategy_gpu.py`
+- change summary:
+  - 월초 평가용 초기 price vector를 매번 새로 만들지 않고 기존 `zero_signal_prices_gpu`를 재사용한다.
+  - `_process_sell_signals_gpu(...)`에 optional `sell_mask_workspace`를 추가해, 당일 매도 mask를 일별 재할당 대신 재사용 가능한 버퍼로 처리한다.
+  - early-return 경로(`signal_day_idx < 0`, `no positions`)에서도 workspace가 stale 상태로 남지 않도록 매 호출 시 `False`로 초기화한다.
+- why this slice:
+  - blast radius가 작고 의미론을 바꾸지 않는 `PO (Perf-Only)` 변경이다.
+  - 남아 있던 `P-015` 계열 allocator churn을 정리하는 용도다.
+- validation:
+  - command:
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu tests.test_gpu_new_entry_signals -v`
+  - result:
+    - `22 tests OK`
+  - added guards:
+    - `test_sell_reuses_workspace_and_resets_it_when_signal_day_is_missing`
+    - `test_sell_reuses_workspace_and_resets_it_when_no_positions_exist`
+- interpretation:
+  - 이번 slice는 throughput 대폭 개선을 노린 변경이 아니라, 장기 구간에서 불필요한 zero allocation을 줄이는 housekeeping 성격의 hot-path cleanup이다.
+  - 다음 큰 후보는 여전히 `P-008` 신규 진입 루프의 순차 스캔 축소다.
+
+### 19-21. PR-98B-3 small slice 1: active simulation pruning in new-entry loop (2026-03-12)
+- 목적:
+  - `P-008` 신규 진입 hot path에서 후보 순서는 그대로 두고, 이미 슬롯/주문 예산이 소진된 simulation까지 매 후보마다 다시 검사하는 비용을 줄인다.
+- scope:
+  - `src/backtest/gpu/logic.py`
+  - `tests/test_gpu_new_entry_signals.py`
+- change summary:
+  - `_process_new_entry_signals_gpu(...)` 내부에 `active_sim_indices`를 도입했다.
+  - 신규 진입 후보는 기존처럼 입력 순서대로 순차 처리하되, 각 스텝에서 실제로 아직 신규 진입 가능성이 남아 있는 simulation만 검사한다.
+  - 매수 후 `temp_capital`과 `temp_available_slots`를 즉시 갱신한 뒤 다음 후보 진입 전에 active set을 다시 계산한다.
+- why this slice:
+  - CPU parity 계약(후보 순서, 자본 차감, 슬롯 소진 시점)은 유지하면서 전체 simulation 축 재평가를 줄일 수 있는 중간 단계다.
+  - 전면 벡터화보다 blast radius가 작아서 `P-008`의 첫 안전 slice로 적합하다.
+- validation:
+  - command:
+    - `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_new_entry_signals tests.test_backtest_strategy_gpu -v`
+  - result:
+    - `23 tests OK`
+  - added guard:
+    - `test_active_sim_pruning_keeps_cpu_parity_for_budget_and_slot_exhaustion`
+- interpretation:
+  - 이번 변경은 candidate ordering을 바꾸지 않는 내부 pruning이라 correctness-safe에 가깝다.
+  - 아직 canonical throughput remeasure는 하지 않았고, 이번 턴의 목표는 `P-008` 경로를 parity-safe하게 잘게 쪼개는 것이다.
+  - 다음 선택지는 `new-entry` 추가 축소 계측 또는 남은 `P-008` 순차 스캔의 더 공격적인 벡터화 검토다.

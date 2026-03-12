@@ -311,6 +311,7 @@ def run_magic_split_strategy_on_gpu(
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)
     zero_signal_prices_gpu = prepared_market_data["zero_signal_prices_gpu"]
     zero_signal_tiers_gpu = prepared_market_data["zero_signal_tiers_gpu"]
+    zero_sell_mask_gpu = cp.zeros((num_combinations, num_tickers), dtype=cp.bool_)
 
     # --- 2.  메인 루프를 월 블록 단위로 변경 ---
     # 월 블록 루프 시작
@@ -320,7 +321,7 @@ def run_magic_split_strategy_on_gpu(
         
         # 월별 투자금 재계산 로직을 월 블록 루프의 시작점으로 이동
         # 평가 기준가는 월 블록 시작일의 전일 종가 또는 초기값
-        eval_prices = previous_prices_gpu if start_idx > 0 else cp.zeros(num_tickers, dtype=cp.float32)
+        eval_prices = previous_prices_gpu if start_idx > 0 else zero_signal_prices_gpu
         current_rebalance_date = trading_dates_pd_cpu[start_idx]
         
         portfolio_state = _calculate_monthly_investment_gpu(
@@ -406,7 +407,10 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
                 force_liquidate_tier3=force_liquidate_tier3,
                 strict_cash_rounding=strict_cash_rounding,
-                debug_mode=debug_mode, all_tickers=all_tickers, trading_dates_pd_cpu=trading_dates_pd_cpu
+                debug_mode=debug_mode,
+                all_tickers=all_tickers,
+                trading_dates_pd_cpu=trading_dates_pd_cpu,
+                sell_mask_workspace=zero_sell_mask_gpu,
             )
             # Strict single-sim parity path:
             # CPU ranks only active candidates (post-sell holdings/cooldown filtered).

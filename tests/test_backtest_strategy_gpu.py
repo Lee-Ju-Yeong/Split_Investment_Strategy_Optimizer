@@ -374,6 +374,91 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
         self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
         self.assertTrue(bool(sell_mask[0, 0].item()))
 
+    def test_sell_reuses_workspace_and_resets_it_when_signal_day_is_missing(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.ones((1, 1), dtype=cp.bool_)
+
+        _, _, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=0,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([0.0], dtype=cp.float32),
+            signal_high_prices=cp.array([0.0], dtype=cp.float32),
+            signal_day_idx=-1,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            sell_mask_workspace=workspace,
+        )
+
+        self.assertEqual(sell_mask.data.ptr, workspace.data.ptr)
+        self.assertFalse(bool(cp.any(sell_mask).item()))
+
+    def test_sell_reuses_workspace_and_resets_it_when_no_positions_exist(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.ones((1, 1), dtype=cp.bool_)
+
+        _, _, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=1,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            sell_mask_workspace=workspace,
+        )
+
+        self.assertEqual(sell_mask.data.ptr, workspace.data.ptr)
+        self.assertFalse(bool(cp.any(sell_mask).item()))
+
+    def test_sell_workspace_shape_mismatch_raises_value_error(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.zeros((1, 2), dtype=cp.bool_)
+
+        with self.assertRaisesRegex(ValueError, "sell_mask_workspace shape mismatch"):
+            _process_sell_signals_gpu(
+                portfolio_state=portfolio_state,
+                positions_state=positions_state,
+                cooldown_state=cooldown_state,
+                last_trade_day_idx_state=last_trade_day_idx_state,
+                current_day_idx=1,
+                param_combinations=params,
+                current_open_prices=cp.array([100.0], dtype=cp.float32),
+                current_close_prices=cp.array([100.0], dtype=cp.float32),
+                current_high_prices=cp.array([100.0], dtype=cp.float32),
+                signal_close_prices=cp.array([100.0], dtype=cp.float32),
+                signal_high_prices=cp.array([100.0], dtype=cp.float32),
+                signal_day_idx=0,
+                sell_commission_rate=0.00015,
+                sell_tax_rate=0.0018,
+                sell_mask_workspace=workspace,
+            )
+
     def test_additional_buy_uses_tminus1_low_for_trigger(self):
         """
         Regression guard:
