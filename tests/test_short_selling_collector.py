@@ -13,6 +13,25 @@ from src import short_selling_collector
 
 
 class TestShortSellingCollector(unittest.TestCase):
+    def _mock_conn_with_fetchall_side_effect(self, side_effect):
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.side_effect = side_effect
+        conn.cursor.return_value.__enter__.return_value = cursor
+        return conn, cursor
+
+    def test_get_short_selling_ticker_universe_raises_without_snapshot_or_history(self):
+        conn, cursor = self._mock_conn_with_fetchall_side_effect([[], []])
+
+        with self.assertRaises(RuntimeError):
+            short_selling_collector.get_short_selling_ticker_universe(
+                conn=conn,
+                end_date=date(2026, 2, 7),
+                mode="daily",
+            )
+
+        self.assertEqual(cursor.fetchall.call_count, 2)
+
     @patch("src.short_selling_collector.get_done_empty_coverage_windows")
     @patch("src.short_selling_collector.get_ticker_listed_dates")
     @patch("src.short_selling_collector.get_short_selling_date_bounds")

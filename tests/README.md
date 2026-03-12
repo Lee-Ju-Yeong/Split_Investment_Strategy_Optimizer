@@ -44,7 +44,7 @@ conda run -n rapids-env python -m unittest \
 필수 조건:
 - 로컬 MySQL 접근 가능
 - `config/config.yaml`에 유효한 DB 접속 정보 존재 (또는 `MAGICSPLIT_CONFIG_PATH`로 override)
-- 테스트가 `WeeklyFilteredStocks`, `DailyStockPrice`, `CalculatedIndicators`에 테스트 데이터를 삽입/삭제
+- 테스트가 legacy/general integration 범위에서 `WeeklyFilteredStocks`, `DailyStockPrice`, `CalculatedIndicators`에 테스트 데이터를 삽입/삭제
 
 실행:
 ```bash

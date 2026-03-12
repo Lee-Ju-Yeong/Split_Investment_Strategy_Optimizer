@@ -26,10 +26,18 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 import os
+from pathlib import Path
 import urllib.parse
+import sys
 
 import pandas as pd
 from sqlalchemy import create_engine
+
+# BOOTSTRAP: allow direct execution (`python src/cpu_gpu_parity_topk.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 from .backtest.cpu.backtester import BacktestEngine
 from .backtest.cpu.execution import BasicExecutionHandler
@@ -37,6 +45,13 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
+from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
+from .optimization.gpu.data_loading import (
+    preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
+    preload_pit_universe_mask_to_tensor,
+)
+from .price_policy import is_adjusted_price_basis, resolve_price_policy
+from .universe_policy import resolve_universe_mode
 
 
 def _require_gpu_stack():
@@ -75,46 +90,23 @@ def _load_trading_dates(sql_engine, start_date: str, end_date: str) -> pd.Dateti
     return pd.DatetimeIndex(pd.to_datetime(df["date"]).sort_values().unique())
 
 
-def _load_all_data_to_gpu(sql_engine, start_date: str, end_date: str):
-    import cudf
-
-    query = """
-        SELECT
-            dsp.stock_code AS ticker,
-            dsp.date,
-            dsp.open_price,
-            dsp.high_price,
-            dsp.low_price,
-            dsp.close_price,
-            dsp.volume,
-            ci.atr_14_ratio,
-            mcd.market_cap,
-            dst.cheap_score,
-            dst.cheap_score_confidence,
-            dst.flow5_mcap
-        FROM DailyStockPrice dsp
-        LEFT JOIN CalculatedIndicators ci
-          ON dsp.stock_code = ci.stock_code AND dsp.date = ci.date
-        LEFT JOIN MarketCapDaily mcd
-          ON dsp.stock_code = mcd.stock_code AND dsp.date = mcd.date
-        LEFT JOIN DailyStockTier dst
-          ON dsp.stock_code = dst.stock_code AND dsp.date = dst.date
-        WHERE dsp.date BETWEEN %s AND %s
-    """
-    df_pd = pd.read_sql(query, sql_engine, params=(start_date, end_date), parse_dates=["date"])
-    if df_pd.empty:
-        return cudf.DataFrame()
-    for col in ("cheap_score", "cheap_score_confidence"):
-        if col in df_pd.columns:
-            df_pd[col] = pd.to_numeric(df_pd[col], errors="coerce").astype("float32")
-    return cudf.from_pandas(df_pd).set_index(["ticker", "date"])
-
-
-def _build_empty_weekly_filtered_gpu():
-    import cudf
-
-    df = cudf.DataFrame({"date": [], "ticker": []})
-    return df.set_index("date")
+def _load_all_data_to_gpu(
+    db_connection_str: str,
+    start_date: str,
+    end_date: str,
+    *,
+    use_adjusted_prices: bool,
+    adjusted_price_gate_start_date: str,
+    universe_mode: str,
+):
+    return preload_all_data_to_gpu_shared(
+        db_connection_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_price_gate_start_date,
+        universe_mode=universe_mode,
+    )
 
 
 def _load_tier_tensor(
@@ -123,6 +115,7 @@ def _load_tier_tensor(
     end_date: str,
     all_tickers: list[str],
     trading_dates_pd,
+    pit_universe_mask_tensor,
     min_liquidity_20d_avg_value: int,
     min_tier12_coverage_ratio: float,
 ):
@@ -181,9 +174,19 @@ def _load_tier_tensor(
 
     min_ratio = float(min_tier12_coverage_ratio or 0.0)
     if min_ratio > 0 and len(all_tickers) > 0:
-        tier12_count = ((tier_asof > 0) & (tier_asof <= 2)).sum(axis=1).astype(int)
-        ratio = tier12_count / float(len(all_tickers))
-        failed = ratio[ratio < min_ratio]
+        pit_mask_df = pd.DataFrame(
+            cp.asnumpy(pit_universe_mask_tensor).astype(bool),
+            index=pd.DatetimeIndex(trading_dates_pd),
+            columns=all_tickers_str,
+        )
+        tier12_mask = ((tier_asof > 0) & (tier_asof <= 2)) & pit_mask_df
+        pit_size = pit_mask_df.sum(axis=1).astype(int)
+        ratio = pd.Series(0.0, index=tier_asof.index, dtype=float)
+        valid_mask = pit_size > 0
+        ratio.loc[valid_mask] = (
+            tier12_mask.sum(axis=1).astype(int).loc[valid_mask] / pit_size.loc[valid_mask]
+        )
+        failed = ratio[valid_mask & (ratio < min_ratio)]
         if not failed.empty:
             fail_date = failed.index[0]
             raise ValueError(
@@ -333,16 +336,33 @@ def _compare_curves(cpu_curve: pd.Series, gpu_curve: pd.Series, tolerance: float
     aligned = pd.concat(
         [cpu_curve.rename("cpu"), gpu_curve.rename("gpu")],
         axis=1,
-        join="inner",
-    ).dropna()
+        join="outer",
+    ).sort_index()
     if aligned.empty:
         return {"points": 0, "mismatch_count": None, "first_mismatch": None}
 
-    diff = (aligned["cpu"] - aligned["gpu"]).abs()
+    missing_mask = aligned["cpu"].isna() | aligned["gpu"].isna()
+    missing_count = int(missing_mask.sum())
+    aligned_present = aligned.loc[~missing_mask]
+    diff = (aligned_present["cpu"] - aligned_present["gpu"]).abs()
     mismatches = diff > float(tolerance)
-    mismatch_count = int(mismatches.sum())
+    mismatch_count = missing_count + int(mismatches.sum())
     if mismatch_count <= 0:
         return {"points": int(len(aligned)), "mismatch_count": 0, "first_mismatch": None}
+
+    if missing_count > 0:
+        first_idx = aligned.loc[missing_mask].index[0]
+        return {
+            "points": int(len(aligned)),
+            "mismatch_count": mismatch_count,
+            "first_mismatch": {
+                "date": pd.to_datetime(first_idx).strftime("%Y-%m-%d"),
+                "cpu": None if pd.isna(aligned.loc[first_idx, "cpu"]) else float(aligned.loc[first_idx, "cpu"]),
+                "gpu": None if pd.isna(aligned.loc[first_idx, "gpu"]) else float(aligned.loc[first_idx, "gpu"]),
+                "abs_diff": None,
+                "reason": "missing_curve_point",
+            },
+        }
 
     first_idx = diff[mismatches].index[0]
     return {
@@ -355,6 +375,194 @@ def _compare_curves(cpu_curve: pd.Series, gpu_curve: pd.Series, tolerance: float
             "abs_diff": float(diff.loc[first_idx]),
         },
     }
+
+
+def _build_parity_summary(rows: list[dict], *, parity_mode: str, universe_mode: str) -> dict:
+    failed = 0
+    total_mismatches = 0
+    failed_indices = []
+    first_failed_row = None
+    max_abs_diff = 0.0
+
+    for row in rows:
+        compare = dict(row.get("compare") or {})
+        mismatch_count = int(compare.get("mismatch_count") or 0)
+        total_mismatches += mismatch_count
+        first_mismatch = compare.get("first_mismatch") or {}
+        max_abs_diff = max(max_abs_diff, float(first_mismatch.get("abs_diff") or 0.0))
+        if mismatch_count <= 0:
+            continue
+        failed += 1
+        row_index = int(row.get("index", -1))
+        failed_indices.append(row_index)
+        if first_failed_row is None:
+            first_failed_row = {
+                "index": row_index,
+                "mismatch_count": mismatch_count,
+                "first_mismatch": compare.get("first_mismatch"),
+            }
+
+    passed = max(len(rows) - failed, 0)
+    policy_ready = str(parity_mode).strip().lower() == "strict" and str(universe_mode).strip().lower() == "strict_pit"
+    promotion_block_reasons = []
+    if not policy_ready:
+        promotion_block_reasons.append(
+            f"policy_not_release_ready(parity_mode={parity_mode}, universe_mode={universe_mode})"
+        )
+    if total_mismatches > 0:
+        promotion_block_reasons.append(f"curve_mismatch_count={int(total_mismatches)}")
+    promotion_block_reasons.append("decision_level_evidence_missing")
+
+    return {
+        "failed": int(failed),
+        "passed": int(passed),
+        "failed_indices": failed_indices,
+        "total_mismatches": int(total_mismatches),
+        "max_abs_diff": float(max_abs_diff),
+        "first_failed_row": first_failed_row,
+        "comparison_level": "equity_curve",
+        "policy_ready_for_release_gate": bool(policy_ready),
+        "curve_level_parity_zero_mismatch": bool(policy_ready and total_mismatches == 0),
+        "decision_level_parity_zero_mismatch": False,
+        "event_level_diff_collected": False,
+        "promotion_blocked": bool(promotion_block_reasons),
+        "promotion_block_reasons": promotion_block_reasons,
+    }
+
+
+def _resolve_decision_evidence_indices(rows: list[dict], mode: str) -> list[int]:
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode == "off" or not rows:
+        return []
+
+    failed_indices = [
+        int(row.get("index", -1))
+        for row in rows
+        if int((row.get("compare") or {}).get("mismatch_count") or 0) > 0
+    ]
+    available_indices = [int(row.get("index", -1)) for row in rows]
+
+    if normalized_mode == "first_failed":
+        return failed_indices[:1]
+    if normalized_mode == "representative":
+        return failed_indices[:1] or available_indices[:1]
+    if normalized_mode == "all":
+        return available_indices
+    raise ValueError(f"Unsupported decision_evidence_mode={mode!r}")
+
+
+def _build_decision_evidence_detail_path(report_out: str, row_index: int) -> str:
+    base_dir = os.path.dirname(report_out) or "."
+    base_name = os.path.splitext(os.path.basename(report_out))[0]
+    return os.path.join(base_dir, f"{base_name}.decision_evidence_row{row_index}.json")
+
+
+def _write_json_artifact(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, ensure_ascii=False, indent=2)
+
+
+def _summarize_decision_evidence_payload(row_index: int, payload: dict, *, detail_path: str | None) -> dict:
+    pit_failure = payload.get("pit_failure")
+    candidate_lookup_summary = payload.get("cpu_candidate_lookup_summary") or {}
+    frozen_manifest = payload.get("frozen_candidate_manifest") or {}
+    return {
+        "row_index": int(row_index),
+        "decision_level_zero_mismatch": bool(payload.get("decision_level_zero_mismatch", False)),
+        "comparison_scope": str(payload.get("comparison_scope", "core_trade_events")),
+        "release_decision_fields_complete": bool(payload.get("release_decision_fields_complete", False)),
+        "sell_mismatched_pairs": int(payload.get("sell_mismatched_pairs", 0) or 0),
+        "buy_mismatched_pairs": int(payload.get("buy_mismatched_pairs", 0) or 0),
+        "cpu_sell_events_count": int(payload.get("cpu_sell_events_count", 0) or 0),
+        "gpu_sell_events_count": int(payload.get("gpu_sell_events_count", 0) or 0),
+        "cpu_buy_events_count": int(payload.get("cpu_buy_events_count", 0) or 0),
+        "gpu_buy_events_count": int(payload.get("gpu_buy_events_count", 0) or 0),
+        "daily_snapshot_mismatched_pairs": int(payload.get("daily_snapshot_mismatched_pairs", 0) or 0),
+        "position_snapshot_mismatched_pairs": int(payload.get("position_snapshot_mismatched_pairs", 0) or 0),
+        "candidate_order_paired_count": int(payload.get("candidate_order_paired_count", 0) or 0),
+        "candidate_order_mismatched_pairs": int(payload.get("candidate_order_mismatched_pairs", 0) or 0),
+        "candidate_order_zero_mismatch": bool(payload.get("candidate_order_zero_mismatch", False)),
+        "candidate_lookup_error_count": int(candidate_lookup_summary.get("error_count", 0) or 0),
+        "pit_failure": pit_failure,
+        "pit_failure_code": None if pit_failure is None else pit_failure.get("code"),
+        "pit_failure_stage": None if pit_failure is None else pit_failure.get("stage"),
+        "frozen_candidate_manifest_mode": frozen_manifest.get("mode"),
+        "frozen_candidate_manifest_path": frozen_manifest.get("path"),
+        "frozen_candidate_manifest_sha256": frozen_manifest.get("sha256"),
+        "detail_path": detail_path,
+    }
+
+
+def _summarize_decision_evidence_artifacts(evidence_rows: list[dict]) -> dict:
+    checked = len(evidence_rows)
+    candidate_rows = [row for row in evidence_rows if int(row.get("candidate_order_paired_count", 0) or 0) > 0]
+    candidate_passed = sum(1 for row in candidate_rows if bool(row.get("candidate_order_zero_mismatch", False)))
+    pit_failure_rows = sum(1 for row in evidence_rows if row.get("pit_failure"))
+    frozen_manifest_rows = sum(
+        1
+        for row in evidence_rows
+        if str(row.get("frozen_candidate_manifest_mode") or "").strip().lower() in {"record_strict", "replay_strict"}
+    )
+    return {
+        "rows_checked": int(checked),
+        "candidate_order_rows_checked": int(len(candidate_rows)),
+        "candidate_order_rows_passed": int(candidate_passed),
+        "candidate_order_rows_failed": int(len(candidate_rows) - candidate_passed),
+        "pit_failure_rows": int(pit_failure_rows),
+        "frozen_manifest_rows_recorded": int(frozen_manifest_rows),
+    }
+
+
+def _apply_decision_evidence(summary: dict, evidence_rows: list[dict], *, total_rows: int) -> dict:
+    updated = dict(summary)
+    reasons = [
+        reason
+        for reason in list(updated.get("promotion_block_reasons") or [])
+        if reason != "decision_level_evidence_missing"
+        and not str(reason).startswith("decision_level_evidence_partial(")
+        and not str(reason).startswith("decision_event_mismatch_rows=")
+    ]
+
+    checked_count = len(evidence_rows)
+    passed_count = sum(1 for row in evidence_rows if row.get("decision_level_zero_mismatch"))
+    all_rows_covered = total_rows > 0 and checked_count == total_rows
+    release_fields_complete = checked_count > 0 and all(
+        bool(row.get("release_decision_fields_complete", False))
+        for row in evidence_rows
+    )
+    pit_failure_rows = sum(1 for row in evidence_rows if row.get("pit_failure"))
+    non_pit_mismatch_rows = max(int(checked_count - passed_count - pit_failure_rows), 0)
+
+    updated["event_level_diff_collected"] = checked_count > 0
+    updated["decision_evidence_rows_checked"] = int(checked_count)
+    updated["decision_evidence_rows_passed"] = int(passed_count)
+    updated["decision_evidence_all_rows_covered"] = bool(all_rows_covered)
+    updated["decision_evidence_release_fields_complete"] = bool(release_fields_complete)
+    updated["decision_evidence_pit_failure_rows"] = int(pit_failure_rows)
+    updated["decision_level_parity_zero_mismatch"] = bool(
+        updated.get("curve_level_parity_zero_mismatch", False)
+        and all_rows_covered
+        and checked_count > 0
+        and passed_count == checked_count
+        and release_fields_complete
+    )
+
+    if checked_count <= 0:
+        reasons.append("decision_level_evidence_missing")
+    elif not all_rows_covered:
+        reasons.append(f"decision_level_evidence_partial({checked_count}/{total_rows})")
+    elif pit_failure_rows > 0 or non_pit_mismatch_rows > 0:
+        if pit_failure_rows > 0:
+            reasons.append(f"pit_failure_rows={pit_failure_rows}")
+        if non_pit_mismatch_rows > 0:
+            reasons.append(f"decision_event_mismatch_rows={non_pit_mismatch_rows}")
+    elif not release_fields_complete:
+        reasons.append("decision_fields_not_covered")
+
+    updated["promotion_block_reasons"] = reasons
+    updated["promotion_blocked"] = bool(reasons)
+    return updated
 
 
 def main() -> None:
@@ -371,6 +579,15 @@ def main() -> None:
         choices=["fast", "strict"],
         default="strict",
         help="GPU parity mode for evaluation path (default: strict).",
+    )
+    parser.add_argument(
+        "--decision-evidence-mode",
+        choices=["off", "first_failed", "representative", "all"],
+        default="representative",
+        help=(
+            "Collect event-level CPU/GPU trade diffs using parity_sell_event_dump helpers. "
+            "representative=first failed row, or row0 when curves all match."
+        ),
     )
     parser.add_argument("--out", default=None, help="Write JSON report to this path.")
     parser.add_argument(
@@ -411,48 +628,95 @@ def main() -> None:
     if trading_dates_pd.empty:
         raise ValueError("No trading dates in the requested range.")
 
-    all_data_gpu = _load_all_data_to_gpu(sql_engine, start_date, end_date)
+    strategy_cfg = config.get("strategy_params", {})
+    price_basis, adjusted_gate_start_date = resolve_price_policy(strategy_cfg)
+    use_adjusted_prices = is_adjusted_price_basis(price_basis)
+    universe_mode = resolve_universe_mode(
+        strategy_cfg,
+        universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
+    )
+
+    all_data_gpu = _load_all_data_to_gpu(
+        db_conn_str,
+        start_date,
+        end_date,
+        use_adjusted_prices=use_adjusted_prices,
+        adjusted_price_gate_start_date=adjusted_gate_start_date,
+        universe_mode=universe_mode,
+    )
     if all_data_gpu.empty:
         raise ValueError("No DailyStockPrice rows in the requested range.")
 
     all_tickers = sorted(all_data_gpu.index.get_level_values("ticker").unique().to_pandas().tolist())
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
-    weekly_filtered_gpu = _build_empty_weekly_filtered_gpu()
-    strategy_cfg = config.get("strategy_params", {})
+    pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
+        db_conn_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
+    )
     tier_tensor = _load_tier_tensor(
         sql_engine,
         start_date,
         end_date,
         all_tickers,
         trading_dates_pd,
+        pit_universe_mask_tensor,
         min_liquidity_20d_avg_value=int(strategy_cfg.get("min_liquidity_20d_avg_value", 0) or 0),
-        min_tier12_coverage_ratio=float(strategy_cfg.get("min_tier12_coverage_ratio", 0.0) or 0.0),
+        min_tier12_coverage_ratio=float(strategy_cfg.get("min_tier12_coverage_ratio", 0.45) or 0.45),
     )
 
-    param_gpu = cp.asarray([row.to_gpu_row() for row in rows], dtype=cp.float32)
     exec_params = copy.deepcopy(config["execution_params"])
     exec_params["cooldown_period_days"] = config.get("strategy_params", {}).get("cooldown_period_days", 5)
     exec_params["candidate_source_mode"] = "tier"
     exec_params["parity_mode"] = str(args.parity_mode).strip().lower()
-    exec_params["tier_hysteresis_mode"] = config.get("strategy_params", {}).get("tier_hysteresis_mode", "legacy")
-
-    daily_values_gpu = run_magic_split_strategy_on_gpu(
-        initial_cash=float(initial_cash),
-        param_combinations=param_gpu,
-        all_data_gpu=all_data_gpu,
-        weekly_filtered_gpu=weekly_filtered_gpu,
-        trading_date_indices=trading_date_indices_gpu,
-        trading_dates_pd_cpu=trading_dates_pd,
-        all_tickers=all_tickers,
-        execution_params=exec_params,
-        max_splits_limit=int(max(row.max_splits_limit for row in rows)),
-        tier_tensor=tier_tensor,
-        debug_mode=False,
+    exec_params["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
+        config.get("strategy_params", {}).get("tier_hysteresis_mode", "strict_hysteresis_v1")
     )
-    gpu_curves = daily_values_gpu.get()
+    gpu_curves: list = []
+    if exec_params["parity_mode"] == "strict":
+        # Strict parity mode favors semantic equivalence over throughput.
+        # Run one parameter row at a time so GPU path uses single-sim semantics.
+        for row in rows:
+            single_param_gpu = cp.asarray([row.to_gpu_row()], dtype=cp.float32)
+            daily_values_gpu = run_magic_split_strategy_on_gpu(
+                initial_cash=float(initial_cash),
+                param_combinations=single_param_gpu,
+                all_data_gpu=all_data_gpu,
+                trading_date_indices=trading_date_indices_gpu,
+                trading_dates_pd_cpu=trading_dates_pd,
+                all_tickers=all_tickers,
+                execution_params=exec_params,
+                max_splits_limit=int(row.max_splits_limit),
+                tier_tensor=tier_tensor,
+                pit_universe_mask_tensor=pit_universe_mask_tensor,
+                debug_mode=False,
+            )
+            gpu_curves.append(daily_values_gpu.get()[0])
+    else:
+        param_gpu = cp.asarray([row.to_gpu_row() for row in rows], dtype=cp.float32)
+        daily_values_gpu = run_magic_split_strategy_on_gpu(
+            initial_cash=float(initial_cash),
+            param_combinations=param_gpu,
+            all_data_gpu=all_data_gpu,
+            trading_date_indices=trading_date_indices_gpu,
+            trading_dates_pd_cpu=trading_dates_pd,
+            all_tickers=all_tickers,
+            execution_params=exec_params,
+            max_splits_limit=int(max(row.max_splits_limit for row in rows)),
+            tier_tensor=tier_tensor,
+            pit_universe_mask_tensor=pit_universe_mask_tensor,
+            debug_mode=False,
+        )
+        gpu_curves = list(daily_values_gpu.get())
 
     # CPU runs (sequential), using a single DataHandler instance for caching.
-    data_handler = DataHandler(db_config=config["database"])
+    data_handler = DataHandler(
+        db_config=config["database"],
+        strategy_params=strategy_cfg,
+        universe_mode=universe_mode,
+    )
 
     report = {
         "meta": {
@@ -466,9 +730,26 @@ def main() -> None:
             "candidate_source_mode": "tier",
             "parity_mode": exec_params["parity_mode"],
             "tier_hysteresis_mode": exec_params["tier_hysteresis_mode"],
+            "price_basis": price_basis,
+            "adjusted_price_gate_start_date": adjusted_gate_start_date,
+            "universe_mode": universe_mode,
+            "config_path": os.environ.get("MAGICSPLIT_CONFIG_PATH") or "config/config.yaml",
+            "frozen_candidate_manifest_mode": strategy_cfg.get("frozen_candidate_manifest_mode", "off"),
+            "frozen_candidate_manifest_path": strategy_cfg.get("frozen_candidate_manifest_path"),
+            "frozen_candidate_manifest_expected_sha256": strategy_cfg.get(
+                "frozen_candidate_manifest_expected_sha256"
+            ),
         },
         "rows": [],
-        "summary": {"failed": 0, "passed": 0},
+        "summary": {},
+        "evidence_gaps": [
+            "event_level_diff_not_collected",
+        ],
+        "decision_evidence": {
+            "mode": str(args.decision_evidence_mode).strip().lower(),
+            "rows": [],
+            "artifact_summary": {},
+        },
     }
 
     for idx, row in enumerate(rows):
@@ -490,13 +771,73 @@ def main() -> None:
                 "compare": cmp_result,
             }
         )
-        report["summary"]["failed"] += int(failed)
-        report["summary"]["passed"] += int(not failed)
+
+    report["summary"] = _build_parity_summary(
+        report["rows"],
+        parity_mode=exec_params["parity_mode"],
+        universe_mode=universe_mode,
+    )
+    decision_evidence_mode = str(args.decision_evidence_mode).strip().lower()
+    decision_evidence_indices = _resolve_decision_evidence_indices(report["rows"], decision_evidence_mode)
+    if decision_evidence_indices:
+        from .parity_sell_event_dump import collect_trade_event_parity_report
+
+        row_lookup = {int(row["index"]): row for row in report["rows"]}
+        for row_index in decision_evidence_indices:
+            row_payload = row_lookup.get(int(row_index))
+            if row_payload is None:
+                continue
+            params = ParityParamRow.from_mapping(row_payload["params"]).to_gpu_row()
+            normalized_params = {
+                "max_stocks": int(params[0]),
+                "order_investment_ratio": float(params[1]),
+                "additional_buy_drop_rate": float(params[2]),
+                "sell_profit_rate": float(params[3]),
+                "additional_buy_priority": int(params[4]),
+                "stop_loss_rate": float(params[5]),
+                "max_splits_limit": int(params[6]),
+                "max_inactivity_period": int(params[7]),
+            }
+            payload = collect_trade_event_parity_report(
+                config=config,
+                start_date=start_date,
+                end_date=end_date,
+                initial_cash=float(initial_cash),
+                params=normalized_params,
+                candidate_source_mode="tier",
+                use_weekly_alpha_gate=False,
+                parity_mode=exec_params["parity_mode"],
+                universe_mode=universe_mode,
+            )
+            detail_path = None
+            if args.out:
+                detail_path = _build_decision_evidence_detail_path(args.out, int(row_index))
+                _write_json_artifact(detail_path, payload)
+            summary_payload = _summarize_decision_evidence_payload(
+                int(row_index),
+                payload,
+                detail_path=detail_path,
+            )
+            row_payload["decision_evidence"] = summary_payload
+            report["decision_evidence"]["rows"].append(summary_payload)
+
+    report["decision_evidence"]["artifact_summary"] = _summarize_decision_evidence_artifacts(
+        report["decision_evidence"]["rows"]
+    )
+    report["summary"] = _apply_decision_evidence(
+        report["summary"],
+        report["decision_evidence"]["rows"],
+        total_rows=len(report["rows"]),
+    )
+    if not report["summary"]["event_level_diff_collected"]:
+        report["evidence_gaps"] = ["event_level_diff_not_collected"]
+    elif not report["summary"]["decision_evidence_all_rows_covered"]:
+        report["evidence_gaps"] = ["decision_level_evidence_partial"]
+    else:
+        report["evidence_gaps"] = []
 
     if args.out:
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
+        _write_json_artifact(args.out, report)
         print(f"[cpu_gpu_parity_topk] report_saved path={args.out}")
 
     if report["summary"]["failed"] > 0 and not args.no_fail_on_mismatch:

@@ -5,10 +5,12 @@ This module contains the GPU-accelerated versions of backtesting logic
 using CuPy for massive parallelization.
 """
 
+import os
 import cupy as cp
 import cudf
 import pandas as pd
 import time 
+from ...candidate_runtime_policy import normalize_runtime_candidate_policy
 from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
 from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
 from .utils import _sort_candidates_by_atr_then_ticker as _sort_candidates_by_atr_then_ticker_gpu
@@ -129,6 +131,7 @@ def _process_sell_signals_gpu(
     debug_mode: bool = False,
     all_tickers: list = None,
     trading_dates_pd_cpu: pd.DatetimeIndex = None,
+    sell_mask_workspace: cp.ndarray = None,
 ):
     """
     [수정된 로직 v2]
@@ -137,15 +140,23 @@ def _process_sell_signals_gpu(
     """
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
+    sell_mask_shape = (positions_state.shape[0], positions_state.shape[1])
+    if sell_mask_workspace is not None:
+        if tuple(sell_mask_workspace.shape) != sell_mask_shape:
+            raise ValueError(
+                "sell_mask_workspace shape mismatch: "
+                f"expected={sell_mask_shape} got={tuple(sell_mask_workspace.shape)}"
+            )
+        sell_occurred_stock_mask = sell_mask_workspace
+        sell_occurred_stock_mask[...] = False
+    else:
+        sell_occurred_stock_mask = cp.zeros(sell_mask_shape, dtype=cp.bool_)
 
     if signal_day_idx < 0:
-        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
         return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
-        # [추가] 당일 매도가 없으므로 False 마스크를 반환
-        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
         return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     # --- 파라미터 로드 ---
@@ -155,9 +166,6 @@ def _process_sell_signals_gpu(
     sell_commission_rate_f32 = cp.float32(sell_commission_rate)
     sell_tax_rate_f32 = cp.float32(sell_tax_rate)
     cost_factor = cp.float32(1.0) - sell_commission_rate_f32 - sell_tax_rate_f32
-
-    # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
-    sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
     # (sim, stock) 형태로 현재가(T0 체결용) / 신호가(T-1 신호용) 브로드캐스팅 준비
@@ -227,17 +235,12 @@ def _process_sell_signals_gpu(
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
                         f"Reason: {reason} | "
-                        f"Target: {target_price:.2f} -> Exec: {exec_price} | "
+                        f"Target: {target_price:.6f} -> Exec: {exec_price} | "
                         f"High: {high_price}"
                     )
 
-        broadcasted_liquidation_prices = cp.broadcast_to(
-            liquidation_price_basis.reshape(positions_state.shape[0], -1, 1),
-            buy_prices.shape,
-        )
-        adjusted_liquidation_prices = adjust_price_up_gpu(broadcasted_liquidation_prices)
-
-        revenue_matrix = quantities * adjusted_liquidation_prices
+        adjusted_liquidation_prices_2d = adjust_price_up_gpu(liquidation_price_basis)
+        revenue_matrix = quantities * adjusted_liquidation_prices_2d[:, :, cp.newaxis]
         liquidation_revenue_matrix = revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis]
         if strict_cash_rounding:
             liquidation_net_matrix = cp.floor(liquidation_revenue_matrix * cost_factor)
@@ -262,7 +265,7 @@ def _process_sell_signals_gpu(
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    execution_sell_prices = adjust_price_up_gpu(current_open_prices_3d)
+    execution_sell_prices_1d = adjust_price_up_gpu(current_open_prices)
     execution_reachable_mask = current_open_prices_3d > 0
     profit_signal_mask = signal_high_prices_3d >= target_sell_prices
     profit_taking_mask = profit_signal_mask & execution_reachable_mask & valid_positions & sellable_time_mask
@@ -283,7 +286,7 @@ def _process_sell_signals_gpu(
                     ticker = all_tickers[stock_idx]
                     high_price = current_high_prices[stock_idx].item()
                     target_price = target_sell_prices[0, stock_idx, split_idx].item()
-                    exec_price = execution_sell_prices[0, stock_idx, split_idx].item()
+                    exec_price = execution_sell_prices_1d[stock_idx].item()
                     qty_to_log = quantities[0, stock_idx, split_idx].item()
                     revenue_to_log = qty_to_log * exec_price
                     print(
@@ -293,11 +296,11 @@ def _process_sell_signals_gpu(
                     print(
                         f"[GPU_SELL_PRICE] {trading_dates_pd_cpu[current_day_idx].strftime('%Y-%m-%d')} {ticker} "
                         f"(Split {split_idx}) Reason: Profit-Taking | "
-                        f"Target: {target_price:.2f} -> Exec: {exec_price} | "
+                        f"Target: {target_price:.6f} -> Exec: {exec_price} | "
                         f"High: {high_price}"
                     )
 
-        revenue_matrix = quantities * execution_sell_prices
+        revenue_matrix = quantities * execution_sell_prices_1d.reshape(1, -1, 1)
         profit_revenue_matrix = revenue_matrix * profit_taking_mask
         if strict_cash_rounding:
             profit_net_matrix = cp.floor(profit_revenue_matrix * cost_factor)
@@ -337,6 +340,8 @@ def _process_additional_buy_signals_gpu(
     signal_tiers: cp.ndarray = None,
     hold_max_tier: int = 0,
     strict_cash_rounding: bool = False,
+    current_date: pd.Timestamp = None,
+    signal_date: pd.Timestamp = None,
 ):
     """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
@@ -351,17 +356,44 @@ def _process_additional_buy_signals_gpu(
     if signal_day_idx < 0 or not cp.any(has_any_position):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
-    last_pos_mask = (cp.cumsum(has_positions, axis=2) == num_positions[:, :, cp.newaxis]) & has_positions
-    last_buy_prices = cp.sum(buy_prices_state * last_pos_mask, axis=2)
+    trace_cfg = None
+    if debug_mode and all_tickers is not None and current_date is not None:
+        trace_date = os.getenv("GPU_ADD_BUY_TRACE_DATE")
+        trace_ticker = os.getenv("GPU_ADD_BUY_TRACE_TICKER")
+        if trace_date and trace_ticker and current_date.strftime("%Y-%m-%d") == trace_date:
+            trace_sim_raw = os.getenv("GPU_ADD_BUY_TRACE_SIM", "0")
+            try:
+                trace_sim_idx = int(trace_sim_raw)
+            except (TypeError, ValueError):
+                trace_sim_idx = 0
+            trace_cfg = {
+                "date": trace_date,
+                "ticker": trace_ticker,
+                "sim_idx": trace_sim_idx,
+                "stock_idx": int(all_tickers.index(trace_ticker)) if trace_ticker in all_tickers else -1,
+            }
+
+    open_day_indices = positions_state[..., 2]
+    # last split은 split index가 아니라 최신 open_day_idx 기준으로 선택한다.
+    # 부분청산 hole-fill 이후에도 "가장 최근 매수"를 trigger 기준으로 유지하기 위함.
+    split_axis = cp.arange(has_positions.shape[2], dtype=cp.int32).reshape(1, 1, -1)
+    latest_open_day = cp.max(cp.where(has_positions, open_day_indices, -1), axis=2, keepdims=True)
+    latest_open_mask = has_positions & (open_day_indices == latest_open_day)
+    latest_split_scores = cp.where(latest_open_mask, split_axis, -1)
+    latest_split_indices = cp.argmax(latest_split_scores, axis=2).astype(cp.int32)
+    sim_axis = cp.arange(has_positions.shape[0], dtype=cp.int32)[:, None]
+    stock_axis = cp.arange(has_positions.shape[1], dtype=cp.int32)[None, :]
+    last_buy_prices = buy_prices_state[sim_axis, stock_axis, latest_split_indices]
     trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
     has_first_split = positions_state[..., 0, 0] > 0
-    open_day_indices = positions_state[..., 2]
     first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
     is_not_new_today = (first_open_day_idx < current_day_idx)
     
     signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
+    signal_closes_2d = cp.broadcast_to(signal_close_prices, trigger_prices.shape)
+    valid_signal_mask = (signal_lows_2d > 0) & (signal_closes_2d > 0)
     initial_buy_mask = (
         (signal_lows_2d <= trigger_prices)
         & has_any_position
@@ -369,11 +401,37 @@ def _process_additional_buy_signals_gpu(
         & can_add_buy
         & is_not_new_today
         & has_first_split
+        & valid_signal_mask
     )
     if hold_max_tier > 0 and signal_tiers is not None:
         signal_tiers_2d = cp.broadcast_to(signal_tiers.reshape(1, -1), trigger_prices.shape)
         tier_hold_mask = (signal_tiers_2d > 0) & (signal_tiers_2d <= hold_max_tier)
         initial_buy_mask &= tier_hold_mask
+    if trace_cfg is not None and trace_cfg["stock_idx"] >= 0:
+        trace_sim = trace_cfg["sim_idx"]
+        trace_stock = trace_cfg["stock_idx"]
+        if trace_sim < trigger_prices.shape[0] and trace_stock < trigger_prices.shape[1]:
+            tier_value = -1
+            tier_pass = True
+            if hold_max_tier > 0 and signal_tiers is not None:
+                tier_value = int(signal_tiers[trace_stock].item())
+                tier_pass = (tier_value > 0) and (tier_value <= hold_max_tier)
+            signal_str = signal_date.strftime("%Y-%m-%d") if signal_date is not None else "None"
+            print(
+                "[GPU_ADD_TRACE_PRE] "
+                f"date={trace_cfg['date']} signal={signal_str} sim={trace_sim} "
+                f"ticker={trace_cfg['ticker']} stock_idx={trace_stock} "
+                f"signal_low={float(signal_lows[trace_stock].item()):.2f} "
+                f"trigger={float(trigger_prices[trace_sim, trace_stock].item()):.2f} "
+                f"tier={tier_value} tier_pass={int(tier_pass)} "
+                f"under_max_splits={int(under_max_splits[trace_sim, trace_stock].item())} "
+                f"sell_mask_pass={int(can_add_buy[trace_sim, trace_stock].item())} "
+                f"is_not_new_today={int(is_not_new_today[trace_sim, trace_stock].item())} "
+                f"has_first_split={int(has_first_split[trace_sim, trace_stock].item())} "
+                f"initial_buy_mask={int(initial_buy_mask[trace_sim, trace_stock].item())} "
+                f"capital={float(portfolio_state[trace_sim, 0].item()):.2f} "
+                f"invest={float(portfolio_state[trace_sim, 1].item()):.2f}"
+            )
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
@@ -397,12 +455,37 @@ def _process_additional_buy_signals_gpu(
 
     # 우선순위 점수 계산
     add_buy_priorities = param_combinations[sim_indices, 4]
+    valid_priority_mask = (add_buy_priorities == 0) | (add_buy_priorities == 1)
+    if not bool(cp.all(valid_priority_mask)):
+        invalid_priorities = cp.unique(add_buy_priorities[~valid_priority_mask]).tolist()
+        raise ValueError(
+            "Unsupported additional_buy_priority in GPU path: "
+            f"{invalid_priorities}. supported=[0(lowest_order), 1(highest_drop)]"
+        )
     scores_lowest_order = num_positions[sim_indices, stock_indices]
     candidate_last_buy_prices = last_buy_prices[sim_indices, stock_indices]
     candidate_signal_closes = signal_close_prices[stock_indices]
     price_epsilon = 1e-9
     scores_highest_drop = (candidate_last_buy_prices - candidate_signal_closes) / (candidate_last_buy_prices + price_epsilon)
     priority_scores = cp.where(add_buy_priorities == 0, scores_lowest_order, -scores_highest_drop)
+
+    if trace_cfg is not None and trace_cfg["stock_idx"] >= 0:
+        trace_sim = trace_cfg["sim_idx"]
+        trace_stock = trace_cfg["stock_idx"]
+        trace_mask_unsorted = (sim_indices == trace_sim) & (stock_indices == trace_stock)
+        if cp.any(trace_mask_unsorted):
+            trace_unsorted_idx = int(cp.where(trace_mask_unsorted)[0][0].item())
+            print(
+                "[GPU_ADD_TRACE_CAND] "
+                f"stage=unsorted sim={trace_sim} ticker={trace_cfg['ticker']} "
+                f"present=1 priority={float(priority_scores[trace_unsorted_idx].item()):.8f} "
+                f"total_cost={float(total_costs[trace_unsorted_idx].item()):.2f}"
+            )
+        else:
+            print(
+                "[GPU_ADD_TRACE_CAND] "
+                f"stage=unsorted sim={trace_sim} ticker={trace_cfg['ticker']} present=0"
+            )
 
     # 3. 시뮬레이션 ID와 우선순위로 후보 정렬
     # lexsort는 마지막 행부터 정렬하므로, 우선순위가 낮은 키(stock_indices)를 먼저, 높은 키(sim_indices)를 나중에 넣습니다.
@@ -415,34 +498,59 @@ def _process_additional_buy_signals_gpu(
     sorted_costs = total_costs[sorted_indices]
     sorted_quantities = quantities[sorted_indices]
     sorted_exec_prices = exec_prices[sorted_indices]
+    sorted_priority_scores = priority_scores[sorted_indices]
 
-    # 4. 세그먼트화된 누적 합계를 사용해 감당 가능한 매수 결정
-    # 각 시뮬레이션 그룹의 시작점을 찾습니다.
-    unique_sims, sim_start_indices = cp.unique(sorted_sims, return_index=True)
-    
-    # 전체 누적 합계 계산
-    global_cumsum = cp.cumsum(sorted_costs)
-    
-    # `repeat`를 사용하여 세그먼트별로 차감할 값을 효율적으로 전파합니다.
-    # (maximum.accumulate가 일부 CuPy 버전에서 지원되지 않는 문제를 우회)
-    run_lengths = cp.diff(cp.concatenate((sim_start_indices, cp.array([len(sorted_sims)]))))
-    run_lengths_list = run_lengths.tolist() # .repeat()를 위해 파이썬 리스트로 변환
-    
-    # 각 세그먼트에서 빼야 할 값 (첫 세그먼트는 0, 나머지는 이전 세그먼트의 누적 합)
-    segment_subtraction_values = cp.concatenate((cp.array([0], dtype=global_cumsum.dtype), global_cumsum[sim_start_indices[1:] - 1]))
-    
-    prefix_sum_broadcast = cp.repeat(segment_subtraction_values, run_lengths_list)
+    # 4. CPU parity semantics: 순위 순차 처리 + 비싸면 skip, 다음 후보 계속 시도
+    _, sim_start_indices = cp.unique(sorted_sims, return_index=True)
+    candidate_offsets = cp.arange(sorted_sims.size, dtype=cp.int32)
+    run_owner = cp.searchsorted(sim_start_indices, candidate_offsets, side="right") - 1
+    sim_start_broadcast = sim_start_indices[run_owner].astype(cp.int32, copy=False)
+    rank_in_sim = candidate_offsets - sim_start_broadcast
 
-    # 세그먼트화된 (시뮬레이션별) 누적 합계
-    per_sim_cumsum = global_cumsum - prefix_sum_broadcast
-    
-    # 각 후보에 대해 해당 시뮬레이션의 가용 자본을 broadcast
-    sim_capitals = portfolio_state[unique_sims, 0]
-    capital_broadcast = cp.repeat(sim_capitals, run_lengths_list)
-    
-    # 최종 매수 마스크: 시뮬레이션별 누적 비용이 가용 자본을 넘지 않는 후보들
-    final_buy_mask = per_sim_cumsum <= capital_broadcast
-    final_buy_mask &= (sorted_quantities > 0) # 수량이 0인 매수는 제외
+    remaining_capital = portfolio_state[:, 0].copy()
+    final_buy_mask = cp.zeros(sorted_sims.shape[0], dtype=cp.bool_)
+    max_rank = int(cp.max(rank_in_sim).item()) if rank_in_sim.size > 0 else -1
+
+    for rank in range(max_rank + 1):
+        rank_mask = rank_in_sim == rank
+        if not cp.any(rank_mask):
+            continue
+        rank_indices = cp.where(rank_mask)[0]
+        sims_at_rank = sorted_sims[rank_indices]
+        costs_at_rank = sorted_costs[rank_indices]
+        qty_at_rank = sorted_quantities[rank_indices]
+        affordable = (qty_at_rank > 0) & (costs_at_rank <= remaining_capital[sims_at_rank])
+        if not cp.any(affordable):
+            continue
+        accepted_indices = rank_indices[affordable]
+        accepted_sims = sorted_sims[accepted_indices]
+        accepted_costs = sorted_costs[accepted_indices]
+        final_buy_mask[accepted_indices] = True
+        remaining_capital[accepted_sims] -= accepted_costs
+
+    if trace_cfg is not None and trace_cfg["stock_idx"] >= 0:
+        trace_sim = trace_cfg["sim_idx"]
+        trace_stock = trace_cfg["stock_idx"]
+        trace_mask_sorted = (sorted_sims == trace_sim) & (sorted_stocks == trace_stock)
+        if cp.any(trace_mask_sorted):
+            trace_sorted_idx = int(cp.where(trace_mask_sorted)[0][0].item())
+            trace_rank = int(rank_in_sim[trace_sorted_idx].item())
+            prior_selected_mask = (sorted_sims == trace_sim) & (rank_in_sim < trace_rank) & final_buy_mask
+            spent_before = float(cp.sum(sorted_costs[prior_selected_mask]).item())
+            capital_before = float((portfolio_state[trace_sim, 0] - spent_before).item())
+            print(
+                "[GPU_ADD_TRACE_CAND] "
+                f"stage=sorted sim={trace_sim} ticker={trace_cfg['ticker']} "
+                f"rank={trace_rank} priority={float(sorted_priority_scores[trace_sorted_idx].item()):.8f} "
+                f"total_cost={float(sorted_costs[trace_sorted_idx].item()):.2f} "
+                f"capital_before={capital_before:.2f} "
+                f"final_buy_mask={int(final_buy_mask[trace_sorted_idx].item())}"
+            )
+        else:
+            print(
+                "[GPU_ADD_TRACE_CAND] "
+                f"stage=sorted sim={trace_sim} ticker={trace_cfg['ticker']} present=0"
+            )
 
     if not cp.any(final_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
@@ -455,21 +563,19 @@ def _process_additional_buy_signals_gpu(
     final_exec_prices = sorted_exec_prices[final_buy_mask]
     final_costs = sorted_costs[final_buy_mask]
 
-    # 자본 업데이트
-    # 매수가 발생한 시뮬레이션과 각 시뮬레이션별 총비용 계산
-    unique_bought_sims, bought_sim_starts = cp.unique(final_sims, return_index=True)
-    total_cost_per_sim = cp.add.reduceat(final_costs, bought_sim_starts)
-    
-    # `subtract.at`이 float32를 지원하지 않는 문제를 우회하기 위해,
-    # 차감할 비용을 담은 임시 배열을 생성한 후, 전체를 한 번에 뺍니다.
-    costs_to_subtract = cp.zeros_like(portfolio_state[:, 0])
-    costs_to_subtract[unique_bought_sims] = total_cost_per_sim
-    portfolio_state[:, 0] -= costs_to_subtract
+    # 자본 업데이트 (rank 순차 선택 결과 반영본)
+    portfolio_state[:, 0] = remaining_capital
 
-    # 포지션 업데이트
-    # 추가 매수가 들어갈 비어있는 split_idx를 찾습니다.
-    # 추가 매수는 종목당 하루에 최대 한 번이므로, 현재 보유 차수가 곧 비어있는 인덱스가 됩니다.
-    split_indices = num_positions[final_sims, final_stocks]
+    # 포지션 업데이트: 부분청산으로 split hole이 생길 수 있으므로 첫 empty slot에 기록
+    split_slot_empty_mask = positions_state[final_sims, final_stocks, :, 0] <= 0
+    has_empty_slot = cp.any(split_slot_empty_mask, axis=1)
+    if not bool(cp.all(has_empty_slot)):
+        missing_slots = int(cp.sum(~has_empty_slot).item())
+        raise RuntimeError(
+            "No empty split slot for additional buy in GPU path. "
+            f"missing_slots={missing_slots}"
+        )
+    split_indices = cp.argmax(split_slot_empty_mask, axis=1).astype(cp.int32)
     
     positions_state[final_sims, final_stocks, split_indices, 0] = final_quantities
     positions_state[final_sims, final_stocks, split_indices, 1] = final_exec_prices
@@ -492,8 +598,16 @@ def _process_additional_buy_signals_gpu(
             
             print(f"[GPU_ADD_BUY_SUMMARY] Day {current_day_idx}, Sim 0 | Buys: {sim0_stocks.size} | Capital After: {capital_after:,.0f}")
             for i in range(sim0_stocks.size):
-                ticker_code = all_tickers[sim0_stocks[i].item()]
-                print(f"  └─ Stock {sim0_stocks[i].item()}({ticker_code}) | Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}")
+                stock_idx = sim0_stocks[i].item()
+                ticker_code = all_tickers[stock_idx]
+                split_idx = split_indices[sim0_mask][i].item()
+                target_price = trigger_prices[0, stock_idx].item()
+                print(
+                    f"  └─ Stock {stock_idx}({ticker_code}) | "
+                    f"Split: {split_idx} | "
+                    f"Target: {target_price:,.6f} | "
+                    f"Qty: {sim0_quants[i].item():,.0f} @ {sim0_prices[i].item():,.0f}"
+                )
 
     return portfolio_state, positions_state, last_trade_day_idx_state
 
@@ -506,6 +620,7 @@ def _process_new_entry_signals_gpu(
     cooldown_period_days: int,
     param_combinations: cp.ndarray,
     current_prices: cp.ndarray,
+    signal_close_prices: cp.ndarray,
     # [삭제] current_lows, current_highs
     candidate_tickers_for_day: cp.ndarray,
     candidate_atrs_for_day: cp.ndarray,
@@ -517,6 +632,12 @@ def _process_new_entry_signals_gpu(
     strict_cash_rounding: bool = False,
     # [삭제] trading_dates_pd_cpu
 ):
+    def _next_active_sim_indices():
+        return cp.where(
+            (temp_available_slots > 0)
+            & (temp_capital >= investment_per_order)
+        )[0]
+
     # --- [유지] 0. 진입 조건 확인 ---
     has_any_position = cp.any(positions_state[..., 0] > 0, axis=2)
     current_num_stocks = cp.sum(has_any_position, axis=1)
@@ -542,7 +663,6 @@ def _process_new_entry_signals_gpu(
     # candidate_tickers_for_day는 엔진에서 이미
     # entry_composite_score_q desc -> market_cap_q desc -> ticker asc 순으로 정렬되어 전달된다.
     # 신규 진입에서는 이 입력 순서를 그대로 사용해야 CPU/GPU parity가 유지된다.
-    num_simulations = param_combinations.shape[0]
     num_candidates = int(candidate_tickers_for_day.size)
     investment_per_order = portfolio_state[:, 1]
     commission_rate = cp.float32(buy_commission_rate)
@@ -562,13 +682,18 @@ def _process_new_entry_signals_gpu(
 
     temp_capital = portfolio_state[:, 0].copy()
     temp_available_slots = available_slots.copy()
+    # CPU parity contract:
+    # 신규 진입 루프는 "아직 슬롯이 있고 주문 예산도 남아 있는 simulation"만
+    # 계속 후보를 검사하면 된다. 이 집합 밖의 simulation은 CPU 경로에서도
+    # 이후 후보를 더 보지 않으므로, active set 축소는 의미론을 바꾸지 않는다.
+    active_sim_indices = _next_active_sim_indices()
 
     # 디버깅을 위한 임시 로그 변수 (실제 계산과 분리)
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
 
     for k in range(num_candidates):
-        if not cp.any(temp_available_slots > 0):
+        if active_sim_indices.size == 0:
             break
 
         stock_idx = int(candidate_tickers_for_day[k].item())
@@ -576,44 +701,45 @@ def _process_new_entry_signals_gpu(
         if float(buy_price.item()) <= 0:
             continue
 
-        quantities = quantities_matrix[:, k]
-        total_costs = total_costs_matrix[:, k]
-        has_slot = temp_available_slots > 0
-
-        cooldown_ref = cooldown_state[:, stock_idx]
-        is_holding = has_any_position[:, stock_idx]
+        quantities = quantities_matrix[active_sim_indices, k]
+        total_costs = total_costs_matrix[active_sim_indices, k]
+        cooldown_ref = cooldown_state[active_sim_indices, stock_idx]
+        is_holding = has_any_position[active_sim_indices, stock_idx]
         is_in_cooldown = (cooldown_ref != -1) & ((current_day_idx - cooldown_ref) < cooldown_period_days)
-        initial_buy_mask = has_slot & (~is_holding) & (~is_in_cooldown)
+        initial_buy_mask = (~is_holding) & (~is_in_cooldown)
         if not cp.any(initial_buy_mask):
             continue
 
-        # CPU execution parity:
-        # 투자금(investment_per_order) 자체와 비교하지 않고, 실제 체결 총비용을 감당 가능한지만 본다.
-        still_valid_mask = initial_buy_mask & (quantities > 0) & (temp_capital >= total_costs)
+        still_valid_mask = (
+            initial_buy_mask
+            & (quantities > 0)
+            & (temp_capital[active_sim_indices] >= total_costs)
+        )
 
         if not cp.any(still_valid_mask):
             continue
 
         # 이번 스텝(k)에서 실제 매수가 발생하는 시뮬레이션들의 인덱스
-        active_sim_indices = cp.where(still_valid_mask)[0]
-        final_costs = total_costs[active_sim_indices]
-        final_quantities = quantities[active_sim_indices]
+        selected_sim_indices = active_sim_indices[still_valid_mask]
+        final_costs = total_costs[still_valid_mask]
+        final_quantities = quantities[still_valid_mask]
 
         # 3. 상태 업데이트
-        capital_before_buy = temp_capital[active_sim_indices].copy()  # 로그 기록용
+        capital_before_buy = temp_capital[selected_sim_indices].copy()  # 로그 기록용
 
         # [핵심] 실제 자본과 슬롯을 '즉시' 차감하여 다음 k 루프에 영향을 줌
-        temp_capital[active_sim_indices] -= final_costs
-        temp_available_slots[active_sim_indices] -= 1
+        temp_capital[selected_sim_indices] -= final_costs
+        temp_available_slots[selected_sim_indices] -= 1
 
-        positions_state[active_sim_indices, stock_idx, 0, 0] = final_quantities
-        positions_state[active_sim_indices, stock_idx, 0, 1] = buy_price
-        positions_state[active_sim_indices, stock_idx, 0, 2] = current_day_idx
-        last_trade_day_idx_state[active_sim_indices, stock_idx] = current_day_idx
+        positions_state[selected_sim_indices, stock_idx, 0, 0] = final_quantities
+        positions_state[selected_sim_indices, stock_idx, 0, 1] = buy_price
+        positions_state[selected_sim_indices, stock_idx, 0, 2] = current_day_idx
+        last_trade_day_idx_state[selected_sim_indices, stock_idx] = current_day_idx
+        active_sim_indices = _next_active_sim_indices()
 
         # --- 4. [수정] 새로운 로직에 맞는 디버깅 및 에러 로깅 ---
         if debug_mode:
-            sim0_mask = active_sim_indices == 0
+            sim0_mask = selected_sim_indices == 0
             if cp.any(sim0_mask):
                 costs_sim0 = final_costs[sim0_mask]
                 quantities_sim0 = final_quantities[sim0_mask]
@@ -628,9 +754,11 @@ def _process_new_entry_signals_gpu(
                     cap_after_log = temp_cap_log - cost_item
                     expected_quantity = quantities_sim0[i].item()
                     actual_quantity = recorded_quantity
+                    trigger_price_val = signal_close_prices[stock_idx].item()
 
                     print(
                         f"[GPU_NEW_BUY_CALC] {current_day_idx}, Sim 0, Stock {stock_idx}({ticker_code}) | "
+                        f"Target: {trigger_price_val:,.6f} | "
                         f"Invest: {investment_per_order[0].item():,.0f} / ExecPrice: {buy_price_val:,.0f} = Qty: {expected_quantity:,.0f}"
                     )
                     print(f"  └─ Executed Buy Price Saved to State: {buy_price_val:,.0f}")
@@ -645,9 +773,9 @@ def _process_new_entry_signals_gpu(
                     temp_cap_log = cap_after_log
         else:
             # 에러 버퍼링 로직 (기존과 유사)
-            error_mask = temp_capital[active_sim_indices] < 0
+            error_mask = temp_capital[selected_sim_indices] < 0
             if cp.any(error_mask):
-                error_sim_indices = active_sim_indices[error_mask]
+                error_sim_indices = selected_sim_indices[error_mask]
                 num_errors = len(error_sim_indices)
                 start_idx = cp.atomicAdd(log_counter, 0, num_errors)
                 if start_idx + num_errors < log_buffer.shape[0]:
@@ -707,7 +835,6 @@ def run_magic_split_strategy_on_gpu(
     initial_cash: float,
     param_combinations: cp.ndarray,
     all_data_gpu: cudf.DataFrame,
-    weekly_filtered_gpu: cudf.DataFrame,
     trading_date_indices: cp.ndarray,
     trading_dates_pd_cpu: pd.DatetimeIndex,
     all_tickers: list,
@@ -723,13 +850,10 @@ def run_magic_split_strategy_on_gpu(
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
     
     # Config from exec_params
-    candidate_source_mode = execution_params.get("candidate_source_mode", "tier")
-    if candidate_source_mode != "tier":
-        print(
-            f"[Warning] candidate_source_mode '{candidate_source_mode}' is deprecated. "
-            "Forcing 'tier' (A-path)."
-        )
-        candidate_source_mode = "tier"
+    candidate_source_mode, _ = normalize_runtime_candidate_policy(
+        execution_params.get("candidate_source_mode", "tier"),
+        execution_params.get("use_weekly_alpha_gate", False),
+    )
     if tier_tensor is None:
         raise ValueError("tier_tensor is required when candidate_source_mode='tier'")
 
@@ -749,7 +873,6 @@ def run_magic_split_strategy_on_gpu(
     
     ticker_to_idx = {ticker: i for i, ticker in enumerate(all_tickers)}
     all_data_reset_idx = all_data_gpu.reset_index()
-    weekly_filtered_reset_idx = weekly_filtered_gpu.reset_index()
     print(f"Data prepared for GPU backtest. Mode: {candidate_source_mode}")
 
     previous_prices_gpu = cp.zeros(num_tickers, dtype=cp.float32)

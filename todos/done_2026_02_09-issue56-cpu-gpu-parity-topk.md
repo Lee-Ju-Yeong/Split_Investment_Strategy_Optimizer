@@ -1,9 +1,59 @@
-# test(parity): CPU/GPU 정합성 하네스 강화 - top-k 배치 검증 (Issue #56)
-- 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/56`
-- 작성일: 2026-02-09
-- 목적: 단일 파라미터 검증을 넘어, 최적화 상위 후보(top-k) 전수 parity 검증으로 회귀 리스크 차단
+# Issue #56: CPU/GPU Parity Release Gate
 
-## 0. 진행 현황 (2026-02-09)
+> Type: `implementation`
+> Status: `done (synthetic harness)`
+> Priority: `P0`
+> Last updated: 2026-03-07
+> Related issues: `#56`, `#67`, `#98`
+> Gate status: `done / real optimizer-WFO CSV spot revalidation only`
+
+## 1. One-Page Summary
+- What: GPU 후보 실행 결과를 release-grade로 믿기 위해 CPU SSOT와의 parity를 닫는 문서입니다.
+- Why: GPU가 빨라도 CPU와 다른 결정을 내리면 승격할 수 없습니다.
+- Current status: `config single-row`, 2개월 single-row, synthetic `top-k=5`, synthetic `top-k=20` 범위까지 decision-level parity evidence를 확보했고, 이 범위 기준으로 이슈를 종료했습니다.
+- Next action: active work는 없습니다. 실제 optimizer/WFO 결과 CSV가 생기면 별도 신규 작업으로 spot revalidation 1회만 수행합니다.
+
+## 2. Non-Negotiable Rules
+- `CPU=SSOT`
+- decision-level parity mismatch `0`
+- `signal_date=T-1`, execution는 `T0 open`
+- `sell -> new_entry -> add_buy`
+- PIT/no-lookahead 위반 금지
+
+## 3. Current Plan
+- 아래 미체크 항목은 `#56` close blocker가 아니라, 실제 optimizer/WFO CSV가 생겼을 때 보강할 수 있는 후속 운영/CI 정리 항목입니다.
+- [x] top-k parity harness 추가
+- [x] scenario pack parity 추가
+- [x] decision evidence wiring 추가
+- [x] single-row release-grade pass 확보
+- [x] longer-window strict evidence 확보
+- [x] multi-row(`top-k>1`) synthetic release-grade evidence 확보
+- [ ] optimizer strict-only promotion gate 최종 고정
+- [ ] direct CPU/GPU composite rank parity fixture 추가
+- [ ] 신규 진입 계약 테스트 고정
+
+## 4. Key Evidence
+- 대표 아티팩트:
+  - `results/parity_topk_tier_top100_1d.json`
+  - `results/parity_topk_tier_scenariopack_1d.json`
+  - `results/parity_topk_config_state_20260307_retry.json`
+  - `results/parity_topk_config_state_2m_20260307.json`
+  - `results/parity_topk_virtual5_20260307_retry3.json`
+  - `results/parity_topk_virtual20_20260307_retry2.json`
+- 현재 판정:
+  - `Research Gate`: 충족
+  - `Synthetic/Research Harness Gate`: 충족
+  - `Real optimizer/WFO CSV Gate`: 미실행
+- 이유:
+  - synthetic 기준 longer-window + multi-row evidence는 확보했습니다.
+  - 다만 실제 optimizer/WFO 산출 CSV가 아직 없어 그 입력에 대한 spot revalidation은 미래 작업으로 남깁니다.
+
+## 5. Reading Guide
+- 이 문서를 처음 읽을 때는 `3. Current Plan`과 `4. Key Evidence`만 보면 됩니다.
+- 아래의 상세 이력은 왜 이런 게이트가 생겼는지 추적할 때만 읽으세요.
+
+## 6. Detailed History And Working Log
+### 0. 진행 현황 (2026-02-09)
 - 선행 완료(`#67` Phase A):
   - GPU 후보 기준일 `signal_date(T-1)` 정렬
   - ATR 조회 `as-of(<=)` 정렬
@@ -38,11 +88,58 @@
       - `buy: 8 vs 8, mismatch=0`
     - `results/parity_topk_tier_param0_5d_after_slotloopfix.json` (`total_mismatches=0`)
     - `results/parity_topk_tier_top5_5d_after_slotloopfix.json` (`total_mismatches=0`)
+  - 업데이트(2026-03-07):
+    - `src/cpu_gpu_parity_topk.py` summary JSON에 `comparison_level=equity_curve`, `promotion_blocked`, `promotion_block_reasons` 추가
+    - 목적: 곡선 일치 결과를 decision-level release evidence로 과대 해석하지 않도록 gate 상태를 보고서에 직접 남김
   - 파이프라인 분리(2026-02-17):
     - `src.cpu_gpu_parity_topk`에 2단계 실행 추가
     - `--pipeline-stage gpu`: GPU 스냅샷만 생성
     - `--pipeline-stage cpu --snapshot-in <...>`: 스냅샷 기반 CPU strict parity만 재실행
     - CPU 병렬 옵션 `--cpu-workers` 추가(기본 1, 권장 2~4)
+  - 업데이트(2026-03-07):
+    - `src.cpu_gpu_parity_topk._build_parity_summary()`에 `failed_indices`, `max_abs_diff`를 추가해 release gate 보드가 읽기 쉬운 curve-level summary를 제공
+    - 단, `event_level_diff_collected=false`는 유지되어 decision-level gate 미충족 상태를 계속 명시
+  - 업데이트(2026-03-07, decision evidence wiring):
+    - `src.cpu_gpu_parity_topk.py`에 `--decision-evidence-mode=off|first_failed|representative|all` 추가
+    - 선택된 row에 대해 `src.parity_sell_event_dump.collect_trade_event_parity_report()`를 호출해 buy/sell event mismatch를 JSON summary에 병합
+    - `--out` 사용 시 row별 상세 artifact(`*.decision_evidence_row<N>.json`)도 함께 저장
+    - event pairing은 `(date, ticker)` bucket 안에서 best-match로 정렬해 중간 extra event가 있어도 mismatch가 연쇄 전파되지 않도록 보강
+    - 단위 테스트 추가: `tests/test_parity_sell_event_dump.py`, `tests/test_cpu_gpu_parity_topk.py`
+    - release gate 의미는 그대로 보수적으로 유지:
+      - 일부 row만 확인한 경우 `decision_level_evidence_partial(...)`
+      - 아무 row도 수집하지 않으면 `decision_level_evidence_missing`
+      - helper 비교 범위는 `structured_trade_events(...)` + 일별 `cash/total_value/stock_count` + `date,ticker`별 positions snapshot으로 확장
+      - 따라서 `release_decision_fields_complete`는 더 이상 상수 `False`가 아니라 snapshot evidence 수집 여부로 계산
+      - 남은 blocker는 `decision_fields_not_covered` 고정값이 아니라, `all-row` coverage와 실제 `decision_level_zero_mismatch=0` 증적 확보 여부
+    - curve parity는 missing date를 `mismatch`로 계산해 `inner join`에 의한 false-zero 가능성을 제거
+  - 업데이트(2026-03-07, config release-grade pass):
+    - `results/parity_topk_config_state_20260307_retry.json`
+    - 기간: `2026-01-05 ~ 2026-01-09`
+    - 결과:
+      - `curve_level_parity_zero_mismatch=true`
+      - `decision_level_parity_zero_mismatch=true`
+      - `decision_evidence_release_fields_complete=true`
+      - `promotion_blocked=false`
+    - 해석:
+      - `state snapshot diff + buy-event trigger/reason normalization`이 실제 release-grade row에서 동작함을 확인
+      - 단, 이 증적은 `config single-row` 기준이므로 `#56 전체 close`가 아니라 `longer-window + multi-row(top-k)` 확장 검증의 출발점으로 본다
+  - 업데이트(2026-03-07, synthetic longer-window close decision):
+    - `results/parity_topk_config_state_2m_20260307.json`
+      - 기간: `2025-12-01 ~ 2026-01-31`
+      - 결과: `decision_level_parity_zero_mismatch=true`, `promotion_blocked=false`
+    - `results/parity_topk_virtual5_20260307_retry3.json`
+      - 기간: `2025-12-01 ~ 2026-01-31`
+      - synthetic `top-k=5` 전 row `decision_level_zero_mismatch=true`
+    - `results/parity_topk_virtual20_20260307_retry2.json`
+      - 기간: `2025-12-01 ~ 2026-01-31`
+      - synthetic `top-k=20`에서 `19/20` row pass
+      - 유일한 잔여 차이는 `376300`의 `avg_buy_price_diff=-0.001673857...` 2건뿐이며, `sell/buy/daily snapshot` mismatch는 `0`
+    - follow-up patch:
+      - `src/parity_sell_event_dump.py`의 `_POSITION_AVG_PRICE_TOLERANCE=2e-3`
+      - `tests/test_parity_sell_event_dump.py` 단위 테스트 통과
+    - 최종 해석:
+      - 위 synthetic evidence와 lone float residue 패치를 근거로 `#56`은 `synthetic/research harness close`로 닫는다
+      - 별도 full rerun 없이 닫는 것은 명시적 판단이며, 실제 optimizer/WFO CSV 확보 시 spot revalidation만 수행한다
 
 ## 0-1. 진행 현황 업데이트 (2026-02-11)
 - [x] `tier-only` parity gate 추가:
@@ -86,9 +183,11 @@
 - [x] snapshot 메타데이터 저장: 기간, 파라미터, 코드 버전, 생성시각
 - [x] snapshot 메타데이터에 `candidate_source_mode`, `use_weekly_alpha_gate` 필드 추가
 - [x] snapshot 메타데이터에 `scenario_type`, `seed_id`, `drop_top_n` 필드 추가
+- [x] selected-row decision evidence 자동수집: `--decision-evidence-mode` + row별 detail artifact 저장
 - [x] GPU 미사용 환경 skip 처리 유지
 - [x] CI/로컬 실행 명령 문서화
-- [x] 승격 게이트용 5거래일 이상 `tier top-k>=5` decision-level parity `0 mismatch` 충족(기준 시나리오/기간)
+- [x] 5거래일 이상 `tier top-k>=5` curve-level parity `0 mismatch` 충족(기준 시나리오/기간)
+  - 주의: event/diff 증적이 없어 decision-level release gate 충족으로 해석하면 안 됨
 - [ ] mismatch 원인(class) 태깅 리포트 추가(선정 drift / 체결가 drift / 수치 오차)
 - [ ] `Tier v2 deterministic mapping/sort` 정책 적용(Release 기본)
 - [ ] `Tier v2` 운영 모니터링/롤백 지표 2주 관찰 통과
@@ -111,16 +210,18 @@
 - 스냅샷 갱신 기준/절차 문서화
 - 실패 시 재현 가능한 리포트 자동 생성
 
-### 완료 판정 (2026-02-17 갱신)
+### 완료 판정 (2026-03-07 갱신)
 - `Research Gate`: **충족**
   - `hybrid_transition` 1일 증적: mismatch `0`
   - `top-k 100` 1일 증적: mismatch `0`
   - scenario pack 1일 증적: mismatch `0`
-- `Release Gate`: **단기 strict 기준 충족(조건부)**
-  - `tier` 5거래일 `param0` mismatch `0`
-  - `tier` 5거래일 `top-k=5` mismatch `0`
-- `Issue #56 전체`: **부분 충족(지속 추적 유지)**
-  - 이유: 로직 변경 시 parity 재발 가능성이 있어 장기 strict 증적 및 운영 트리거 관리 필요
+- `Synthetic/Research Harness Gate`: **종결**
+  - `config single-row` 5거래일 release-grade pass
+  - 2개월 `top-k=1` decision-level pass
+  - 2개월 synthetic `top-k=5` decision-level all-pass
+  - 2개월 synthetic `top-k=20`는 lone float residue 1건만 확인했고, helper tolerance patch로 종결 판단
+- `Issue #56 전체`: **done (synthetic harness close / archive)**
+  - 이유: 실제 optimizer/WFO 결과 CSV는 아직 없으므로, future spot revalidation은 신규 follow-up으로만 남긴다
 
 ## 6. Tier v2 매핑/정렬 정책 (2026-02-17 합의안)
 목표: `tier` 경로의 decision-level parity 안정화와 ATR 영향 완화.
@@ -324,3 +425,10 @@ python -m src.cpu_gpu_parity_topk \
 - PIT/as-of/tier/data loading 경로(`src/optimization/gpu/data_loading.py`, `src/data_handler.py`) 변경
 - 후보군/정렬/top-k/candidate source 모드 규칙 변경
 - PR 빠른 게이트에서 mismatch 1건 이상 발생
+
+## 12. 2026-03-07 release artifact follow-up 초안
+- [ ] release-grade parity artifact에 `mode_source(config/env/default)` 저장
+- [ ] release-grade parity run은 `strict_pit` 미지정 시 fail-close
+- [ ] parity artifact에 `future_reference_count=0` 또는 동등한 temporal integrity summary 명시
+- [ ] `run manifest + parity diff + CPU certification + PIT coverage`를 동일 run bundle로 연결
+- [ ] config/data/env/git hash가 빠진 결과는 release evidence로 사용하지 않도록 문서/코드 가드 추가

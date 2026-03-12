@@ -4,28 +4,37 @@ It is used to test the GPU single run with the parameters from the config.yaml f
 """
 import time
 import argparse
+from pathlib import Path
+import sys
 import cupy as cp
 import pandas as pd
 from sqlalchemy import create_engine
 import os
 import urllib.parse
 
+# BOOTSTRAP: allow direct execution (`python src/debug_gpu_single_run.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
+
 # --- 필요한 모듈 추가 임포트 ---
-from src.config_loader import load_config
-from src.backtest_strategy_gpu import run_magic_split_strategy_on_gpu
-from src.price_policy import (
+from .config_loader import load_config
+from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
+from .gpu_execution_policy import build_gpu_execution_params
+from .price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,
     validate_backtest_window_for_price_policy,
 )
-from src.universe_policy import resolve_universe_mode
-from src.optimization.gpu.data_loading import (
+from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
+from .universe_policy import resolve_universe_mode
+from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
     preload_tier_data_to_tensor as preload_tier_data_to_tensor_shared,
-    preload_weekly_filtered_stocks_to_gpu as preload_weekly_filtered_stocks_to_gpu_shared,
 )
 ### 이슈 #3 동기화를 위한 모듈 임포트 ###
-from src.performance_analyzer import PerformanceAnalyzer
+from .performance_analyzer import PerformanceAnalyzer
 
 # -----------------------------------------------------------------------------
 # 1. Configuration and Parameter Setup
@@ -105,9 +114,6 @@ def preload_all_data_to_gpu(
         universe_mode=universe_mode,
     )
 
-def preload_weekly_filtered_stocks_to_gpu(engine, start_date, end_date):
-    return preload_weekly_filtered_stocks_to_gpu_shared(engine, start_date, end_date)
-
 def preload_tier_data_to_tensor(
     engine,
     start_date,
@@ -116,6 +122,8 @@ def preload_tier_data_to_tensor(
     trading_dates_pd,
     *,
     universe_mode="optimistic_survivor",
+    min_liquidity_20d_avg_value=0,
+    min_tier12_coverage_ratio=None,
 ):
     return preload_tier_data_to_tensor_shared(
         engine,
@@ -124,6 +132,8 @@ def preload_tier_data_to_tensor(
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+        min_tier12_coverage_ratio=min_tier12_coverage_ratio,
     )
 
 # -----------------------------------------------------------------------------
@@ -131,7 +141,7 @@ def preload_tier_data_to_tensor(
 # -----------------------------------------------------------------------------
 
 def run_gpu_backtest_kernel(params_gpu, data_gpu,
-                         weekly_filtered_gpu, all_tickers,
+                         all_tickers,
                          trading_date_indices_gpu,
                          trading_dates_pd,
                          initial_cash_value,
@@ -148,7 +158,6 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
         initial_cash=initial_cash_value,
         param_combinations=params_gpu,
         all_data_gpu=data_gpu,
-        weekly_filtered_gpu=weekly_filtered_gpu,
         trading_date_indices=trading_date_indices_gpu,
         trading_dates_pd_cpu=trading_dates_pd,
         all_tickers=all_tickers,
@@ -161,6 +170,18 @@ def run_gpu_backtest_kernel(params_gpu, data_gpu,
     print("🎉 GPU backtesting kernel finished.")
     
     return daily_portfolio_values
+
+
+def _build_run_execution_params(params_dict: dict, universe_mode: str):
+    return build_gpu_execution_params(
+        execution_params,
+        params_dict,
+        universe_mode,
+        default_tier_hysteresis_mode=strategy_params.get(
+            'tier_hysteresis_mode',
+            'strict_hysteresis_v1',
+        ),
+    )
 
 # 4. [신규] 워커 함수: run_single_backtest
 def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initial_cash: float, debug_mode: bool = False):
@@ -214,7 +235,6 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(db_connection_str, start_date, end_date)
     
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -240,21 +260,18 @@ def run_single_backtest(start_date: str, end_date: str, params_dict: dict, initi
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=int(params_dict.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=params_dict.get("min_tier12_coverage_ratio"),
     )
 
     # 3. 백테스팅 커널 실행
     start_time_kernel = time.time()
     
-    # exec_params에 모드 정보 추가
-    run_exec_params = execution_params.copy()
-    run_exec_params['candidate_source_mode'] = params_dict.get('candidate_source_mode', 'tier')
-    run_exec_params['use_weekly_alpha_gate'] = params_dict.get('use_weekly_alpha_gate', False)
-    run_exec_params['universe_mode'] = universe_mode
+    run_exec_params = _build_run_execution_params(params_dict, universe_mode)
     
     daily_values_result = run_gpu_backtest_kernel(
         param_combinations, 
         all_data_gpu, 
-        weekly_filtered_gpu,
         all_tickers, 
         trading_date_indices_gpu,
         trading_dates_pd,
@@ -292,11 +309,15 @@ def _cpu_daily_values_to_series(cpu_result):
 
 
 def run_tier_parity_gate(config_dict, gpu_equity_curve, tolerance=1e-3):
-    from src.main_backtest import run_backtest_from_config
+    from .main_backtest import run_backtest_from_config
 
     cfg = dict(config_dict)
     cfg["strategy_params"] = dict(cfg.get("strategy_params", {}))
     cfg["strategy_params"]["candidate_source_mode"] = "tier"
+    cfg["strategy_params"]["use_weekly_alpha_gate"] = False
+    cfg["strategy_params"]["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
+        cfg["strategy_params"].get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
 
     cpu_result = run_backtest_from_config(cfg)
     cpu_curve = _cpu_daily_values_to_series(cpu_result)

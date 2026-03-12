@@ -4,7 +4,10 @@ test_backtest_strategy_gpu.py
 Unit tests for the GPU-accelerated backtesting logic to ensure its results
 are consistent with the original CPU-based implementation.
 """
+import json
 import unittest
+from pathlib import Path
+
 import numpy as np
 import cupy as cp
 import pandas as pd
@@ -14,6 +17,21 @@ from src.backtest.gpu.logic import (
     _calculate_monthly_investment_gpu,
     _process_additional_buy_signals_gpu,
     _process_sell_signals_gpu,
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ISSUE98_CANONICAL_PROFILE = "issue98_janfeb2024_multibatch_research020"
+ISSUE98_BASELINE_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98c_slice2_janfeb2024_cov020_20260308_131130/summary.json"
+)
+ISSUE98_SLICE2A_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98b2_slice2a_janfeb2024_cov020_20260308_152446/summary.json"
+)
+ISSUE98_SLICE1ONLY_SUMMARY_PATH = (
+    PROJECT_ROOT
+    / "results/issue98_measure/pr98b2_slice1only_janfeb2024_cov020_20260308_162509/summary.json"
 )
 
 # A mock Position class to simulate the structure of the original data
@@ -80,10 +98,6 @@ class TestBacktestStrategyGPU(unittest.TestCase):
         
         self.current_date = pd.to_datetime('2023-01-10')
         
-    def test_calculate_portfolio_value_gpu(self):
-        # ... (previous test remains here) ...
-        pass
-
     def test_calculate_monthly_investment_gpu(self):
         """
         Tests if the vectorized monthly investment calculation is correct.
@@ -128,6 +142,189 @@ class TestBacktestStrategyGPU(unittest.TestCase):
             cp.allclose(expected_results, updated_portfolio_state),
             "GPU monthly investment calculation does not match CPU result."
         )
+
+def _build_issue98_summary(*, profile, run1_kernel_s, run2_kernel_s, run1_wall_s, run2_wall_s):
+    return {
+        "canonical_profile": profile,
+        "run1": {
+            "kernel_s": float(run1_kernel_s),
+            "wall_clock_s": float(run1_wall_s),
+            "batch_count": 4,
+            "oom_retry": False,
+        },
+        "run2": {
+            "kernel_s": float(run2_kernel_s),
+            "wall_clock_s": float(run2_wall_s),
+            "batch_count": 4,
+            "oom_retry": False,
+        },
+    }
+
+def _load_issue98_summary(summary_path):
+    with Path(summary_path).open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+def _summary_median(summary, metric_key, median_key):
+    median_value = summary.get(median_key)
+    if median_value is not None:
+        return float(median_value)
+    run_values = [float(summary["run1"][metric_key]), float(summary["run2"][metric_key])]
+    return float(np.median(run_values))
+
+def _profile_violations(*, baseline_summary, candidate_summary, required_profile):
+    if baseline_summary.get("canonical_profile") != required_profile:
+        return ["baseline canonical_profile mismatch"]
+    if candidate_summary.get("canonical_profile") != required_profile:
+        return ["candidate canonical_profile mismatch"]
+    return []
+
+def _run_health_violations(*, candidate_summary):
+    violations = []
+    for run_key in ("run1", "run2"):
+        run_summary = candidate_summary.get(run_key)
+        if not isinstance(run_summary, dict):
+            violations.append(f"{run_key} missing")
+            continue
+        if bool(run_summary.get("oom_retry")):
+            violations.append(f"{run_key} has OOM retry")
+        if int(run_summary.get("batch_count", 0)) < 4:
+            violations.append(f"{run_key} batch_count < 4")
+    return violations
+
+def _metric_budget_violations(*, baseline_summary, candidate_summary, max_kernel_regression_pct, max_wall_regression_pct):
+    violations = []
+    metric_budgets = (
+        ("kernel_s", "median_kernel_s", "median_kernel_s", max_kernel_regression_pct),
+        ("wall_clock_s", "median_wall_s", "median_wall_s", max_wall_regression_pct),
+    )
+    for metric_key, median_key, label, budget_pct in metric_budgets:
+        baseline_median = _summary_median(baseline_summary, metric_key, median_key)
+        candidate_median = _summary_median(candidate_summary, metric_key, median_key)
+        regression_pct = ((candidate_median - baseline_median) / baseline_median) * 100.0
+        if regression_pct > budget_pct:
+            violations.append(
+                f"{label}: regression_pct={regression_pct:.2f}% > budget_pct={budget_pct:.2f}%"
+            )
+    return violations
+
+def _collect_issue98_perf_budget_violations(
+    *,
+    baseline_summary,
+    candidate_summary,
+    required_profile,
+    max_kernel_regression_pct,
+    max_wall_regression_pct,
+):
+    violations = _profile_violations(
+        baseline_summary=baseline_summary,
+        candidate_summary=candidate_summary,
+        required_profile=required_profile,
+    )
+    if violations:
+        return violations
+    violations = _run_health_violations(candidate_summary=candidate_summary)
+    if violations:
+        return violations
+    return _metric_budget_violations(
+        baseline_summary=baseline_summary,
+        candidate_summary=candidate_summary,
+        max_kernel_regression_pct=max_kernel_regression_pct,
+        max_wall_regression_pct=max_wall_regression_pct,
+    )
+
+class TestIssue98PerfRegressionGuard(unittest.TestCase):
+    canonical_profile = ISSUE98_CANONICAL_PROFILE
+
+    def _artifact_summary(self, summary_path):
+        self.assertTrue(summary_path.is_file(), f"missing perf artifact: {summary_path}")
+        return _load_issue98_summary(summary_path)
+
+    def test_pr98d_budget_guard_accepts_baseline_artifact(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=baseline,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, [])
+
+    def test_pr98d_budget_guard_detects_slice2a_artifact_regression(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        candidate = self._artifact_summary(ISSUE98_SLICE2A_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        joined = " | ".join(violations)
+        self.assertIn("median_kernel_s", joined)
+        self.assertIn("median_wall_s", joined)
+
+    def test_pr98d_budget_guard_detects_slice1only_rollback_artifact_regression(self):
+        baseline = self._artifact_summary(ISSUE98_BASELINE_SUMMARY_PATH)
+        candidate = self._artifact_summary(ISSUE98_SLICE1ONLY_SUMMARY_PATH)
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=0.5,
+            max_wall_regression_pct=1.0,
+        )
+        joined = " | ".join(violations)
+        self.assertIn("median_kernel_s", joined)
+        self.assertIn("median_wall_s", joined)
+
+    def test_pr98d_budget_guard_accepts_small_regression_within_budget(self):
+        baseline = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1092.74,
+            run2_kernel_s=1119.44,
+            run1_wall_s=1132.13,
+            run2_wall_s=1160.57,
+        )
+        candidate = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1107.00,
+            run2_kernel_s=1108.00,
+            run1_wall_s=1148.00,
+            run2_wall_s=1150.00,
+        )
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=1.0,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, [])
+
+    def test_pr98d_budget_guard_rejects_canonical_profile_mismatch(self):
+        baseline = _build_issue98_summary(
+            profile=self.canonical_profile,
+            run1_kernel_s=1092.74,
+            run2_kernel_s=1119.44,
+            run1_wall_s=1132.13,
+            run2_wall_s=1160.57,
+        )
+        candidate = _build_issue98_summary(
+            profile="non_canonical_profile",
+            run1_kernel_s=1090.00,
+            run2_kernel_s=1090.00,
+            run1_wall_s=1130.00,
+            run2_wall_s=1130.00,
+        )
+        violations = _collect_issue98_perf_budget_violations(
+            baseline_summary=baseline,
+            candidate_summary=candidate,
+            required_profile=self.canonical_profile,
+            max_kernel_regression_pct=1.0,
+            max_wall_regression_pct=1.0,
+        )
+        self.assertEqual(violations, ["candidate canonical_profile mismatch"])
 
 
 class TestIssue56TierSignalExecutionParity(unittest.TestCase):
@@ -176,6 +373,91 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
         self.assertGreater(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
         self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
         self.assertTrue(bool(sell_mask[0, 0].item()))
+
+    def test_sell_reuses_workspace_and_resets_it_when_signal_day_is_missing(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.ones((1, 1), dtype=cp.bool_)
+
+        _, _, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=0,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([0.0], dtype=cp.float32),
+            signal_high_prices=cp.array([0.0], dtype=cp.float32),
+            signal_day_idx=-1,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            sell_mask_workspace=workspace,
+        )
+
+        self.assertEqual(sell_mask.data.ptr, workspace.data.ptr)
+        self.assertFalse(bool(cp.any(sell_mask).item()))
+
+    def test_sell_reuses_workspace_and_resets_it_when_no_positions_exist(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.ones((1, 1), dtype=cp.bool_)
+
+        _, _, _, _, sell_mask = _process_sell_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            cooldown_state=cooldown_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            current_day_idx=1,
+            param_combinations=params,
+            current_open_prices=cp.array([100.0], dtype=cp.float32),
+            current_close_prices=cp.array([100.0], dtype=cp.float32),
+            current_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0], dtype=cp.float32),
+            signal_high_prices=cp.array([100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            sell_commission_rate=0.00015,
+            sell_tax_rate=0.0018,
+            sell_mask_workspace=workspace,
+        )
+
+        self.assertEqual(sell_mask.data.ptr, workspace.data.ptr)
+        self.assertFalse(bool(cp.any(sell_mask).item()))
+
+    def test_sell_workspace_shape_mismatch_raises_value_error(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((1, 1), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.array([[-1]], dtype=cp.int32)
+        params = self._single_param_row()
+        workspace = cp.zeros((1, 2), dtype=cp.bool_)
+
+        with self.assertRaisesRegex(ValueError, "sell_mask_workspace shape mismatch"):
+            _process_sell_signals_gpu(
+                portfolio_state=portfolio_state,
+                positions_state=positions_state,
+                cooldown_state=cooldown_state,
+                last_trade_day_idx_state=last_trade_day_idx_state,
+                current_day_idx=1,
+                param_combinations=params,
+                current_open_prices=cp.array([100.0], dtype=cp.float32),
+                current_close_prices=cp.array([100.0], dtype=cp.float32),
+                current_high_prices=cp.array([100.0], dtype=cp.float32),
+                signal_close_prices=cp.array([100.0], dtype=cp.float32),
+                signal_high_prices=cp.array([100.0], dtype=cp.float32),
+                signal_day_idx=0,
+                sell_commission_rate=0.00015,
+                sell_tax_rate=0.0018,
+                sell_mask_workspace=workspace,
+            )
 
     def test_additional_buy_uses_tminus1_low_for_trigger(self):
         """
@@ -282,6 +564,197 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
 
         self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
         self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
+
+    def test_additional_buy_uses_first_empty_split_slot(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+        # hole at split 1, active split at index 2
+        positions_state[0, 0, 2, 0] = 5.0
+        positions_state[0, 0, 2, 1] = 90.0
+        positions_state[0, 0, 2, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        _, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([80.0], dtype=cp.float32),
+            signal_close_prices=cp.array([85.0], dtype=cp.float32),
+            signal_lows=cp.array([80.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        # New additional buy must fill the first empty split(index=1), not overwrite split(index=2)
+        self.assertGreater(float(positions_after[0, 0, 1, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[0, 0, 2, 0].item()), 5.0)
+
+    def test_additional_buy_uses_latest_open_day_trigger_after_hole_fill(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 4, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+        # split 1 is the latest buy (hole fill), split 2 is older but right-most
+        positions_state[0, 0, 1, 0] = 5.0
+        positions_state[0, 0, 1, 1] = 90.0
+        positions_state[0, 0, 1, 2] = 2.0
+        positions_state[0, 0, 2, 0] = 5.0
+        positions_state[0, 0, 2, 1] = 120.0
+        positions_state[0, 0, 2, 2] = 1.0
+
+        last_trade_day_idx_state = cp.array([[2]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=3,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([95.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=2,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        # latest split buy_price=90 -> trigger=85.5, so signal_low=90 should NOT trigger
+        self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(float(positions_after[0, 0, 3, 0].item()), 0.0)
+
+    def test_additional_buy_rejects_invalid_priority_code(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        invalid_params = cp.array([[10, 0.02, 0.05, 0.10, 2, -0.50, 10, 999]], dtype=cp.float32)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported additional_buy_priority"):
+            _process_additional_buy_signals_gpu(
+                portfolio_state=portfolio_state,
+                positions_state=positions_state,
+                last_trade_day_idx_state=last_trade_day_idx_state,
+                sell_occurred_today_mask=sell_occurred_today_mask,
+                current_day_idx=1,
+                param_combinations=invalid_params,
+                current_opens=cp.array([95.0], dtype=cp.float32),
+                signal_close_prices=cp.array([100.0], dtype=cp.float32),
+                signal_lows=cp.array([90.0], dtype=cp.float32),
+                signal_day_idx=0,
+                buy_commission_rate=0.00015,
+                log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+                log_counter=cp.zeros((1,), dtype=cp.int32),
+                debug_mode=False,
+                all_tickers=["TEST"],
+            )
+
+    def test_additional_buy_skips_nonpositive_signal_values(self):
+        portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
+        positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
+        positions_state[0, 0, 0, 0] = 10.0
+        positions_state[0, 0, 0, 1] = 100.0
+        positions_state[0, 0, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.array([[0]], dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((1, 1), dtype=cp.bool_)
+        params = self._single_param_row(add_drop=0.05)
+
+        _, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([95.0], dtype=cp.float32),
+            signal_close_prices=cp.array([0.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+        )
+
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 0.0)
+
+    def test_additional_buy_preserves_per_sim_rank_processing(self):
+        portfolio_state = cp.array(
+            [
+                [150.0, 100.0],
+                [250.0, 100.0],
+            ],
+            dtype=cp.float32,
+        )
+        positions_state = cp.zeros((2, 2, 3, 3), dtype=cp.float32)
+        positions_state[:, 0, 0, 0] = 1.0
+        positions_state[:, 0, 0, 1] = 100.0
+        positions_state[:, 0, 0, 2] = 0.0
+        positions_state[:, 1, 0, 0] = 1.0
+        positions_state[:, 1, 0, 1] = 110.0
+        positions_state[:, 1, 0, 2] = 0.0
+
+        last_trade_day_idx_state = cp.zeros((2, 2), dtype=cp.int32)
+        sell_occurred_today_mask = cp.zeros((2, 2), dtype=cp.bool_)
+        params = cp.array(
+            [
+                [10, 0.02, 0.05, 0.10, 0, -0.50, 10, 999],
+                [10, 0.02, 0.05, 0.10, 0, -0.50, 10, 999],
+            ],
+            dtype=cp.float32,
+        )
+
+        portfolio_state_after, positions_after, _ = _process_additional_buy_signals_gpu(
+            portfolio_state=portfolio_state,
+            positions_state=positions_state,
+            last_trade_day_idx_state=last_trade_day_idx_state,
+            sell_occurred_today_mask=sell_occurred_today_mask,
+            current_day_idx=1,
+            param_combinations=params,
+            current_opens=cp.array([90.0, 100.0], dtype=cp.float32),
+            signal_close_prices=cp.array([100.0, 110.0], dtype=cp.float32),
+            signal_lows=cp.array([90.0, 100.0], dtype=cp.float32),
+            signal_day_idx=0,
+            buy_commission_rate=0.0,
+            log_buffer=cp.zeros((8, 5), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["A", "B"],
+        )
+
+        self.assertEqual(
+            [float(value) for value in portfolio_state_after[:, 0].get().tolist()],
+            [60.0, 60.0],
+        )
+        self.assertEqual(float(positions_after[0, 0, 1, 0].item()), 1.0)
+        self.assertEqual(float(positions_after[0, 1, 1, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[1, 0, 1, 0].item()), 1.0)
+        self.assertEqual(float(positions_after[1, 1, 1, 0].item()), 1.0)
 
     def test_sell_forces_liquidation_when_tier_is_3_under_strict_hysteresis(self):
         portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)

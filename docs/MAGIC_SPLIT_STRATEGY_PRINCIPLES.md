@@ -22,8 +22,8 @@
 ### 1. Tier 후보군 필터링
 
 -   **원칙:** 신규 진입 후보군은 `DailyStockTier` 기반으로 구성합니다.
--   **적용:** 신호일(T-1) 기준 `Tier1`을 우선 사용하고, strict 모드가 아니며 `Tier1`이 비어 있을 때만 `Tier2` fallback을 허용합니다.
--   **비고:** `candidate_source_mode='weekly'`는 운영 경로에서 더 이상 1차 후보군으로 사용하지 않습니다.
+-   **적용:** strict-only runtime에서는 `candidate_source_mode='tier'`만 허용합니다. 신호일(T-1) 기준 `Tier1`만 신규 진입 후보로 사용하고, `Tier2` fallback 결과는 신규 진입에서 skip합니다.
+-   **비고:** runtime 표면은 `candidate_source_mode='tier'`, `use_weekly_alpha_gate=False`로 고정합니다. 그 외 후보 모드는 active runtime/contracts에서 제거됐습니다.
 
 ### 2. 신규 진입 후보 선정 (New Entry)
 
@@ -45,9 +45,9 @@
 ### 3. Entry/Hold 히스테리시스
 
 -   **정책 모드:** `strategy_params.tier_hysteresis_mode`로 제어합니다.
-    - `legacy`(기본): Entry는 `tier=1 -> empty면 tier<=2 fallback`
-    - `strict_hysteresis_v1`: Entry는 Tier1 only(비면 skip), Tier2 fallback 차단
--   **Entry 경로:** `candidate_source_mode`가 `tier`/`hybrid_transition`일 때 Tier 후보군을 사용합니다. strict 모드에서는 `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
+    - `strict_hysteresis_v1`: 유일한 지원 runtime mode입니다. Entry는 Tier1 only(비면 skip), Tier2 fallback 차단
+    - `legacy`: 역사적 설명용 표기만 남습니다. `#97 strict-only step 1` 이후 runtime에서는 즉시 오류입니다.
+-   **Entry 경로:** runtime은 `candidate_source_mode='tier'`만 사용합니다. `get_candidates_with_tier_fallback` 결과가 `TIER_2_FALLBACK`인 경우 신규 진입을 생성하지 않습니다.
 -   **Hold/Add 경로:** `generate_additional_buy_signals`는 T+0 진입 제외(T+1부터 허용), `cooldown_tracker`, `max_splits_limit`, `additional_buy_drop_rate`를 적용합니다. 모드와 무관하게 T-1 Tier가 `1~2`인 보유 종목에만 추가 매수를 허용합니다.
 -   **Tier3 리스크 경로:** Tier 기반 강제청산은 비활성입니다. 청산은 손절/비활성기간(`max_inactivity_period`) 규칙으로만 수행합니다.
 
@@ -71,17 +71,15 @@
 ### 3. 추가 매수 (분할 매수 / Magic Split)
 
 -   **조건:**
-    1.  보유 중인 종목의 **당일 저가(Low Price)** 가 `매수 트리거 가격`에 도달하거나 하회.
+    1.  보유 중인 종목의 **신호일(T-1) 저가(Low Price)** 가 `매수 트리거 가격`에 도달하거나 하회.
     2.  `매수 트리거 가격 = 해당 종목의 마지막 분할 매수 단가 * (1 - additional_buy_drop_rate)`
     3.  당일 해당 종목에 대한 매도(수익실현, 손절 등)가 없었을 것.
     4.  총 분할 매수 횟수가 `max_splits_limit` 파라미터를 초과하지 않을 것.
     5.  **[핵심]** 당일 신규 진입한 종목은 추가 매수 대상에서 제외. (T+1 부터 가능)
 
 -   **매수가 결정:**
-    1.  **기준가(Price Basis):**
-        -   **시나리오 A (장중 터치):** 당일 고가(High)가 `매수 트리거 가격`보다 높거나 같으면, 기준가는 `매수 트리거 가격`이 됩니다.
-        -   **시나리오 B (갭 하락):** 당일 고가(High)가 `매수 트리거 가격`보다 낮으면(도달 실패), 기준가는 당일 **고가(High)** 가 됩니다.
-    2.  **최종 매수가(Execution Price):** 위에서 결정된 기준가를 호가 단위에 맞춰 올림(`adjust_price_up`) 처리한 가격.
+    1.  **집행일(T0) 시가(Open Price)** 를 기준가로 사용합니다.
+    2.  **최종 매수가(Execution Price):** 기준가를 호가 단위에 맞춰 올림(`adjust_price_up`) 처리한 가격.
 
 -   **추가 매수 우선순위:** 하루에 여러 종목이 추가 매수 조건에 해당될 경우, `additional_buy_priority` 파라미터에 따라 우선순위가 결정됩니다.
     -   `lowest_order`: 보유한 분할 매수 차수가 **가장 적은** 종목을 우선.
@@ -89,7 +87,7 @@
 
 > #### **CPU vs. GPU 구현 차이**
 >
-> -   **매수가 결정:** CPU(`execution.py`)와 GPU(`_process_additional_buy_signals_gpu`) 모두 시나리오 A/B를 구분하는 동일한 로직을 사용합니다. GPU에서는 `cp.where`를 사용해 벡터화 연산으로 처리합니다.
+> -   **매수가 결정:** CPU(`execution.py`)와 GPU(`_process_additional_buy_signals_gpu`) 모두 `T-1 신호 + T0 시가 체결` 원칙을 사용합니다. GPU에서는 신호 조건 탐색/정렬을 벡터화로 처리합니다.
 > -   **우선순위 처리 및 자금 경쟁:**
 >     -   **CPU:** 모든 후보 신호를 생성한 뒤, 정해진 우선순위에 따라 **하나의 리스트로 정렬**합니다. 그 후 리스트의 맨 위부터 하나씩 순회하며 자금을 확인하고 차감합니다.
 >     -   **GPU:** `_process_additional_buy_signals_gpu` 함수 내에서 모든 후보를 찾고, CPU와 동일한 기준으로 정렬합니다. 그 후 **`for` 루프를 순회**하며 임시 자본(`temp_capital`)을 순차적으로 차감하며 매수를 실행합니다. 이는 GPU의 병렬성을 다소 희생하더라도 CPU와 100% 동일한 결과를 보장하기 위한 핵심적인 설계입니다. (※ 현재 이 부분이 성능 병목 지점으로, 향후 `cumsum`을 이용한 병렬 알고리즘으로 개선될 예정입니다.)
@@ -106,24 +104,22 @@
 -   **대상:** 특정 종목의 모든 분할매수 포지션.
 -   **조건 (아래 중 하나라도 해당되면 즉시 청산):**
     1.  **손절매 (Stop-Loss):**
-        -   **조건:** 당일 **종가(Close)** 가 `해당 종목의 평균 매수 단가 * (1 + stop_loss_rate)` 이하로 하락.
+        -   **조건:** 신호일(T-1) **종가(Close)** 가 `해당 종목의 평균 매수 단가 * (1 + stop_loss_rate)` 이하로 하락.
         -   **매도가 결정:**
-            1.  **기준가(Price Basis) 결정:** 추가 매수와 동일한 시나리오 A/B 로직을 적용합니다.
-                -   **A (장중 도달):** 당일 고가(High)가 손절매 가격 이상이면, 기준가는 `손절매 가격`.
-                -   **B (갭 하락):** 당일 고가(High)가 손절매 가격 미만이면, 기준가는 `당일 종가`.
-            2.  **최종 매도가(Execution Price):** 위에서 결정된 기준가를 호가 단위에 맞춰 올림(`adjust_price_up`) 처리한 가격.
+            1.  **기준가(Price Basis):** 집행일(T0) 시가(Open Price).
+            2.  **최종 매도가(Execution Price):** 기준가를 호가 단위에 맞춰 올림(`adjust_price_up`) 처리한 가격.
     2.  **최대 매매 미발생 기간 초과 (Inactivity):**
         -   **조건:** 해당 종목의 마지막 거래(매수 또는 매도)일로부터 `max_inactivity_period` 거래일 이상 경과.
-        -   **매도가 결정:** `당일 종가`.
+        -   **매도가 결정:** 집행일(T0) 시가(Open Price)를 기준으로 체결.
 
 ### 3. 부분 매도 (수익 실현 / Profit Taking)
 
 -   **대상:** 각 분할매수 포지션 개별.
 -   **조건:**
-    1.  당일 **고가(High)** 가 `해당 포지션의 매수 단가 * (1 + sell_profit_rate)` 이상 도달.
+    1.  신호일(T-1) **고가(High)** 가 `해당 포지션의 매수 단가 * (1 + sell_profit_rate)` 이상 도달.
     2.  **[핵심]** 당일 매수한 포지션은 수익 실현 대상에서 제외. (T+1 부터 가능)
 -   **매도가 결정:**
-    1.  **기준가:** `해당 포지션 매수 단가 * (1 + sell_profit_rate)`
+    1.  **기준가:** 집행일(T0) 시가(Open Price)
     2.  **최종 매도가:** 기준가를 호가 단위에 맞춰 올림(`adjust_price_up`) 처리.
 
 > #### **CPU vs. GPU 구현 차이**

@@ -5,9 +5,9 @@ from datetime import date
 import sys
 import os
 
-# src 폴더를 sys.path에 추가하여 DataHandler를 임포트
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from data_handler import DataHandler
+# repo root를 sys.path에 추가하여 canonical package import를 사용
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from src.data_handler import DataHandler
 
 class TestDataHandler(unittest.TestCase):
 

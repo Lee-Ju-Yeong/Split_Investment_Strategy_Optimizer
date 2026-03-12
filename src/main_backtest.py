@@ -19,7 +19,7 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     sys.path.insert(0, str(file_path.parent.parent))
     __package__ = file_path.parent.name  # "src"
 
-from .data_handler import DataHandler
+from .data_handler import DataHandler, build_pit_failure_record
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.execution import BasicExecutionHandler
@@ -67,6 +67,8 @@ def _write_run_manifest(
     run_metrics: dict | None = None,
     candidate_lookup_summary: dict | None = None,
     safety_guard: dict | None = None,
+    status: str = "success",
+    error_info: dict | None = None,
 ) -> str:
     env_universe_mode = os.environ.get("MAGICSPLIT_UNIVERSE_MODE")
     env_config_path = os.environ.get("MAGICSPLIT_CONFIG_PATH")
@@ -90,21 +92,103 @@ def _write_run_manifest(
         "config": {
             "config_path": env_config_path or "config/config.yaml",
             "candidate_source_mode": strategy_params.get("candidate_source_mode"),
+            "use_weekly_alpha_gate": strategy_params.get("use_weekly_alpha_gate"),
             "tier_hysteresis_mode": strategy_params.get("tier_hysteresis_mode"),
             "candidate_lookup_error_policy": strategy_params.get("candidate_lookup_error_policy"),
+            "frozen_candidate_manifest_mode": strategy_params.get("frozen_candidate_manifest_mode"),
+            "frozen_candidate_manifest_path": strategy_params.get("frozen_candidate_manifest_path"),
+            "frozen_candidate_manifest_expected_sha256": strategy_params.get(
+                "frozen_candidate_manifest_expected_sha256"
+            ),
         },
         "env_overrides": {
             "MAGICSPLIT_UNIVERSE_MODE": env_universe_mode,
             "MAGICSPLIT_CONFIG_PATH": env_config_path,
         },
+        "status": str(status),
         "run_metrics": run_metrics or {},
         "candidate_lookup": candidate_lookup_summary or {},
         "safety_guard": safety_guard or {},
     }
+    if error_info:
+        manifest["error_info"] = error_info
     manifest_path = os.path.join(result_dir, "run_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     return manifest_path
+
+
+def _build_failure_result(
+    *,
+    error,
+    persist_artifacts: bool,
+    strategy_params: dict,
+    backtest_settings: dict,
+    universe_mode: str,
+    price_basis: str,
+    adjusted_gate: str,
+    paths: dict,
+    candidate_lookup_summary: dict | None = None,
+) -> dict:
+    pit_failure = build_pit_failure_record(error)
+    if pit_failure:
+        logger.exception(
+            "[PITFailure] code=%s stage=%s message=%s details=%s",
+            pit_failure.get("code"),
+            pit_failure.get("stage"),
+            pit_failure.get("message"),
+            pit_failure.get("details"),
+        )
+    else:
+        logger.exception("성과 분석 중 오류 발생")
+
+    reasons = []
+    if pit_failure:
+        reasons.append(f"pit_failure:{pit_failure.get('code')}")
+    else:
+        reasons.append(f"runtime_error:{type(error).__name__}")
+    safety_guard = {
+        "degraded_run": True,
+        "promotion_blocked": True,
+        "reasons": reasons,
+    }
+    error_info = {
+        "message": f"성과 분석 중 오류 발생: {error}",
+        "error_type": type(error).__name__,
+    }
+    if pit_failure:
+        error_info["pit_failure"] = pit_failure
+
+    run_manifest_path = None
+    if persist_artifacts:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
+        os.makedirs(result_dir, exist_ok=True)
+        run_manifest_path = _write_run_manifest(
+            result_dir=result_dir,
+            strategy_params=strategy_params,
+            backtest_settings=backtest_settings,
+            universe_mode=universe_mode,
+            price_basis=price_basis,
+            adjusted_gate=adjusted_gate,
+            run_metrics={},
+            candidate_lookup_summary=candidate_lookup_summary or {},
+            safety_guard=safety_guard,
+            status="failed",
+            error_info=error_info,
+        )
+
+    response = {
+        "error": error_info["message"],
+        "error_type": error_info["error_type"],
+        "run_manifest_path": run_manifest_path.replace('\\', '/') if run_manifest_path else None,
+        "promotion_blocked": True,
+        "promotion_block_reasons": list(safety_guard["reasons"]),
+        "candidate_lookup_summary": candidate_lookup_summary or {},
+    }
+    if pit_failure:
+        response["pit_failure"] = pit_failure
+    return response
 
 
 def _build_safety_guard(
@@ -142,7 +226,7 @@ def _build_safety_guard(
         "reasons": reasons,
     }
 
-def run_backtest_from_config(config: dict) -> dict:
+def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) -> dict:
     # When called from non-CLI entrypoints (e.g., Flask), logging may not be configured.
     # We only auto-configure if root has no handlers to avoid duplicating external setups.
     root = logging.getLogger()
@@ -177,53 +261,53 @@ def run_backtest_from_config(config: dict) -> dict:
     )
     logger.info("universe policy | mode=%s", universe_mode)
 
-    # DataHandler는 이제 종목명 조회를 위해 CompanyInfo DB를 내부적으로 로드합니다.
-    data_handler = DataHandler(
-        db_config=db_params,
-        price_basis=price_basis,
-        adjusted_price_gate_start_date=adjusted_gate,
-        universe_mode=universe_mode,
-        strategy_params=strategy_params_from_config,
-    )
-    
-    strategy_params = {
-        k: v
-        for k, v in strategy_params_from_config.items()
-        if k in _STRATEGY_PARAM_KEYS
-    }
-    strategy_params.update({"backtest_start_date": start_date, "backtest_end_date": end_date})
-    strategy = MagicSplitStrategy(**strategy_params)
-    
-    portfolio = Portfolio(initial_cash=initial_cash, start_date=start_date, end_date=end_date)
-    execution_handler = BasicExecutionHandler(
-        **{
-            k: v
-            for k, v in execution_params.items()
-            if k in _EXECUTION_PARAM_KEYS
-        }
-    )
-
-    engine = BacktestEngine(
-        start_date=start_date, end_date=end_date,
-        portfolio=portfolio, strategy=strategy,
-        data_handler=data_handler, execution_handler=execution_handler
-    )
-    
-    logger.info("백테스팅 엔진을 실행합니다...")
-    final_portfolio = engine.run()
-
-    ### ### 이슈 구현: daily_snapshot_history 사용으로 변경 ### ###
-    history_df = pd.DataFrame(final_portfolio.daily_snapshot_history)
-    if history_df.empty:
-        return {"error": "백테스팅 결과 데이터가 없습니다. 분석을 수행할 수 없습니다."}
-
-    history_df['date'] = pd.to_datetime(history_df['date'])
-    history_df.set_index('date', inplace=True)
-    
-    # daily_values는 이제 history_df의 한 컬럼일 뿐입니다.
-    daily_values_for_response = history_df['total_value']
-
     try:
+        # DataHandler는 이제 종목명 조회를 위해 CompanyInfo DB를 내부적으로 로드합니다.
+        data_handler = DataHandler(
+            db_config=db_params,
+            price_basis=price_basis,
+            adjusted_price_gate_start_date=adjusted_gate,
+            universe_mode=universe_mode,
+            strategy_params=strategy_params_from_config,
+        )
+        
+        strategy_params = {
+            k: v
+            for k, v in strategy_params_from_config.items()
+            if k in _STRATEGY_PARAM_KEYS
+        }
+        strategy_params.update({"backtest_start_date": start_date, "backtest_end_date": end_date})
+        strategy = MagicSplitStrategy(**strategy_params)
+        
+        portfolio = Portfolio(initial_cash=initial_cash, start_date=start_date, end_date=end_date)
+        execution_handler = BasicExecutionHandler(
+            **{
+                k: v
+                for k, v in execution_params.items()
+                if k in _EXECUTION_PARAM_KEYS
+            }
+        )
+
+        engine = BacktestEngine(
+            start_date=start_date, end_date=end_date,
+            portfolio=portfolio, strategy=strategy,
+            data_handler=data_handler, execution_handler=execution_handler
+        )
+
+        logger.info("백테스팅 엔진을 실행합니다...")
+        final_portfolio = engine.run()
+
+        ### ### 이슈 구현: daily_snapshot_history 사용으로 변경 ### ###
+        history_df = pd.DataFrame(final_portfolio.daily_snapshot_history)
+        if history_df.empty:
+            return {"error": "백테스팅 결과 데이터가 없습니다. 분석을 수행할 수 없습니다."}
+
+        history_df['date'] = pd.to_datetime(history_df['date'])
+        history_df.set_index('date', inplace=True)
+        
+        # daily_values는 이제 history_df의 한 컬럼일 뿐입니다.
+        daily_values_for_response = history_df['total_value']
+
         from .performance_analyzer import PerformanceAnalyzer
 
         # PerformanceAnalyzer는 이제 전체 history_df를 받습니다.
@@ -236,6 +320,15 @@ def run_backtest_from_config(config: dict) -> dict:
             if callable(candidate_lookup_summary_getter)
             else {}
         )
+        frozen_manifest_summary_getter = getattr(
+            data_handler,
+            "get_frozen_candidate_manifest_summary",
+            None,
+        )
+        if callable(frozen_manifest_summary_getter):
+            candidate_lookup_summary["frozen_candidate_manifest"] = (
+                frozen_manifest_summary_getter()
+            )
         safety_guard = _build_safety_guard(
             universe_mode=universe_mode,
             strategy_params=strategy_params_from_config,
@@ -248,33 +341,36 @@ def run_backtest_from_config(config: dict) -> dict:
                 ", ".join(safety_guard.get("reasons", [])) or "unknown reason",
             )
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
-        os.makedirs(result_dir, exist_ok=True)
-        run_manifest_path = _write_run_manifest(
-            result_dir=result_dir,
-            strategy_params=strategy_params_from_config,
-            backtest_settings=backtest_settings,
-            universe_mode=universe_mode,
-            price_basis=price_basis,
-            adjusted_gate=adjusted_gate,
-            run_metrics=run_metrics,
-            candidate_lookup_summary=candidate_lookup_summary,
-            safety_guard=safety_guard,
-        )
-        logger.info("실행 메타데이터가 '%s'에 저장되었습니다.", run_manifest_path.replace('\\', '/'))
-        
-        plot_filename = "performance_report.png" # 파일 이름 변경
-        
-        analyzer.plot_equity_curve(
-            title=f"Strategy Performance ({start_date} to {end_date})",
-            save_path=os.path.join(result_dir, plot_filename)
-        )
-        
+        run_manifest_path = None
+        plot_file_path = None
         trade_df = pd.DataFrame([vars(t) for t in final_portfolio.trade_history])
         trade_filepath_for_response = None
-        
-        if not trade_df.empty and should_save_trades:
+
+        if persist_artifacts:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            result_dir = os.path.join(paths.get('results_dir', 'results'), f"run_{timestamp}")
+            os.makedirs(result_dir, exist_ok=True)
+            run_manifest_path = _write_run_manifest(
+                result_dir=result_dir,
+                strategy_params=strategy_params_from_config,
+                backtest_settings=backtest_settings,
+                universe_mode=universe_mode,
+                price_basis=price_basis,
+                adjusted_gate=adjusted_gate,
+                run_metrics=run_metrics,
+                candidate_lookup_summary=candidate_lookup_summary,
+                safety_guard=safety_guard,
+            )
+            logger.info("실행 메타데이터가 '%s'에 저장되었습니다.", run_manifest_path.replace('\\', '/'))
+
+            plot_filename = "performance_report.png" # 파일 이름 변경
+            plot_file_path = os.path.join(result_dir, plot_filename).replace('\\', '/')
+            analyzer.plot_equity_curve(
+                title=f"Strategy Performance ({start_date} to {end_date})",
+                save_path=os.path.join(result_dir, plot_filename)
+            )
+
+        if persist_artifacts and not trade_df.empty and should_save_trades:
             trade_filename = "full_trade_history.csv"
             trade_filepath = os.path.join(result_dir, trade_filename)
             trade_df.to_csv(trade_filepath, index=False, encoding='utf-8-sig')
@@ -301,8 +397,8 @@ def run_backtest_from_config(config: dict) -> dict:
             "promotion_blocked": bool(safety_guard.get("promotion_blocked", False)),
             "promotion_block_reasons": list(safety_guard.get("reasons", [])),
             "candidate_lookup_summary": candidate_lookup_summary,
-            "run_manifest_path": run_manifest_path.replace('\\', '/'),
-            "plot_file_path": os.path.join(result_dir, plot_filename).replace('\\', '/'),
+            "run_manifest_path": run_manifest_path.replace('\\', '/') if run_manifest_path else None,
+            "plot_file_path": plot_file_path,
             "trade_file_path": trade_filepath_for_response,
             "daily_values": daily_values_for_response.reset_index().rename(columns={'date': 'x', 'total_value': 'y'}).to_dict('records'),
             "final_positions": final_positions_list,
@@ -311,9 +407,32 @@ def run_backtest_from_config(config: dict) -> dict:
         return response
 
     except (ValueError, KeyError) as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": f"성과 분석 중 오류 발생: {e}"}
+        candidate_lookup_summary = {}
+        strategy_obj = locals().get("strategy")
+        data_handler_obj = locals().get("data_handler")
+        candidate_lookup_summary_getter = getattr(strategy_obj, "get_candidate_lookup_error_summary", None)
+        if callable(candidate_lookup_summary_getter):
+            candidate_lookup_summary = candidate_lookup_summary_getter()
+        frozen_manifest_summary_getter = getattr(
+            data_handler_obj,
+            "get_frozen_candidate_manifest_summary",
+            None,
+        )
+        if callable(frozen_manifest_summary_getter):
+            candidate_lookup_summary["frozen_candidate_manifest"] = (
+                frozen_manifest_summary_getter()
+            )
+        return _build_failure_result(
+            error=e,
+            persist_artifacts=persist_artifacts,
+            strategy_params=strategy_params_from_config,
+            backtest_settings=backtest_settings,
+            universe_mode=universe_mode,
+            price_basis=price_basis,
+            adjusted_gate=adjusted_gate,
+            paths=paths,
+            candidate_lookup_summary=candidate_lookup_summary,
+        )
 
 # ... display_results_in_terminal 과 main 함수는 기존과 동일하게 유지 ...
 def display_results_in_terminal(result: dict):

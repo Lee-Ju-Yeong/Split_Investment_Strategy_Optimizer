@@ -99,7 +99,6 @@ class TestPipelineBatch(unittest.TestCase):
             end_date_str="20260207",
             workers=4,
             write_batch_size=20000,
-            allow_legacy_fallback=False,
             log_interval=25,
         )
         mock_run_investor.assert_called_once_with(
@@ -123,7 +122,7 @@ class TestPipelineBatch(unittest.TestCase):
         )
 
     @patch("src.pipeline.batch.run_financial_batch")
-    def test_run_pipeline_batch_passes_financial_legacy_fallback_flag(self, mock_run_financial):
+    def test_run_pipeline_batch_no_longer_exposes_financial_legacy_fallback(self, mock_run_financial):
         mock_run_financial.return_value = {"rows_saved": 0}
         conn = MagicMock()
 
@@ -135,7 +134,6 @@ class TestPipelineBatch(unittest.TestCase):
             run_financial=True,
             run_investor=False,
             run_tier=False,
-            allow_financial_legacy_fallback=True,
         )
 
         mock_run_financial.assert_called_once_with(
@@ -145,14 +143,13 @@ class TestPipelineBatch(unittest.TestCase):
             end_date_str="20260207",
             workers=4,
             write_batch_size=20000,
-            allow_legacy_fallback=True,
             log_interval=50,
         )
 
-    def test_build_arg_parser_parses_financial_legacy_fallback_flag(self):
+    def test_build_arg_parser_rejects_financial_legacy_fallback_flag(self):
         parser = pipeline_batch._build_arg_parser()
-        args = parser.parse_args(["--allow-financial-legacy-fallback"])
-        self.assertTrue(args.allow_financial_legacy_fallback)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--allow-financial-legacy-fallback"])
 
     def test_build_arg_parser_default_financial_lag_days_is_1(self):
         parser = pipeline_batch._build_arg_parser()

@@ -33,6 +33,7 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
             "sell_profit_rate": 0.05,
             "backtest_start_date": "2024-01-01",
             "backtest_end_date": "2024-01-31",
+            "enable_candidate_rank_trace": True,
         }
         self.strategy = MagicSplitStrategy(**self.base_config, candidate_source_mode="tier")
         self.portfolio = _DummyPortfolio()
@@ -52,6 +53,14 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
 
         self.assertEqual(signals, [])
         self.assertEqual(self.strategy.last_entry_context["tier_source"], "NO_SIGNAL_DATE")
+
+    def test_rejects_legacy_tier_hysteresis_mode(self):
+        with self.assertRaisesRegex(ValueError, "strict-only runtime requires"):
+            MagicSplitStrategy(
+                **self.base_config,
+                candidate_source_mode="tier",
+                tier_hysteresis_mode="legacy",
+            )
 
     def test_sets_lookup_error_context(self):
         strategy = MagicSplitStrategy(
@@ -73,6 +82,11 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
         self.assertEqual(signals, [])
         self.assertEqual(strategy.last_entry_context["tier_source"], "CANDIDATE_LOOKUP_ERROR")
         self.assertEqual(strategy.last_entry_context["raw_candidate_count"], 0)
+        self.assertEqual(strategy.last_entry_context["pit_failure_code"], "candidate_lookup_runtime_error")
+        self.assertEqual(strategy.last_entry_context["pit_failure_stage"], "candidate_lookup")
+        summary = strategy.get_candidate_lookup_error_summary()
+        self.assertEqual(summary["error_count"], 1)
+        self.assertEqual(summary["failure_counts"]["candidate_lookup_runtime_error"], 1)
 
     def test_raises_on_lookup_error_when_policy_raise(self):
         self.handler.get_previous_trading_date.return_value = pd.Timestamp("2024-01-01")
@@ -86,6 +100,8 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
                 self.trading_dates,
                 1,
             )
+        self.assertEqual(self.strategy.last_candidate_lookup_error["code"], "candidate_lookup_runtime_error")
+        self.assertEqual(self.strategy.get_candidate_lookup_error_summary()["error_count"], 1)
 
     def test_sets_source_missing_context(self):
         handler = _HandlerWithoutTierCandidateApi()
@@ -133,6 +149,11 @@ class TestCpuStrategyEntryContext(unittest.TestCase):
         self.assertEqual(self.strategy.last_entry_context["active_candidate_count"], 1)
         self.assertEqual(self.strategy.last_entry_context["ranked_candidate_count"], 1)
         self.assertEqual(self.strategy.last_entry_context["selected_count"], 1)
+        self.assertEqual(len(self.strategy.candidate_rank_history), 1)
+        self.assertEqual(self.strategy.candidate_rank_history[0]["trade_date"], "2024-01-02")
+        self.assertEqual(self.strategy.candidate_rank_history[0]["signal_date"], "2024-01-01")
+        self.assertEqual(self.strategy.candidate_rank_history[0]["rank"], 1)
+        self.assertEqual(self.strategy.candidate_rank_history[0]["ticker"], "005930")
 
 
 if __name__ == "__main__":
