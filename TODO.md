@@ -38,7 +38,7 @@
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `P1` | `#98` GPU throughput refactor | In Progress | canonical `Jan-Feb 2024 / 360 sims / batch 90 / coverage 0.2` 2-run baseline 확보 후 ranking parity fixture, candidate rank tensor precompute/gather, additional-buy run-owner host-sync 제거까지 반영됨 | same canonical profile로 `slice 2a`를 재측정한 뒤, 남은 execution-loop hot path를 더 줄일지 `PR-98D`를 먼저 고정할지 확정 | [doc](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
-| `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
+| `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Roadmap Checkpoint (2026-03-10)
 - `2026 Q2`: 데이터 계약과 검증 규칙을 먼저 확정합니다. `ShortSellingDaily lag`, strict parity, manifest, `#68` 공식안을 이 구간에서 잠급니다.

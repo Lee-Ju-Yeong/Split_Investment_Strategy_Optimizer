@@ -3,15 +3,15 @@
 > Type: `implementation`
 > Status: `planned`
 > Priority: `P2`
-> Last updated: 2026-03-07
+> Last updated: 2026-03-12
 > Related issues: `#68`, `#56`, `#67`, `#101`
 > Gate status: `not started`
 
 ## 1. Summary
 - What: 단일 최고점 파라미터가 아니라 OOS에서 다시 설명 가능한 robust 파라미터 선택 체계를 만듭니다.
 - Why: 현재 WFO는 `calmar_ratio` 중심이라 plateau 후보와 열화 리스크를 충분히 설명하지 못합니다.
-- Current status: import-safe 기반 작업은 끝났고, robust score와 hard gate 공식안은 아직 열지 않았습니다.
-- Next action: robust score 식, hard gate, ablation 매트릭스를 공식안으로 고정합니다.
+- Current status: import-safe 기반 작업은 끝났고, robust score와 hard gate 공식안은 아직 열지 않았습니다. 임시 합의안은 `Anchored WFO + final untouched OOS + separate stress pack` 구조입니다.
+- Next action: 임시 합의안([review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md))을 기준으로 robust score 식, hard gate, ablation 매트릭스를 공식안으로 고정합니다.
 
 ## 2. Scope And Constraints
 - In scope:
@@ -59,3 +59,5 @@
 ## 5. Notes
 - `#101`은 분포 기반 파라미터 선택 프레임 자체를 다룹니다.
 - `#68`은 현재 공식 경로 위에서 robust score와 verification layer를 강화하는 문서입니다.
+- 초심자용 임시 설계 메모:
+  - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)

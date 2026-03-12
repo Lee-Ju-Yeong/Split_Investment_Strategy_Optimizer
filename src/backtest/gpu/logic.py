@@ -131,6 +131,7 @@ def _process_sell_signals_gpu(
     debug_mode: bool = False,
     all_tickers: list = None,
     trading_dates_pd_cpu: pd.DatetimeIndex = None,
+    sell_mask_workspace: cp.ndarray = None,
 ):
     """
     [수정된 로직 v2]
@@ -139,15 +140,23 @@ def _process_sell_signals_gpu(
     """
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
+    sell_mask_shape = (positions_state.shape[0], positions_state.shape[1])
+    if sell_mask_workspace is not None:
+        if tuple(sell_mask_workspace.shape) != sell_mask_shape:
+            raise ValueError(
+                "sell_mask_workspace shape mismatch: "
+                f"expected={sell_mask_shape} got={tuple(sell_mask_workspace.shape)}"
+            )
+        sell_occurred_stock_mask = sell_mask_workspace
+        sell_occurred_stock_mask[...] = False
+    else:
+        sell_occurred_stock_mask = cp.zeros(sell_mask_shape, dtype=cp.bool_)
 
     if signal_day_idx < 0:
-        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
         return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     valid_positions = quantities > 0
     if not cp.any(valid_positions):
-        # [추가] 당일 매도가 없으므로 False 마스크를 반환
-        sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
         return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
     # --- 파라미터 로드 ---
@@ -157,9 +166,6 @@ def _process_sell_signals_gpu(
     sell_commission_rate_f32 = cp.float32(sell_commission_rate)
     sell_tax_rate_f32 = cp.float32(sell_tax_rate)
     cost_factor = cp.float32(1.0) - sell_commission_rate_f32 - sell_tax_rate_f32
-
-    # 이 날에 매도가 발생한 종목을 추적하기 위한 마스크 (쿨다운 관리용)
-    sell_occurred_stock_mask = cp.zeros((positions_state.shape[0], positions_state.shape[1]), dtype=cp.bool_)
 
     # --- 시나리오 1: 전체 청산 (손절매 또는 최대 매매 미발생생 기간) ---
     # (sim, stock) 형태로 현재가(T0 체결용) / 신호가(T-1 신호용) 브로드캐스팅 준비
@@ -626,6 +632,12 @@ def _process_new_entry_signals_gpu(
     strict_cash_rounding: bool = False,
     # [삭제] trading_dates_pd_cpu
 ):
+    def _next_active_sim_indices():
+        return cp.where(
+            (temp_available_slots > 0)
+            & (temp_capital >= investment_per_order)
+        )[0]
+
     # --- [유지] 0. 진입 조건 확인 ---
     has_any_position = cp.any(positions_state[..., 0] > 0, axis=2)
     current_num_stocks = cp.sum(has_any_position, axis=1)
@@ -651,7 +663,6 @@ def _process_new_entry_signals_gpu(
     # candidate_tickers_for_day는 엔진에서 이미
     # entry_composite_score_q desc -> market_cap_q desc -> ticker asc 순으로 정렬되어 전달된다.
     # 신규 진입에서는 이 입력 순서를 그대로 사용해야 CPU/GPU parity가 유지된다.
-    num_simulations = param_combinations.shape[0]
     num_candidates = int(candidate_tickers_for_day.size)
     investment_per_order = portfolio_state[:, 1]
     commission_rate = cp.float32(buy_commission_rate)
@@ -671,13 +682,18 @@ def _process_new_entry_signals_gpu(
 
     temp_capital = portfolio_state[:, 0].copy()
     temp_available_slots = available_slots.copy()
+    # CPU parity contract:
+    # 신규 진입 루프는 "아직 슬롯이 있고 주문 예산도 남아 있는 simulation"만
+    # 계속 후보를 검사하면 된다. 이 집합 밖의 simulation은 CPU 경로에서도
+    # 이후 후보를 더 보지 않으므로, active set 축소는 의미론을 바꾸지 않는다.
+    active_sim_indices = _next_active_sim_indices()
 
     # 디버깅을 위한 임시 로그 변수 (실제 계산과 분리)
     if debug_mode:
         temp_cap_log = portfolio_state[0, 0].item()
 
     for k in range(num_candidates):
-        if not cp.any(temp_available_slots > 0):
+        if active_sim_indices.size == 0:
             break
 
         stock_idx = int(candidate_tickers_for_day[k].item())
@@ -685,51 +701,45 @@ def _process_new_entry_signals_gpu(
         if float(buy_price.item()) <= 0:
             continue
 
-        quantities = quantities_matrix[:, k]
-        total_costs = total_costs_matrix[:, k]
-        has_slot = temp_available_slots > 0
-
-        cooldown_ref = cooldown_state[:, stock_idx]
-        is_holding = has_any_position[:, stock_idx]
+        quantities = quantities_matrix[active_sim_indices, k]
+        total_costs = total_costs_matrix[active_sim_indices, k]
+        cooldown_ref = cooldown_state[active_sim_indices, stock_idx]
+        is_holding = has_any_position[active_sim_indices, stock_idx]
         is_in_cooldown = (cooldown_ref != -1) & ((current_day_idx - cooldown_ref) < cooldown_period_days)
-        initial_buy_mask = has_slot & (~is_holding) & (~is_in_cooldown)
+        initial_buy_mask = (~is_holding) & (~is_in_cooldown)
         if not cp.any(initial_buy_mask):
             continue
 
-        # CPU parity contract:
-        # CPU는 temp_cash < investment_per_order 인 시점부터 신규 진입 루프를 중단한다.
-        # 따라서 GPU도 총비용 체크 이전에 "주문 예산(investment_per_order) 충족"을 강제한다.
-        enough_order_budget = temp_capital >= investment_per_order
         still_valid_mask = (
             initial_buy_mask
-            & enough_order_budget
             & (quantities > 0)
-            & (temp_capital >= total_costs)
+            & (temp_capital[active_sim_indices] >= total_costs)
         )
 
         if not cp.any(still_valid_mask):
             continue
 
         # 이번 스텝(k)에서 실제 매수가 발생하는 시뮬레이션들의 인덱스
-        active_sim_indices = cp.where(still_valid_mask)[0]
-        final_costs = total_costs[active_sim_indices]
-        final_quantities = quantities[active_sim_indices]
+        selected_sim_indices = active_sim_indices[still_valid_mask]
+        final_costs = total_costs[still_valid_mask]
+        final_quantities = quantities[still_valid_mask]
 
         # 3. 상태 업데이트
-        capital_before_buy = temp_capital[active_sim_indices].copy()  # 로그 기록용
+        capital_before_buy = temp_capital[selected_sim_indices].copy()  # 로그 기록용
 
         # [핵심] 실제 자본과 슬롯을 '즉시' 차감하여 다음 k 루프에 영향을 줌
-        temp_capital[active_sim_indices] -= final_costs
-        temp_available_slots[active_sim_indices] -= 1
+        temp_capital[selected_sim_indices] -= final_costs
+        temp_available_slots[selected_sim_indices] -= 1
 
-        positions_state[active_sim_indices, stock_idx, 0, 0] = final_quantities
-        positions_state[active_sim_indices, stock_idx, 0, 1] = buy_price
-        positions_state[active_sim_indices, stock_idx, 0, 2] = current_day_idx
-        last_trade_day_idx_state[active_sim_indices, stock_idx] = current_day_idx
+        positions_state[selected_sim_indices, stock_idx, 0, 0] = final_quantities
+        positions_state[selected_sim_indices, stock_idx, 0, 1] = buy_price
+        positions_state[selected_sim_indices, stock_idx, 0, 2] = current_day_idx
+        last_trade_day_idx_state[selected_sim_indices, stock_idx] = current_day_idx
+        active_sim_indices = _next_active_sim_indices()
 
         # --- 4. [수정] 새로운 로직에 맞는 디버깅 및 에러 로깅 ---
         if debug_mode:
-            sim0_mask = active_sim_indices == 0
+            sim0_mask = selected_sim_indices == 0
             if cp.any(sim0_mask):
                 costs_sim0 = final_costs[sim0_mask]
                 quantities_sim0 = final_quantities[sim0_mask]
@@ -763,9 +773,9 @@ def _process_new_entry_signals_gpu(
                     temp_cap_log = cap_after_log
         else:
             # 에러 버퍼링 로직 (기존과 유사)
-            error_mask = temp_capital[active_sim_indices] < 0
+            error_mask = temp_capital[selected_sim_indices] < 0
             if cp.any(error_mask):
-                error_sim_indices = active_sim_indices[error_mask]
+                error_sim_indices = selected_sim_indices[error_mask]
                 num_errors = len(error_sim_indices)
                 start_idx = cp.atomicAdd(log_counter, 0, num_errors)
                 if start_idx + num_errors < log_buffer.shape[0]:
