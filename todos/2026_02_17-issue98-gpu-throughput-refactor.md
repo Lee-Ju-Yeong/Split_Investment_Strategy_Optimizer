@@ -1,17 +1,17 @@
 # Issue #98: GPU Throughput Refactor
 
 > Type: `implementation`
-> Status: `ready_for_mr`
+> Status: `done`
 > Priority: `P1`
 > Last updated: 2026-03-12
 > Related issues: `#98`, `#56`, `#67`, `#97`
-> Gate status: `runtime governance approved; canonical Jan-Feb throughput win reconfirmed on current HEAD; PR-98D artifact guard active; current HEAD strict parity canary re-passed; ready for MR`
+> Gate status: `runtime governance approved; canonical Jan-Feb throughput win reconfirmed on current HEAD; PR-98D artifact guard active; current HEAD strict parity canary re-passed; merged via PR #103`
 
 ## 1. One-Page Summary
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
 - Current status: current HEAD 기준 canonical `Jan-Feb 2024` 2-run에서 baseline 대비 약 `+8.5%` throughput win을 다시 확인했고, current HEAD 기준 `A-D` strict parity canary도 `0 mismatch`로 재통과했습니다. 이번 라운드의 `#98` 핵심 목표는 기술적으로 닫힌 상태입니다.
-- Next action: 문서/대시보드를 최신 증적으로 동기화하고 MR을 생성합니다. 더 공격적인 `P-008/P-009` 벡터화는 `#98` close blocker가 아니라 follow-up backlog로 분리 검토합니다.
+- Next action: 더 공격적인 `P-008/P-009` 벡터화와 CPU I/O 계열 PO 정리는 follow-up backlog로 분리 검토합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
@@ -38,8 +38,8 @@
 - 이 프로젝트는 CPU가 기준(`SSOT`)이므로, 두 질문을 분리해서 확인해야 합니다.
 
 ### 2-4. 그래서 현재 상태를 한 줄로 말하면
-- `Ready for MR`입니다.
-- 즉, 이번 라운드의 성능/정합 질문은 닫혔고, 남은 것은 최종 문서화와 merge 절차입니다.
+- `Done`입니다.
+- 즉, 이번 라운드의 성능/정합 질문은 닫혔고, 남은 것은 다음 tranche backlog를 분리해 이어가는 일입니다.
 
 ### 2-5. 이번 단계 전제조건 2개
 - 조건 1: `prepared_market_data` slice의 target-hardware canonical 2-run baseline
@@ -1409,3 +1409,18 @@ cat "$ISSUE98_OUTDIR/summary.json"
 - next action:
   - final doc sync 후 MR 생성
   - merge 뒤 `#98` close
+
+### 19-25. PR `#103` merge / `#98` close status (2026-03-13)
+- PR:
+  - `#103 feat(issue98): finalize throughput refactor tranche and evidence gates`
+- final decision:
+  - 이번 문서는 `done` 상태로 전환한다.
+- close reason:
+  - current HEAD canonical lane에서 baseline 대비 throughput win이 다시 확인되었다.
+  - current HEAD strict parity canary도 재통과했다.
+  - `PR-98D` artifact guard가 이미 활성화되어 이후 regression 감시 경로도 확보됐다.
+  - 따라서 이번 tranche의 `#98` 핵심 목표는 종료된 것으로 본다.
+- carry-over follow-up:
+  - 더 공격적인 `P-008` full vectorization
+  - `P-009` GPU-side candidate sorting replacement
+  - CPU I/O / cache / engine reuse 정리
