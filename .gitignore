@@ -151,8 +151,8 @@ results/
 
 # Config
 config.ini
-config/config.yaml
-config/config_best_debug.yaml
+config/*
+!config/config.example.yaml
 
 # Data
 data/
@@ -166,3 +166,14 @@ docs/operations/*secrets*.md
 docs/operations/*values*.md
 config/ops.local.*
 *.secrets.yaml
+
+# Private business / legal notes for public repo hygiene
+docs/business/private/
+docs/business/*.local.md
+docs/business/*confidential*.md
+docs/legal/private/
+docs/legal/*.local.md
+docs/legal/*confidential*.md
+
+# Codex local settings
+.codex/

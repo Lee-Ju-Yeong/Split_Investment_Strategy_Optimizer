@@ -54,7 +54,7 @@ class Trade:
         self.total_portfolio_value = total_portfolio_value
 
 class Portfolio:
-    def __init__(self, initial_cash, start_date, end_date):
+    def __init__(self, initial_cash, start_date, end_date, *, capture_daily_positions_snapshot=False):
         self.initial_cash = np.float32(initial_cash)
         self.cash = np.float32(initial_cash)
         self.start_date = start_date
@@ -65,6 +65,8 @@ class Portfolio:
         self.last_trade_day_indices = {}
         self.trade_history = []
         self.daily_snapshot_history = []
+        self.capture_daily_positions_snapshot = bool(capture_daily_positions_snapshot)
+        self.daily_positions_snapshot_history = []
 
     def update_cash(self, amount):
         self.cash += amount
@@ -102,10 +104,33 @@ class Portfolio:
                 # self.last_trade_dates[ticker] = trade_date # 마지막 거래일 갱신
                 # self.last_trade_day_indices[ticker] = trade_day_idx
 
-    def get_total_value(self, evaluation_date, data_handler: 'DataHandler'):
+    def _resolve_price_map(self, evaluation_date, data_handler: 'DataHandler', price_map=None):
+        if price_map is not None or not self.positions:
+            return price_map
+        get_latest_prices = getattr(data_handler, "get_latest_prices", None)
+        if not callable(get_latest_prices):
+            return None
+        resolved = get_latest_prices(
+            evaluation_date,
+            list(self.positions.keys()),
+            self.start_date,
+            self.end_date,
+        )
+        return resolved if isinstance(resolved, dict) else None
+
+    def get_total_value(self, evaluation_date, data_handler: 'DataHandler', price_map=None):
+        price_map = self._resolve_price_map(evaluation_date, data_handler, price_map=price_map)
         total_market_value = np.float32(0.0)
         for ticker, positions_list in self.positions.items():
-            price_on_eval_date = data_handler.get_latest_price(evaluation_date, ticker, self.start_date, self.end_date)
+            if price_map is None:
+                price_on_eval_date = data_handler.get_latest_price(
+                    evaluation_date,
+                    ticker,
+                    self.start_date,
+                    self.end_date,
+                )
+            else:
+                price_on_eval_date = price_map.get(ticker)
             if price_on_eval_date is not None and not np.isnan(price_on_eval_date):
                 price_f32 = np.float32(price_on_eval_date)
                 for position in positions_list:
@@ -125,20 +150,59 @@ class Portfolio:
             'stock_count': len(self.positions)
         }
         self.daily_snapshot_history.append(snapshot)
+
+    def record_positions_snapshot(self, date, positions_df):
+        snapshot_date = pd.to_datetime(date)
+        if positions_df is None or positions_df.empty:
+            self.daily_positions_snapshot_history.append({'date': snapshot_date, 'positions': []})
+            return
+
+        columns = [
+            "Ticker",
+            "Holdings",
+            "Quantity",
+            "Avg Buy Price",
+            "Current Price",
+            "Total Value",
+            "Weight",
+        ]
+        positions = []
+        for row in positions_df[columns].to_dict("records"):
+            positions.append(
+                {
+                    "Ticker": str(row["Ticker"]),
+                    "Holdings": int(row["Holdings"]),
+                    "Quantity": int(row["Quantity"]),
+                    "Avg Buy Price": float(row["Avg Buy Price"]),
+                    "Current Price": float(row["Current Price"]),
+                    "Total Value": float(row["Total Value"]),
+                    "Weight": float(row["Weight"]),
+                }
+            )
+        self.daily_positions_snapshot_history.append({'date': snapshot_date, 'positions': positions})
         
     def liquidate_ticker(self, ticker):
         if ticker in self.positions:
             del self.positions[ticker]
 
     ### ### [핵심] 일일 스냅샷 상세 데이터 계산 메소드 ### ###
-    def get_positions_snapshot(self, current_date, data_handler: 'DataHandler', total_portfolio_value):
+    def get_positions_snapshot(self, current_date, data_handler: 'DataHandler', total_portfolio_value, price_map=None):
         """현재 보유 중인 모든 종목의 상세 정보를 DataFrame으로 반환합니다."""
         if not self.positions:
             return pd.DataFrame()
 
+        price_map = self._resolve_price_map(current_date, data_handler, price_map=price_map)
         snapshot_data = []
         for ticker, positions in self.positions.items():
-            current_price = data_handler.get_latest_price(current_date, ticker, self.start_date, self.end_date)
+            if price_map is None:
+                current_price = data_handler.get_latest_price(
+                    current_date,
+                    ticker,
+                    self.start_date,
+                    self.end_date,
+                )
+            else:
+                current_price = price_map.get(ticker)
             # 종가를 못 가져오는 경우(거래정지 등)는 스냅샷에서 제외하지 않고, 가격을 0으로 처리하여 표시
             if current_price is None or np.isnan(current_price):
                 current_price = 0
@@ -156,6 +220,7 @@ class Portfolio:
                 'Ticker': ticker,
                 'Name': data_handler.get_name_from_ticker(ticker) or 'N/A',
                 'Holdings': len(positions),
+                'Quantity': total_quantity,
                 'Avg Buy Price': avg_buy_price,
                 'Current Price': current_price,
                 'Unrealized P/L': unrealized_pnl,

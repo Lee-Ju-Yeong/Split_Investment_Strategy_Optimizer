@@ -76,18 +76,13 @@ class TestOhlcvBatch(unittest.TestCase):
         self.assertIsNone(effective_start)
         self.assertIsNone(effective_end)
 
-    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
     @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
     def test_get_ohlcv_ticker_universe_prefers_history(
         self,
         mock_fetch_history,
-        mock_fetch_legacy,
     ):
         mock_fetch_history.return_value = [
             ("005930", date(2010, 1, 1), date(2026, 2, 7))
-        ]
-        mock_fetch_legacy.return_value = [
-            ("000660", date(2010, 1, 1), date(2026, 2, 7))
         ]
         conn = MagicMock()
 
@@ -98,57 +93,27 @@ class TestOhlcvBatch(unittest.TestCase):
         )
         self.assertEqual(source, "history")
         self.assertEqual(ranges, [("005930", date(2010, 1, 1), date(2026, 2, 7))])
-        mock_fetch_legacy.assert_not_called()
 
-    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
     @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
-    def test_get_ohlcv_ticker_universe_falls_back_to_legacy(
+    def test_get_ohlcv_ticker_universe_raises_when_history_empty(
         self,
         mock_fetch_history,
-        mock_fetch_legacy,
     ):
         mock_fetch_history.return_value = []
-        mock_fetch_legacy.return_value = [
-            ("005930", date(2010, 1, 1), date(2026, 2, 7))
-        ]
         conn = MagicMock()
 
-        ranges, source = get_ohlcv_ticker_universe(
-            conn=conn,
-            requested_start_date=date(2010, 1, 1),
-            requested_end_date=date(2026, 2, 7),
-            allow_legacy_fallback=True,
-        )
-        self.assertEqual(source, "legacy")
-        self.assertEqual(ranges, [("005930", date(2010, 1, 1), date(2026, 2, 7))])
-        mock_fetch_legacy.assert_called_once()
-
-    @patch("src.pipeline.ohlcv_batch._fetch_legacy_universe_ranges")
-    @patch("src.pipeline.ohlcv_batch._fetch_history_universe_ranges")
-    def test_get_ohlcv_ticker_universe_raises_when_history_empty_without_fallback(
-        self,
-        mock_fetch_history,
-        mock_fetch_legacy,
-    ):
-        mock_fetch_history.return_value = []
-        mock_fetch_legacy.return_value = [
-            ("005930", date(2010, 1, 1), date(2026, 2, 7))
-        ]
-        conn = MagicMock()
-
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, "TickerUniverseHistory returned no rows"):
             get_ohlcv_ticker_universe(
                 conn=conn,
                 requested_start_date=date(2010, 1, 1),
                 requested_end_date=date(2026, 2, 7),
             )
-        mock_fetch_legacy.assert_not_called()
 
     @patch("src.pipeline.ohlcv_batch.upsert_ohlcv_rows", return_value=2)
     @patch("src.pipeline.ohlcv_batch._resolve_effective_collection_window")
     @patch("src.pipeline.ohlcv_batch.get_ohlcv_ticker_universe")
     @patch("src.pipeline.ohlcv_batch.ohlcv_collector.get_market_ohlcv_with_fallback")
-    def test_run_ohlcv_batch_tracks_legacy_fallback_counter(
+    def test_run_ohlcv_batch_reports_history_universe_source_only(
         self,
         mock_get_ohlcv,
         mock_get_universe,
@@ -158,7 +123,7 @@ class TestOhlcvBatch(unittest.TestCase):
         conn = MagicMock()
         mock_get_universe.return_value = (
             [("005930", date(2024, 1, 1), date(2024, 1, 31))],
-            "legacy",
+            "history",
         )
         mock_resolve_window.return_value = (date(2024, 1, 2), date(2024, 1, 31))
         idx = pd.to_datetime(["2024-01-02"])
@@ -179,13 +144,14 @@ class TestOhlcvBatch(unittest.TestCase):
             conn=conn,
             start_date_str="20240101",
             end_date_str="20240131",
-            allow_legacy_fallback=True,
             log_interval=0,
             api_call_delay=0.0,
         )
-        self.assertTrue(summary["legacy_fallback_used"])
-        self.assertEqual(summary["legacy_fallback_tickers"], 1)
-        self.assertEqual(summary["legacy_fallback_runs"], 1)
+        self.assertEqual(summary["universe_source"], "history")
+        self.assertNotIn("allow_legacy_fallback", summary)
+        self.assertNotIn("legacy_fallback_used", summary)
+        self.assertNotIn("legacy_fallback_tickers", summary)
+        self.assertNotIn("legacy_fallback_runs", summary)
 
     def test_normalize_ohlcv_df_maps_expected_columns(self):
         idx = pd.to_datetime(["2024-01-02", "2024-01-03"])

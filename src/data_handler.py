@@ -1,42 +1,102 @@
 import pandas as pd
 import warnings
+import logging
+import json
+import hashlib
+import os
+import tempfile
 from mysql.connector import pooling
 from functools import lru_cache
 from datetime import timedelta
 
-try:
-    from .price_policy import (
-        is_adjusted_price_basis,
-        normalize_iso_date,
-        normalize_price_basis,
-        resolve_price_policy,
-        validate_backtest_window_for_price_policy,
-    )
-    from .universe_policy import (
-        is_survivor_optimistic_mode,
-        normalize_universe_mode,
-        resolve_universe_mode,
-    )
-except ImportError:  # pragma: no cover
-    from price_policy import (  # type: ignore
-        is_adjusted_price_basis,
-        normalize_iso_date,
-        normalize_price_basis,
-        resolve_price_policy,
-        validate_backtest_window_for_price_policy,
-    )
-    from universe_policy import (  # type: ignore
-        is_survivor_optimistic_mode,
-        normalize_universe_mode,
-        resolve_universe_mode,
-    )
+from .price_policy import (
+    is_adjusted_price_basis,
+    normalize_iso_date,
+    normalize_price_basis,
+    resolve_price_policy,
+    validate_backtest_window_for_price_policy,
+)
+from .universe_policy import (
+    is_survivor_optimistic_mode,
+    normalize_universe_mode,
+    resolve_universe_mode,
+)
 
 # CompanyInfo 캐시를 직접 관리
 STOCK_CODE_TO_NAME_CACHE = {}
+logger = logging.getLogger(__name__)
 
 
-class PointInTimeViolation(ValueError):
+class PitRuntimeError(ValueError):
+    """Structured PIT/runtime failure used by #67 artifacts and run manifests."""
+
+    def __init__(self, code, message, *, stage, details=None):
+        super().__init__(message)
+        self.pit_code = str(code)
+        self.pit_stage = str(stage)
+        self.pit_details = dict(details or {})
+
+
+class PointInTimeViolation(PitRuntimeError):
     """Raised when a data row later than the requested as-of date is returned."""
+
+    def __init__(self, row_date, as_of_date):
+        row_ts = pd.to_datetime(row_date)
+        as_of_ts = pd.to_datetime(as_of_date)
+        super().__init__(
+            "pit_row_newer_than_as_of",
+            f"PIT violation: row_date({row_ts.date()}) is newer than as_of_date({as_of_ts.date()}).",
+            stage="pit_as_of_validation",
+            details={
+                "row_date": row_ts.strftime("%Y-%m-%d"),
+                "as_of_date": as_of_ts.strftime("%Y-%m-%d"),
+            },
+        )
+
+
+def _normalize_failure_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (pd.Timestamp,)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_failure_value(inner)
+            for key, inner in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_failure_value(item) for item in value]
+    return str(value)
+
+
+def build_pit_failure_record(
+    error,
+    *,
+    trade_date=None,
+    signal_date=None,
+    fallback_code=None,
+    fallback_stage=None,
+):
+    code = getattr(error, "pit_code", None) or fallback_code
+    stage = getattr(error, "pit_stage", None) or fallback_stage
+    if code is None and stage is None:
+        return None
+
+    details = _normalize_failure_value(getattr(error, "pit_details", None) or {})
+    record = {
+        "code": str(code) if code is not None else None,
+        "stage": str(stage) if stage is not None else None,
+        "exception_type": type(error).__name__,
+        "message": str(error)[:240],
+        "details": details,
+    }
+    if trade_date is not None:
+        record["trade_date"] = pd.to_datetime(trade_date).strftime("%Y-%m-%d")
+    if signal_date is not None:
+        record["signal_date"] = pd.to_datetime(signal_date).strftime("%Y-%m-%d")
+    return record
 
 
 class DataHandler:
@@ -69,6 +129,24 @@ class DataHandler:
         self.use_adjusted_prices = is_adjusted_price_basis(self.price_basis)
         self.universe_mode = normalize_universe_mode(resolved_universe_mode)
         self._eventual_delisted_codes_cache = None
+        self._frozen_tier_candidate_manifest = None
+        self._frozen_tier_candidate_manifest_key = None
+        self._lazy_tier_candidate_cache = None
+        self._lazy_tier_candidate_cache_key = None
+        self._strict_frozen_candidate_manifest_required = False
+        self.last_frozen_candidate_manifest_summary = {}
+        self._runtime_row_asof_cache = {}
+        self._runtime_ohlc_cache = {}
+        self._runtime_latest_price_cache = {}
+        self.frozen_candidate_manifest_mode = self._resolve_frozen_candidate_manifest_mode(
+            strategy_params
+        )
+        self.frozen_candidate_manifest_path = self._resolve_frozen_candidate_manifest_path(
+            strategy_params
+        )
+        self.frozen_candidate_manifest_expected_sha256 = (
+            self._resolve_frozen_candidate_manifest_expected_sha256(strategy_params)
+        )
         try:
             self.connection_pool = pooling.MySQLConnectionPool(pool_name="data_pool",
                                                                pool_size=10,
@@ -105,6 +183,45 @@ class DataHandler:
             return False
         finally:
             conn.close()
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_mode(strategy_params):
+        raw_mode = (strategy_params or {}).get("frozen_candidate_manifest_mode", "off")
+        mode = str(raw_mode).strip().lower()
+        if mode not in {"off", "record_strict", "replay_strict"}:
+            raise PitRuntimeError(
+                "frozen_manifest_mode_invalid",
+                "Unsupported frozen_candidate_manifest_mode="
+                f"{raw_mode!r}. supported=[off, record_strict, replay_strict]",
+                stage="strict_frozen_manifest_config",
+                details={"frozen_candidate_manifest_mode": raw_mode},
+            )
+        return mode
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_path(strategy_params):
+        raw_path = (strategy_params or {}).get("frozen_candidate_manifest_path")
+        if raw_path is None:
+            return None
+        path = str(raw_path).strip()
+        return path or None
+
+    @staticmethod
+    def _resolve_frozen_candidate_manifest_expected_sha256(strategy_params):
+        raw_sha = (strategy_params or {}).get("frozen_candidate_manifest_expected_sha256")
+        if raw_sha is None:
+            return None
+        sha = str(raw_sha).strip().lower()
+        if not sha:
+            return None
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise PitRuntimeError(
+                "frozen_manifest_expected_sha_invalid",
+                "frozen_candidate_manifest_expected_sha256 must be a 64-char hex digest",
+                stage="strict_frozen_manifest_config",
+                details={"frozen_candidate_manifest_expected_sha256": str(raw_sha)},
+            )
+        return sha
 
     def _detect_tier_flow5_mcap_column(self):
         conn = self.get_connection()
@@ -165,9 +282,7 @@ class DataHandler:
         row_ts = pd.to_datetime(row_date)
         as_of_ts = pd.to_datetime(as_of_date)
         if row_ts > as_of_ts:
-            raise PointInTimeViolation(
-                f"PIT violation: row_date({row_ts.date()}) is newer than as_of_date({as_of_ts.date()})."
-            )
+            raise PointInTimeViolation(row_date=row_ts, as_of_date=as_of_ts)
 
     @staticmethod
     def get_previous_trading_date(trading_dates, current_day_idx):
@@ -179,8 +294,46 @@ class DataHandler:
     def _normalize_date_key(value):
         return pd.to_datetime(value).strftime('%Y-%m-%d')
 
+    def _build_tier_manifest_key(
+        self,
+        min_liquidity_20d_avg_value,
+        min_tier12_coverage_ratio,
+    ):
+        liquidity_gate = None
+        if min_liquidity_20d_avg_value is not None:
+            liquidity_gate = int(min_liquidity_20d_avg_value)
+
+        coverage_gate = None
+        if min_tier12_coverage_ratio is not None:
+            coverage_gate = float(min_tier12_coverage_ratio)
+
+        return self.universe_mode, liquidity_gate, coverage_gate
+
+    def clear_frozen_tier_candidate_manifest(self):
+        self._frozen_tier_candidate_manifest = None
+        self._frozen_tier_candidate_manifest_key = None
+        self._strict_frozen_candidate_manifest_required = False
+
+    def clear_lazy_tier_candidate_cache(self):
+        self._lazy_tier_candidate_cache = None
+        self._lazy_tier_candidate_cache_key = None
+
+    def clear_runtime_lookup_cache(self):
+        self._runtime_row_asof_cache = {}
+        self._runtime_ohlc_cache = {}
+        self._runtime_latest_price_cache = {}
+
     def clear_load_stock_data_cache(self):
+        self.clear_runtime_lookup_cache()
         self._load_stock_data_cached.cache_clear()
+
+    def _build_runtime_lookup_key(self, ticker, target_date, start_date, end_date):
+        return (
+            str(ticker),
+            self._normalize_date_key(target_date),
+            self._normalize_date_key(start_date),
+            self._normalize_date_key(end_date),
+        )
 
     def _validate_window(self, start_date, end_date):
         validate_backtest_window_for_price_policy(
@@ -318,36 +471,75 @@ class DataHandler:
 
 
     def get_latest_price(self, date, ticker, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, date, start_date, end_date)
+        if cache_key in self._runtime_latest_price_cache:
+            return self._runtime_latest_price_cache[cache_key]
         data_row = self.get_stock_row_as_of(ticker, date, start_date, end_date)
         if data_row is None:
+            self._runtime_latest_price_cache[cache_key] = None
             return None
         try:
-            return data_row['close_price']
+            price = data_row['close_price']
         except KeyError:
-            return None
+            price = None
+        self._runtime_latest_price_cache[cache_key] = price
+        return price
+
+    def get_latest_prices(self, date, tickers, start_date, end_date):
+        prices = {}
+        for ticker in dict.fromkeys(str(code) for code in (tickers or [])):
+            prices[ticker] = self.get_latest_price(date, ticker, start_date, end_date)
+        return prices
 
     def get_stock_row_as_of(self, ticker, as_of_date, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, as_of_date, start_date, end_date)
+        if cache_key in self._runtime_row_asof_cache:
+            return self._runtime_row_asof_cache[cache_key]
+
         stock_data = self.load_stock_data(ticker, start_date, end_date)
         if stock_data is None or stock_data.empty:
+            self._runtime_row_asof_cache[cache_key] = None
             return None
 
         target_date = pd.to_datetime(as_of_date)
         row_index = stock_data.index.asof(target_date)
         if pd.isna(row_index):
+            self._runtime_row_asof_cache[cache_key] = None
             return None
 
         self.assert_point_in_time(row_index, target_date)
         data_row = stock_data.loc[row_index].copy()
         data_row.name = row_index
+        self._runtime_row_asof_cache[cache_key] = data_row
+        if row_index == target_date:
+            self._runtime_ohlc_cache[cache_key] = data_row
+            self._runtime_latest_price_cache[cache_key] = data_row.get("close_price")
         return data_row
 
+    def get_stock_rows_as_of(self, tickers, as_of_date, start_date, end_date):
+        rows = {}
+        for ticker in dict.fromkeys(str(code) for code in (tickers or [])):
+            rows[ticker] = self.get_stock_row_as_of(
+                ticker,
+                as_of_date,
+                start_date,
+                end_date,
+            )
+        return rows
+
     def get_ohlc_data_on_date(self, date, ticker, start_date, end_date):
+        cache_key = self._build_runtime_lookup_key(ticker, date, start_date, end_date)
+        if cache_key in self._runtime_ohlc_cache:
+            return self._runtime_ohlc_cache[cache_key]
+
         stock_data = self.load_stock_data(ticker, start_date, end_date)
         if stock_data is None or stock_data.empty:
+            self._runtime_ohlc_cache[cache_key] = None
             return None
 
         target_date = pd.to_datetime(date)
         if target_date not in stock_data.index:
+            self._runtime_ohlc_cache[cache_key] = None
             return None
 
         data_row = stock_data.loc[target_date]
@@ -355,6 +547,9 @@ class DataHandler:
             data_row = data_row.iloc[-1]
         data_row = data_row.copy()
         data_row.name = target_date
+        self._runtime_ohlc_cache[cache_key] = data_row
+        self._runtime_row_asof_cache[cache_key] = data_row
+        self._runtime_latest_price_cache[cache_key] = data_row.get("close_price")
         return data_row
 
     def get_filtered_stock_codes(self, date):
@@ -373,8 +568,9 @@ class DataHandler:
         finally:
             conn.close()
 
-    def get_stock_tier_as_of(self, ticker, as_of_date):
-        conn = self.get_connection()
+    def get_stock_tier_as_of(self, ticker, as_of_date, *, conn=None):
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
         query = """
             SELECT date, stock_code, tier, reason, liquidity_20d_avg_value
@@ -399,10 +595,12 @@ class DataHandler:
                 "liquidity_20d_avg_value": row.get("liquidity_20d_avg_value"),
             }
         finally:
-            conn.close()
+            if owns_conn:
+                conn.close()
 
-    def get_tiers_as_of(self, as_of_date, tickers=None, allowed_tiers=None):
-        conn = self.get_connection()
+    def get_tiers_as_of(self, as_of_date, tickers=None, allowed_tiers=None, *, conn=None):
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         as_of_date_str = pd.to_datetime(as_of_date).strftime('%Y-%m-%d')
 
         tickers = list(tickers) if tickers else []
@@ -456,20 +654,8 @@ class DataHandler:
                 }
             return result
         finally:
-            conn.close()
-
-    def get_filtered_stock_codes_with_tier(self, date, allowed_tiers=(1, 2)):
-        candidate_codes = self.get_filtered_stock_codes(date)
-        if not candidate_codes:
-            return []
-        tier_map = self.get_tiers_as_of(
-            as_of_date=date,
-            tickers=candidate_codes,
-            allowed_tiers=allowed_tiers,
-        )
-        if not tier_map:
-            return []
-        return [code for code in candidate_codes if code in tier_map]
+            if owns_conn:
+                conn.close()
 
     def _get_eventual_delisted_codes(self):
         if self._eventual_delisted_codes_cache is not None:
@@ -506,7 +692,7 @@ class DataHandler:
             return list(codes)
         return [code for code in codes if str(code) not in eventual_delisted]
 
-    def get_pit_universe_codes_as_of(self, as_of_date):
+    def get_pit_universe_codes_as_of(self, as_of_date, *, conn=None):
         """
         Issue #67 Phase2: PIT 유니버스 기본 조회 경로.
         1) TickerUniverseSnapshot latest(as_of)
@@ -516,7 +702,8 @@ class DataHandler:
         """
         as_of_ts = pd.to_datetime(as_of_date)
         as_of_date_str = as_of_ts.strftime("%Y-%m-%d")
-        conn = self.get_connection()
+        owns_conn = conn is None
+        conn = conn or self.get_connection()
         try:
             snapshot_query = """
                 SELECT stock_code
@@ -556,7 +743,8 @@ class DataHandler:
                 return codes, source
             return [], "NO_UNIVERSE"
         finally:
-            conn.close()
+            if owns_conn:
+                conn.close()
 
     def _query_latest_tier_codes(self, conn, as_of_date_str, max_tier):
         query = """
@@ -578,42 +766,6 @@ class DataHandler:
             return []
         return df["stock_code"].tolist()
 
-    def get_candidates_with_tier_fallback(self, date):
-        """
-        Issue #67: Tier 1 우선, 없으면 Tier <= 2로 fallback.
-        Returns:
-            (candidates_list, tier_used_str)
-        """
-        conn = self.get_connection()
-        date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
-        try:
-            tier1_codes = self._query_latest_tier_codes(conn, date_str, max_tier=1)
-            tier1_codes = self._apply_universe_mode_filter(tier1_codes)
-            if tier1_codes:
-                return tier1_codes, "TIER_1"
-
-            tier12_codes = self._query_latest_tier_codes(conn, date_str, max_tier=2)
-            tier12_codes = self._apply_universe_mode_filter(tier12_codes)
-            if tier12_codes:
-                return tier12_codes, "TIER_2_FALLBACK"
-
-            return [], "NO_CANDIDATES"
-        finally:
-            conn.close()
-
-    def get_candidates_with_tier_fallback_pit(self, date):
-        """
-        Issue #67 Phase2:
-        PIT 유니버스(as-of) 안에서 Tier 1 우선, 없으면 Tier <= 2 fallback.
-        Returns:
-            (candidates_list, source)
-        """
-        return self.get_candidates_with_tier_fallback_pit_gated(
-            date=date,
-            min_liquidity_20d_avg_value=None,
-            min_tier12_coverage_ratio=None,
-        )
-
     def _filter_by_min_liquidity(self, tier_map, min_liquidity_20d_avg_value):
         if min_liquidity_20d_avg_value is None:
             return tier_map
@@ -629,7 +781,7 @@ class DataHandler:
         return filtered
 
     def _enforce_tier12_coverage_gate(self, date, pit_size, tier1_count, tier12_count, min_tier12_coverage_ratio):
-        print(
+        logger.debug(
             f"[TierCoverage] date={pd.to_datetime(date).date()} "
             f"tier1_count={tier1_count} tier12_count={tier12_count} universe_count={pit_size}"
         )
@@ -640,11 +792,377 @@ class DataHandler:
         ratio = float(tier12_count) / float(pit_size)
         threshold = float(min_tier12_coverage_ratio)
         if ratio < threshold:
-            raise ValueError(
+            raise PitRuntimeError(
+                "tier12_coverage_gate_failed",
                 f"Tier coverage gate failed on {pd.to_datetime(date).date()}: "
                 f"tier12_ratio={ratio:.4f} < threshold={threshold:.4f} "
-                f"(tier12_count={tier12_count}, universe_count={pit_size})"
+                f"(tier12_count={tier12_count}, universe_count={pit_size})",
+                stage="tier12_coverage_gate",
+                details={
+                    "date": pd.to_datetime(date).strftime("%Y-%m-%d"),
+                    "tier12_ratio": round(ratio, 6),
+                    "threshold": round(threshold, 6),
+                    "tier1_count": int(tier1_count),
+                    "tier12_count": int(tier12_count),
+                    "universe_count": int(pit_size),
+                },
             )
+
+    def _begin_snapshot_connection(self):
+        conn = self.get_connection()
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cur.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cur.execute("SELECT CONNECTION_ID(), CURRENT_TIMESTAMP()")
+                row = cur.fetchone()
+            return conn, {
+                "connection_id": int((row[0] if row else 0) or 0),
+                "snapshot_started_at": str(row[1]) if row and len(row) > 1 else None,
+            }
+        except Exception:
+            conn.close()
+            raise
+
+    @staticmethod
+    def _iter_signal_dates(trading_dates):
+        dates = pd.to_datetime(list(trading_dates))
+        if len(dates) <= 1:
+            return []
+        return sorted({pd.to_datetime(value).strftime("%Y-%m-%d") for value in dates[:-1]})
+
+    @staticmethod
+    def _hash_file(path):
+        sha = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha.update(chunk)
+        return sha.hexdigest()
+
+    def _load_frozen_candidate_manifest_file(self, manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload
+
+    def _write_frozen_candidate_manifest_file(self, manifest_path, payload):
+        directory = os.path.dirname(manifest_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=directory,
+            prefix=".tmp_frozen_manifest_",
+            suffix=".json",
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+            tmp_path = f.name
+        os.replace(tmp_path, manifest_path)
+
+    def get_frozen_candidate_manifest_summary(self):
+        return dict(self.last_frozen_candidate_manifest_summary)
+
+    def _store_lazy_tier_candidate_payload(
+        self,
+        date,
+        payload,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if (
+            self._lazy_tier_candidate_cache is None
+            or manifest_key != self._lazy_tier_candidate_cache_key
+        ):
+            self._lazy_tier_candidate_cache = {}
+            self._lazy_tier_candidate_cache_key = manifest_key
+
+        self._lazy_tier_candidate_cache[self._normalize_date_key(date)] = payload
+
+    def _resolve_tier_candidate_payload(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+        *,
+        conn=None,
+    ):
+        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date, conn=conn)
+        if not pit_codes:
+            return {
+                "candidate_codes": [],
+                "source": f"NO_CANDIDATES_{pit_source}",
+                "pit_size": 0,
+                "tier1_count": 0,
+                "tier12_count": 0,
+            }
+
+        tier12_map = self.get_tiers_as_of(
+            as_of_date=date,
+            tickers=pit_codes,
+            allowed_tiers=[1, 2],
+            conn=conn,
+        )
+        tier12_map = self._filter_by_min_liquidity(tier12_map, min_liquidity_20d_avg_value)
+        tier1_map = {
+            code: info
+            for code, info in tier12_map.items()
+            if int(info.get("tier", 0) or 0) == 1
+        }
+
+        self._enforce_tier12_coverage_gate(
+            date=date,
+            pit_size=len(pit_codes),
+            tier1_count=len(tier1_map),
+            tier12_count=len(tier12_map),
+            min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+        )
+
+        if tier1_map:
+            candidate_codes = [code for code in pit_codes if code in tier1_map]
+            source = f"TIER_1_{pit_source}"
+        elif tier12_map:
+            candidate_codes = [code for code in pit_codes if code in tier12_map]
+            source = f"TIER_2_FALLBACK_{pit_source}"
+        else:
+            candidate_codes = []
+            source = f"NO_CANDIDATES_{pit_source}"
+
+        return {
+            "candidate_codes": candidate_codes,
+            "source": source,
+            "pit_size": len(pit_codes),
+            "tier1_count": len(tier1_map),
+            "tier12_count": len(tier12_map),
+        }
+
+    def _get_frozen_tier_candidate_payload(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        if self._frozen_tier_candidate_manifest is None:
+            return None
+
+        key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if key != self._frozen_tier_candidate_manifest_key:
+            return None
+
+        return self._frozen_tier_candidate_manifest.get(self._normalize_date_key(date))
+
+    def _get_lazy_tier_candidate_payload(
+        self,
+        date,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        if self._lazy_tier_candidate_cache is None:
+            return None
+
+        key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        if key != self._lazy_tier_candidate_cache_key:
+            return None
+
+        return self._lazy_tier_candidate_cache.get(self._normalize_date_key(date))
+
+    def freeze_tier_candidate_manifest(
+        self,
+        trading_dates,
+        *,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        self.clear_frozen_tier_candidate_manifest()
+        manifest = {}
+        normalized_dates = pd.to_datetime(list(trading_dates))
+        for trading_date in normalized_dates:
+            payload = self._resolve_tier_candidate_payload(
+                trading_date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+            manifest[self._normalize_date_key(trading_date)] = payload
+
+        self._frozen_tier_candidate_manifest = manifest
+        self._frozen_tier_candidate_manifest_key = manifest_key
+
+        if not manifest:
+            return {"days": 0}
+
+        manifest_dates = sorted(manifest.keys())
+        return {
+            "days": len(manifest_dates),
+            "first_date": manifest_dates[0],
+            "last_date": manifest_dates[-1],
+            "universe_mode": manifest_key[0],
+            "min_liquidity_20d_avg_value": manifest_key[1],
+            "min_tier12_coverage_ratio": manifest_key[2],
+        }
+
+    def prepare_strict_frozen_candidate_manifest(
+        self,
+        trading_dates,
+        *,
+        candidate_lookup_error_policy,
+        min_liquidity_20d_avg_value=None,
+        min_tier12_coverage_ratio=None,
+    ):
+        mode = self.frozen_candidate_manifest_mode
+        if mode == "off":
+            return {}
+        if str(candidate_lookup_error_policy).strip().lower() != "raise":
+            raise PitRuntimeError(
+                "strict_frozen_requires_raise_policy",
+                "strict frozen candidate manifest requires candidate_lookup_error_policy='raise'",
+                stage="strict_frozen_manifest_prepare",
+                details={
+                    "candidate_lookup_error_policy": str(candidate_lookup_error_policy),
+                    "mode": mode,
+                },
+            )
+
+        manifest_key = self._build_tier_manifest_key(
+            min_liquidity_20d_avg_value,
+            min_tier12_coverage_ratio,
+        )
+        signal_dates = self._iter_signal_dates(trading_dates)
+        if mode == "replay_strict":
+            if not self.frozen_candidate_manifest_path:
+                raise PitRuntimeError(
+                    "frozen_manifest_path_missing",
+                    "replay_strict requires frozen_candidate_manifest_path",
+                    stage="strict_frozen_manifest_replay",
+                    details={"mode": mode},
+                )
+            if not self.frozen_candidate_manifest_expected_sha256:
+                raise PitRuntimeError(
+                    "frozen_manifest_expected_sha_missing",
+                    "replay_strict requires frozen_candidate_manifest_expected_sha256",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "mode": mode,
+                        "path": self.frozen_candidate_manifest_path,
+                    },
+                )
+            actual_sha256 = self._hash_file(self.frozen_candidate_manifest_path)
+            if actual_sha256 != self.frozen_candidate_manifest_expected_sha256:
+                raise PitRuntimeError(
+                    "frozen_manifest_sha_mismatch",
+                    "Frozen candidate manifest sha256 mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_sha256": self.frozen_candidate_manifest_expected_sha256,
+                        "actual_sha256": actual_sha256,
+                    },
+                )
+            payload = self._load_frozen_candidate_manifest_file(
+                self.frozen_candidate_manifest_path
+            )
+            meta = payload.get("meta", {})
+            if tuple(meta.get("manifest_key", ())) != manifest_key:
+                raise PitRuntimeError(
+                    "frozen_manifest_key_mismatch",
+                    "Frozen candidate manifest key mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_manifest_key": list(manifest_key),
+                        "actual_manifest_key": list(meta.get("manifest_key", ())),
+                    },
+                )
+            manifest = payload.get("manifest", {})
+            manifest_dates = sorted(str(key) for key in manifest.keys())
+            if manifest_dates != signal_dates:
+                sample_size = 3
+                raise PitRuntimeError(
+                    "frozen_manifest_signal_date_set_mismatch",
+                    "Frozen candidate manifest signal-date set mismatch.",
+                    stage="strict_frozen_manifest_replay",
+                    details={
+                        "path": self.frozen_candidate_manifest_path,
+                        "expected_signal_dates_count": len(signal_dates),
+                        "actual_signal_dates_count": len(manifest_dates),
+                        "expected_signal_dates_head": signal_dates[:sample_size],
+                        "expected_signal_dates_tail": signal_dates[-sample_size:],
+                        "actual_signal_dates_head": manifest_dates[:sample_size],
+                        "actual_signal_dates_tail": manifest_dates[-sample_size:],
+                    },
+                )
+            self._frozen_tier_candidate_manifest = manifest
+            self._frozen_tier_candidate_manifest_key = manifest_key
+            self._strict_frozen_candidate_manifest_required = True
+            self.last_frozen_candidate_manifest_summary = {
+                "mode": mode,
+                "path": self.frozen_candidate_manifest_path,
+                "sha256": actual_sha256,
+                "expected_sha256": self.frozen_candidate_manifest_expected_sha256,
+                "signal_dates": len(manifest),
+            }
+            return self.get_frozen_candidate_manifest_summary()
+
+        snapshot_conn, snapshot_meta = self._begin_snapshot_connection()
+        try:
+            manifest = {}
+            for signal_date in signal_dates:
+                manifest[signal_date] = self._resolve_tier_candidate_payload(
+                    signal_date,
+                    min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                    min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+                    conn=snapshot_conn,
+                )
+        finally:
+            snapshot_conn.rollback()
+            snapshot_conn.close()
+
+        self._frozen_tier_candidate_manifest = manifest
+        self._frozen_tier_candidate_manifest_key = manifest_key
+        self._strict_frozen_candidate_manifest_required = True
+        summary = {
+            "mode": mode,
+            "signal_dates": len(signal_dates),
+            "signal_date_start": signal_dates[0] if signal_dates else None,
+            "signal_date_end": signal_dates[-1] if signal_dates else None,
+            "universe_mode": manifest_key[0],
+            "min_liquidity_20d_avg_value": manifest_key[1],
+            "min_tier12_coverage_ratio": manifest_key[2],
+            "snapshot_connection_id": snapshot_meta.get("connection_id"),
+            "snapshot_started_at": snapshot_meta.get("snapshot_started_at"),
+        }
+        if self.frozen_candidate_manifest_path:
+            payload = {
+                "meta": {
+                    "manifest_key": list(manifest_key),
+                    "signal_dates": signal_dates,
+                    **summary,
+                },
+                "manifest": manifest,
+            }
+            self._write_frozen_candidate_manifest_file(
+                self.frozen_candidate_manifest_path,
+                payload,
+            )
+            summary["path"] = self.frozen_candidate_manifest_path
+            summary["sha256"] = self._hash_file(self.frozen_candidate_manifest_path)
+        self.last_frozen_candidate_manifest_summary = summary
+        return self.get_frozen_candidate_manifest_summary()
 
     def get_candidates_with_tier_fallback_pit_gated(
         self,
@@ -661,35 +1179,40 @@ class DataHandler:
         Returns:
             (candidates_list, source)
         """
-        pit_codes, pit_source = self.get_pit_universe_codes_as_of(date)
-        if not pit_codes:
-            return [], f"NO_CANDIDATES_{pit_source}"
-
-        tier1_map = self.get_tiers_as_of(
-            as_of_date=date,
-            tickers=pit_codes,
-            allowed_tiers=[1],
-        )
-        tier1_map = self._filter_by_min_liquidity(tier1_map, min_liquidity_20d_avg_value)
-
-        tier12_map = self.get_tiers_as_of(
-            as_of_date=date,
-            tickers=pit_codes,
-            allowed_tiers=[1, 2],
-        )
-        tier12_map = self._filter_by_min_liquidity(tier12_map, min_liquidity_20d_avg_value)
-
-        self._enforce_tier12_coverage_gate(
+        payload = self._get_frozen_tier_candidate_payload(
             date=date,
-            pit_size=len(pit_codes),
-            tier1_count=len(tier1_map),
-            tier12_count=len(tier12_map),
+            min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
             min_tier12_coverage_ratio=min_tier12_coverage_ratio,
         )
+        if payload is None and self._strict_frozen_candidate_manifest_required:
+            normalized_date = self._normalize_date_key(date)
+            raise PitRuntimeError(
+                "frozen_manifest_miss",
+                f"Frozen candidate manifest miss for {normalized_date}",
+                stage="candidate_payload_lookup",
+                details={
+                    "date": normalized_date,
+                    "manifest_mode": self.frozen_candidate_manifest_mode,
+                    "manifest_key": list(self._frozen_tier_candidate_manifest_key or ()),
+                },
+            )
+        if payload is None:
+            payload = self._get_lazy_tier_candidate_payload(
+                date=date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+        if payload is None:
+            payload = self._resolve_tier_candidate_payload(
+                date=date,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
+            self._store_lazy_tier_candidate_payload(
+                date=date,
+                payload=payload,
+                min_liquidity_20d_avg_value=min_liquidity_20d_avg_value,
+                min_tier12_coverage_ratio=min_tier12_coverage_ratio,
+            )
 
-        if tier1_map:
-            return [code for code in pit_codes if code in tier1_map], f"TIER_1_{pit_source}"
-
-        if tier12_map:
-            return [code for code in pit_codes if code in tier12_map], f"TIER_2_FALLBACK_{pit_source}"
-        return [], f"NO_CANDIDATES_{pit_source}"
+        return list(payload["candidate_codes"]), str(payload["source"])

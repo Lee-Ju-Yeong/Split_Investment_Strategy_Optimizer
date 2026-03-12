@@ -74,6 +74,23 @@ class TestGpuPriceAdjustment(unittest.TestCase):
         mock_chunked.assert_called_once()
         np.testing.assert_array_equal(out.get(), sentinel.get())
 
+    def test_adjust_price_up_gpu_switches_to_chunked_on_runtime_oom_message(self):
+        input_cp = cp.asarray([1000.0, 2000.0], dtype=cp.float32)
+        sentinel = cp.asarray([1000.0, 2000.0], dtype=cp.float32)
+
+        with patch(
+            "src.backtest.gpu.utils._adjust_price_up_gpu_float64_inplace",
+            side_effect=RuntimeError("std::bad_alloc: out_of_memory"),
+        ), patch(
+            "src.backtest.gpu.utils._adjust_price_up_gpu_chunked",
+            return_value=sentinel,
+        ) as mock_chunked:
+            out = gpu_utils.adjust_price_up_gpu(input_cp)
+
+        self.assertTrue(gpu_utils._ADJUST_PRICE_FORCE_CHUNKED)
+        mock_chunked.assert_called_once()
+        np.testing.assert_array_equal(out.get(), sentinel.get())
+
 
 if __name__ == "__main__":
     unittest.main()

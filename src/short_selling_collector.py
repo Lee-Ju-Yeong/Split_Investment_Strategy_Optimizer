@@ -10,14 +10,22 @@ from __future__ import annotations
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 import random
 import threading
 import time
+import sys
 
 import numpy as np
 import pandas as pd
 import requests
 import json
+
+# BOOTSTRAP: allow direct execution (`python src/short_selling_collector.py`) while keeping package imports.
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    file_path = Path(__file__).resolve()
+    sys.path.insert(0, str(file_path.parent.parent))
+    __package__ = file_path.parent.name  # "src"
 
 
 # Suppress FutureWarning: Downcasting behavior in `replace` is deprecated
@@ -60,12 +68,20 @@ KRX_USER_AGENT = "Mozilla/5.0"
 KRX_PROBE_TIMEOUT_SECONDS = 20
 
 
+def _build_universe_unavailable_message(mode, end_date):
+    return (
+        "Ticker universe lookup failed for ShortSelling collector: "
+        f"mode={mode}, end_date={end_date}. "
+        "TickerUniverseSnapshot/History returned no rows. "
+        "Run `python -m src.ticker_universe_batch --mode backfill` first."
+    )
+
+
 def get_short_selling_ticker_universe(conn, end_date=None, mode="daily"):
     """
     Resolves ticker universe consistently by mode.
     - backfill: TickerUniverseHistory
     - daily: TickerUniverseSnapshot(as-of end_date) -> active history(as-of) fallback
-    - legacy fallback: WeeklyFilteredStocks -> CompanyInfo
     """
     with conn.cursor() as cur:
         if mode == "backfill":
@@ -135,23 +151,7 @@ def get_short_selling_ticker_universe(conn, end_date=None, mode="daily"):
             if rows:
                 return [row[0] for row in rows]
 
-        if end_date is None:
-            cur.execute("SELECT DISTINCT stock_code FROM WeeklyFilteredStocks")
-        else:
-            cur.execute(
-                """
-                SELECT DISTINCT stock_code
-                FROM WeeklyFilteredStocks
-                WHERE filter_date <= %s
-                """,
-                (end_date,),
-            )
-        rows = cur.fetchall()
-        if rows:
-            return [row[0] for row in rows]
-
-        cur.execute("SELECT stock_code FROM CompanyInfo")
-        return [row[0] for row in cur.fetchall()]
+        raise RuntimeError(_build_universe_unavailable_message(mode, end_date))
 
 
 def _get_latest_trading_date(conn):

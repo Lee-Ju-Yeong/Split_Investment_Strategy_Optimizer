@@ -4,11 +4,8 @@ import unittest
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.optimization.gpu.parameter_simulation import (
-    _resolve_adaptive_fallback_batch_size,
-    _resolve_batch_size,
-    _should_preload_weekly_candidates,
-)
+from src.candidate_runtime_policy import normalize_runtime_candidate_policy
+from src.optimization.gpu.parameter_simulation import _resolve_adaptive_fallback_batch_size, _resolve_batch_size
 
 
 class TestGpuParameterBatchFallback(unittest.TestCase):
@@ -16,6 +13,24 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
         batch_size, source = _resolve_batch_size(
             optimal_batch_size=512,
             backtest_settings={},
+            num_combinations=1000,
+        )
+        self.assertEqual(batch_size, 512)
+        self.assertEqual(source, "auto")
+
+    def test_resolve_batch_size_caps_auto_by_config_when_both_available(self):
+        batch_size, source = _resolve_batch_size(
+            optimal_batch_size=512,
+            backtest_settings={"simulation_batch_size": 339},
+            num_combinations=1000,
+        )
+        self.assertEqual(batch_size, 339)
+        self.assertEqual(source, "auto-capped-by-config")
+
+    def test_resolve_batch_size_keeps_auto_when_config_cap_is_higher(self):
+        batch_size, source = _resolve_batch_size(
+            optimal_batch_size=512,
+            backtest_settings={"simulation_batch_size": 1024},
             num_combinations=1000,
         )
         self.assertEqual(batch_size, 512)
@@ -51,23 +66,31 @@ class TestGpuParameterBatchFallback(unittest.TestCase):
     def test_adaptive_fallback_batch_size_minimum_is_one(self):
         self.assertEqual(_resolve_adaptive_fallback_batch_size(0), 1)
 
-    def test_should_preload_weekly_candidates_weekly_mode(self):
-        self.assertTrue(_should_preload_weekly_candidates("weekly", False))
+    def test_runtime_candidate_policy_keeps_tier(self):
+        mode, weekly_gate = normalize_runtime_candidate_policy("tier", False)
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
-    def test_should_preload_weekly_candidates_tier_mode(self):
-        self.assertFalse(_should_preload_weekly_candidates("tier", False))
+    def test_runtime_candidate_policy_rejects_weekly(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("weekly", False)
 
-    def test_should_preload_weekly_candidates_hybrid_with_gate(self):
-        self.assertTrue(_should_preload_weekly_candidates("hybrid_transition", True))
+    def test_runtime_candidate_policy_rejects_hybrid_with_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("hybrid_transition", True)
 
-    def test_should_preload_weekly_candidates_hybrid_without_gate(self):
-        self.assertFalse(_should_preload_weekly_candidates("hybrid_transition", False))
+    def test_runtime_candidate_policy_rejects_truthy_string_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("tier", "true")
 
-    def test_should_preload_weekly_candidates_hybrid_string_false(self):
-        self.assertFalse(_should_preload_weekly_candidates("hybrid_transition", "false"))
+    def test_runtime_candidate_policy_allows_falsey_string_gate(self):
+        mode, weekly_gate = normalize_runtime_candidate_policy("tier", "false")
+        self.assertEqual(mode, "tier")
+        self.assertFalse(weekly_gate)
 
-    def test_should_preload_weekly_candidates_hybrid_string_true(self):
-        self.assertTrue(_should_preload_weekly_candidates("hybrid_transition", "true"))
+    def test_runtime_candidate_policy_rejects_unknown_string_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported boolean-like value"):
+            normalize_runtime_candidate_policy("tier", "disabled")
 
 
 if __name__ == "__main__":

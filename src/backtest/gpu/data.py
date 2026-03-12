@@ -35,6 +35,31 @@ def _build_tensor_indices(data_valid: cudf.DataFrame) -> tuple[cp.ndarray, cp.nd
     return day_indices, ticker_indices
 
 
+def _forward_fill_tensor_with_presence(
+    tensor: cp.ndarray,
+    presence_mask: cp.ndarray,
+) -> cp.ndarray:
+    if tensor.size == 0:
+        return tensor
+
+    day_indices = cp.arange(tensor.shape[0], dtype=cp.int32).reshape(-1, 1)
+    ticker_indices = cp.arange(tensor.shape[1], dtype=cp.int32).reshape(1, -1)
+    last_valid_day_idx = cp.where(presence_mask, day_indices, 0)
+
+    try:
+        last_valid_day_idx = cp.maximum.accumulate(last_valid_day_idx, axis=0)
+        seen_mask = cp.maximum.accumulate(presence_mask.astype(cp.int8), axis=0) > 0
+        filled = tensor[last_valid_day_idx, ticker_indices]
+        return cp.where(seen_mask, filled, cp.zeros_like(filled))
+    except NotImplementedError:
+        filled = tensor.copy()
+        seen_mask = presence_mask.copy()
+        for day_idx in range(1, filled.shape[0]):
+            filled[day_idx] = cp.where(seen_mask[day_idx], filled[day_idx], filled[day_idx - 1])
+            seen_mask[day_idx] = seen_mask[day_idx] | seen_mask[day_idx - 1]
+        return cp.where(seen_mask, filled, cp.zeros_like(filled))
+
+
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
     [수정] 인덱스 매핑을 사용하여 Long-format cuDF를 Wide-format CuPy 텐서로 직접 변환합니다.
@@ -78,6 +103,70 @@ def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, tra
         tensors[col_name.replace('_price', '')] = tensor # "close", "high", "low" 키로 저장
 
     print(f"✅ GPU Tensors created successfully in {time.time() - start_time:.2f}s.")
+    return tensors
+
+
+def create_candidate_rank_tensors(
+    all_data_gpu: cudf.DataFrame,
+    all_tickers: list,
+    trading_dates_pd: pd.Index,
+) -> dict:
+    num_days = len(trading_dates_pd)
+    num_tickers = len(all_tickers)
+    if num_days == 0 or num_tickers == 0:
+        return {
+            "atr_14_ratio": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "flow5_mcap": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "cheap_score_effective": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "market_cap_q": cp.zeros((num_days, num_tickers), dtype=cp.int64),
+        }
+
+    if "day_idx" not in all_data_gpu.columns or "ticker_idx" not in all_data_gpu.columns:
+        date_map = {date.to_datetime64(): i for i, date in enumerate(trading_dates_pd)}
+        ticker_map = {ticker: i for i, ticker in enumerate(all_tickers)}
+        date_map_gdf = cudf.Series(date_map)
+        ticker_map_gdf = cudf.Series(ticker_map)
+        all_data_gpu["day_idx"] = all_data_gpu["date"].astype("datetime64[ns]").map(date_map_gdf)
+        all_data_gpu["ticker_idx"] = all_data_gpu["ticker"].map(ticker_map_gdf)
+
+    ensure_cheap_score_columns(all_data_gpu)
+    data_valid = all_data_gpu.dropna(subset=["day_idx", "ticker_idx"]).copy(deep=True)
+    if data_valid.empty:
+        return {
+            "atr_14_ratio": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "flow5_mcap": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "cheap_score_effective": cp.zeros((num_days, num_tickers), dtype=cp.float64),
+            "market_cap_q": cp.zeros((num_days, num_tickers), dtype=cp.int64),
+        }
+
+    cheap_score_series = data_valid["cheap_score"].fillna(0).astype("float64")
+    cheap_conf_series = data_valid["cheap_score_confidence"].fillna(0).astype("float64")
+    data_valid["cheap_score_effective"] = (
+        cheap_score_series.clip(lower=0.0, upper=1.0)
+        * cheap_conf_series.clip(lower=0.0, upper=1.0)
+    ).astype("float64")
+    market_cap_series = data_valid["market_cap"].fillna(0).astype("float64")
+    data_valid["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
+    data_valid["atr_14_ratio"] = data_valid["atr_14_ratio"].fillna(float("nan")).astype("float64")
+    data_valid["flow5_mcap"] = data_valid["flow5_mcap"].fillna(float("nan")).astype("float64")
+
+    day_indices, ticker_indices = _build_tensor_indices(data_valid)
+    presence_mask = cp.zeros((num_days, num_tickers), dtype=cp.bool_)
+    presence_mask[day_indices, ticker_indices] = True
+
+    tensor_specs = {
+        "atr_14_ratio": cp.float64,
+        "flow5_mcap": cp.float64,
+        "cheap_score_effective": cp.float64,
+        "market_cap_q": cp.int64,
+    }
+    tensors = {}
+    for column_name, dtype in tensor_specs.items():
+        tensor = cp.zeros((num_days, num_tickers), dtype=dtype)
+        values = cp.asarray(data_valid[column_name].astype(dtype))
+        tensor[day_indices, ticker_indices] = values
+        tensors[column_name] = _forward_fill_tensor_with_presence(tensor, presence_mask)
+
     return tensors
 
 
@@ -129,22 +218,62 @@ def _collect_candidate_rank_metrics_asof(all_data_reset_idx, final_candidate_ind
     ]
 
 
+def collect_candidate_rank_metrics_from_tensors(
+    *,
+    rank_metric_tensors: dict,
+    final_candidate_indices,
+    signal_day_idx: int,
+    all_tickers: list[str],
+):
+    if signal_day_idx < 0:
+        return None
+    if final_candidate_indices is None or int(final_candidate_indices.size) == 0:
+        return None
+
+    candidate_indices = final_candidate_indices.astype(cp.int32, copy=False)
+    atr_values = rank_metric_tensors["atr_14_ratio"][signal_day_idx, candidate_indices]
+    valid_mask = atr_values > 0
+    if not bool(cp.any(valid_mask)):
+        return None
+
+    filtered_indices = candidate_indices[valid_mask]
+    filtered_tickers = [all_tickers[int(idx)] for idx in cp.asnumpy(filtered_indices).tolist()]
+
+    return cudf.DataFrame(
+        {
+            "ticker_idx": filtered_indices,
+            "ticker": filtered_tickers,
+            "atr_14_ratio": atr_values[valid_mask],
+            "flow5_mcap": rank_metric_tensors["flow5_mcap"][signal_day_idx, filtered_indices],
+            "cheap_score_effective": rank_metric_tensors["cheap_score_effective"][
+                signal_day_idx, filtered_indices
+            ],
+            "market_cap_q": rank_metric_tensors["market_cap_q"][signal_day_idx, filtered_indices],
+        }
+    )
+
+
 def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_records=False):
     if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
         return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-    ensure_cheap_score_columns(valid_candidate_metrics_df)
-    metrics_rows = valid_candidate_metrics_df[
-        [
-            "ticker_idx",
-            "ticker",
-            "atr_14_ratio",
-            "market_cap",
-            "cheap_score",
-            "cheap_score_confidence",
-            "flow5_mcap",
-        ]
-    ]
+    base_columns = ["ticker_idx", "ticker", "atr_14_ratio"]
+    if "market_cap_q" in valid_candidate_metrics_df.columns:
+        base_columns.append("market_cap_q")
+    else:
+        base_columns.append("market_cap")
+
+    if "cheap_score_effective" in valid_candidate_metrics_df.columns:
+        base_columns.append("cheap_score_effective")
+    else:
+        ensure_cheap_score_columns(valid_candidate_metrics_df)
+        base_columns.extend(["cheap_score", "cheap_score_confidence"])
+
+    if "flow5_mcap" not in valid_candidate_metrics_df.columns:
+        ensure_cheap_score_columns(valid_candidate_metrics_df)
+    base_columns.append("flow5_mcap")
+
+    metrics_rows = valid_candidate_metrics_df[base_columns]
     metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
     if metrics_rows.empty:
         return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
@@ -155,14 +284,22 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
 
     metrics_rows = metrics_rows.copy(deep=True)
     metrics_rows["ticker_idx"] = metrics_rows["ticker_idx"].astype("int32")
-    market_cap_series = metrics_rows["market_cap"].fillna(0).astype("float64")
-    metrics_rows["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
-    cheap_score_series = metrics_rows["cheap_score"].fillna(0).astype("float64")
-    cheap_conf_series = metrics_rows["cheap_score_confidence"].fillna(0).astype("float64")
-    metrics_rows["cheap_score_effective"] = (
-        cheap_score_series.clip(lower=0.0, upper=1.0)
-        * cheap_conf_series.clip(lower=0.0, upper=1.0)
-    )
+    if "market_cap_q" in metrics_rows.columns:
+        metrics_rows["market_cap_q"] = metrics_rows["market_cap_q"].fillna(0).astype("int64")
+    else:
+        market_cap_series = metrics_rows["market_cap"].fillna(0).astype("float64")
+        metrics_rows["market_cap_q"] = (market_cap_series // 1_000_000).clip(lower=0).astype("int64")
+    if "cheap_score_effective" in metrics_rows.columns:
+        metrics_rows["cheap_score_effective"] = (
+            metrics_rows["cheap_score_effective"].fillna(0).astype("float64").clip(lower=0.0, upper=1.0)
+        )
+    else:
+        cheap_score_series = metrics_rows["cheap_score"].fillna(0).astype("float64")
+        cheap_conf_series = metrics_rows["cheap_score_confidence"].fillna(0).astype("float64")
+        metrics_rows["cheap_score_effective"] = (
+            cheap_score_series.clip(lower=0.0, upper=1.0)
+            * cheap_conf_series.clip(lower=0.0, upper=1.0)
+        )
     flow_rank = (
         metrics_rows["flow5_mcap"]
         .astype("float64")

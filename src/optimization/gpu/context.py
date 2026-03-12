@@ -9,6 +9,8 @@ Issue #69 (PR-9):
 from __future__ import annotations
 
 import urllib.parse
+import math
+import numbers
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Dict, Tuple
@@ -32,6 +34,51 @@ PARAM_ORDER: Tuple[str, ...] = (
 )
 
 PRIORITY_MAP_REV: Dict[int, str] = {0: "lowest_order", 1: "highest_drop"}
+PRIORITY_MAP: Dict[str, int] = {
+    "lowest_order": 0,
+    "highest_drop": 1,
+    "biggest_drop": 1,
+}
+
+
+def _priority_error(value: Any) -> ValueError:
+    return ValueError(
+        "Unsupported additional_buy_priority value="
+        f"{value!r}. supported=[lowest_order, highest_drop, biggest_drop, 0, 1]"
+    )
+
+
+def _normalize_priority_option(value: Any) -> int:
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in PRIORITY_MAP:
+            return PRIORITY_MAP[key]
+        if key in {"0", "1"}:
+            return int(key)
+        raise _priority_error(value)
+
+    if isinstance(value, bool):
+        raise _priority_error(value)
+
+    if isinstance(value, numbers.Integral):
+        numeric = int(value)
+    elif isinstance(value, numbers.Real):
+        numeric_float = float(value)
+        if not math.isfinite(numeric_float) or not numeric_float.is_integer():
+            raise _priority_error(value)
+        numeric = int(numeric_float)
+    else:
+        raise _priority_error(value)
+
+    if numeric not in PRIORITY_MAP_REV:
+        raise _priority_error(value)
+    return numeric
+
+
+def _validate_priority_array(options):
+    normalized = [_normalize_priority_option(raw) for raw in options.tolist()]
+    np, _ = _ensure_core_deps()
+    return np.array(normalized, dtype=np.int32)
 
 
 def _ensure_core_deps():
@@ -110,11 +157,17 @@ def _build_param_combinations(param_space_config: dict):
         if spec["type"] == "linspace":
             options = np.linspace(spec["start"], spec["stop"], spec["num"], dtype=dtype)
         elif spec["type"] == "list":
-            options = np.array(spec["values"], dtype=dtype)
+            if key == "additional_buy_priority":
+                options = np.array(spec.get("values", []), dtype=object)
+            else:
+                options = np.array(spec["values"], dtype=dtype)
         elif spec["type"] == "range":
             options = np.arange(spec["start"], spec["stop"], spec["step"], dtype=dtype)
         else:
             raise ValueError(f"Unsupported parameter type '{spec['type']}' for '{key}'")
+
+        if key == "additional_buy_priority":
+            options = _validate_priority_array(options)
 
         param_options_list.append(cp.asarray(options))
 
@@ -165,7 +218,9 @@ def _get_context() -> _SimulationContext:
 
 __all__ = [
     "PARAM_ORDER",
+    "PRIORITY_MAP",
     "PRIORITY_MAP_REV",
+    "_normalize_priority_option",
     "_ensure_core_deps",
     "_raise_missing_gpu_deps",
     "_ensure_gpu_deps",

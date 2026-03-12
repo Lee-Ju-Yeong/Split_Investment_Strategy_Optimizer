@@ -31,7 +31,6 @@ if __package__:
     from .optimization.gpu.data_loading import (
         preload_all_data_to_gpu,
         preload_tier_data_to_tensor,
-        preload_weekly_filtered_stocks_to_gpu,
     )
     from .optimization.gpu.kernel import get_optimal_batch_size, run_gpu_optimization
     from .optimization.gpu.parameter_simulation import find_optimal_parameters, main
@@ -52,7 +51,6 @@ else:  # pragma: no cover
     from optimization.gpu.data_loading import (
         preload_all_data_to_gpu,
         preload_tier_data_to_tensor,
-        preload_weekly_filtered_stocks_to_gpu,
     )
     from optimization.gpu.kernel import get_optimal_batch_size, run_gpu_optimization
     from optimization.gpu.parameter_simulation import find_optimal_parameters, main
@@ -68,7 +66,6 @@ __all__ = [
     "_SimulationContext",
     "_get_context",
     "preload_all_data_to_gpu",
-    "preload_weekly_filtered_stocks_to_gpu",
     "preload_tier_data_to_tensor",
     "run_gpu_optimization",
     "analyze_and_save_results",

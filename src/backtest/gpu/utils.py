@@ -2,11 +2,32 @@
 GPU pricing and small helper utilities.
 """
 
+import math
+
 import cupy as cp
 import pandas as pd
 
 _ADJUST_PRICE_FORCE_CHUNKED = False
 _ADJUST_PRICE_CHUNK_SIZE = 1_000_000
+_ADJUST_PRICE_LARGE_INPUT_ELEMS = 5_000_000
+
+
+def _is_gpu_oom_error(error):
+    if isinstance(error, MemoryError):
+        return True
+    oom_cls = getattr(getattr(cp.cuda, "memory", None), "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(error, oom_cls):
+        return True
+
+    message = str(error).lower()
+    markers = (
+        "out_of_memory",
+        "out of memory",
+        "std::bad_alloc",
+        "failed to allocate",
+        "cudaerroroutofmemory",
+    )
+    return any(marker in message for marker in markers)
 
 
 def get_tick_size_gpu(price_array):
@@ -38,24 +59,43 @@ def _adjust_price_up_gpu_float64_inplace(price_array):
 
 
 def _adjust_price_up_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
-    flat_prices = price_array.reshape(-1)
-    output = cp.empty(flat_prices.shape[0], dtype=cp.float32)
     safe_chunk_size = max(int(chunk_size), 1)
-    for start in range(0, flat_prices.shape[0], safe_chunk_size):
-        end = min(start + safe_chunk_size, flat_prices.shape[0])
-        output[start:end] = _adjust_price_up_gpu_float64_inplace(flat_prices[start:end])
-    return output.reshape(price_array.shape)
+    if price_array.ndim == 0:
+        return _adjust_price_up_gpu_float64_inplace(price_array)
+
+    if price_array.ndim == 1:
+        output = cp.empty(price_array.shape[0], dtype=cp.float32)
+        for start in range(0, price_array.shape[0], safe_chunk_size):
+            end = min(start + safe_chunk_size, price_array.shape[0])
+            output[start:end] = _adjust_price_up_gpu_float64_inplace(price_array[start:end])
+        return output
+
+    # Avoid reshape(-1) because non-contiguous/broadcast arrays trigger a full copy allocation.
+    tail_elems = max(math.prod(price_array.shape[1:]), 1)
+    row_chunk = max(safe_chunk_size // tail_elems, 1)
+    output = cp.empty(price_array.shape, dtype=cp.float32)
+    for start in range(0, price_array.shape[0], row_chunk):
+        end = min(start + row_chunk, price_array.shape[0])
+        output[start:end] = _adjust_price_up_gpu_float64_inplace(price_array[start:end])
+    return output
 
 
 def adjust_price_up_gpu(price_array):
     """ Vectorized price adjustment on GPU. """
     global _ADJUST_PRICE_FORCE_CHUNKED
+    if (
+        price_array.size >= _ADJUST_PRICE_LARGE_INPUT_ELEMS
+        and (price_array.ndim > 1 or not price_array.flags.c_contiguous)
+    ):
+        return _adjust_price_up_gpu_chunked(price_array)
     if _ADJUST_PRICE_FORCE_CHUNKED:
         return _adjust_price_up_gpu_chunked(price_array)
 
     try:
         return _adjust_price_up_gpu_float64_inplace(price_array)
-    except MemoryError:
+    except Exception as err:
+        if not _is_gpu_oom_error(err):
+            raise
         _ADJUST_PRICE_FORCE_CHUNKED = True
         print(
             "[GPU_WARNING] adjust_price_up_gpu OOM on full vector path; "

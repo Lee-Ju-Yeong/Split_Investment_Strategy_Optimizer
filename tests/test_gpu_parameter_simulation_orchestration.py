@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.candidate_runtime_policy import normalize_runtime_candidate_policy
 from src.optimization.gpu import parameter_simulation as sim
 
 
@@ -60,14 +61,6 @@ class _FakeGpuFrame:
         return pd.Series([self._mem_bytes], dtype="int64")
 
 
-class _FakeWeeklyFrame:
-    def __init__(self, mem_bytes=64):
-        self._mem_bytes = int(mem_bytes)
-
-    def memory_usage(self, deep=True):
-        return pd.Series([self._mem_bytes], dtype="int64")
-
-
 class TestGpuParameterSimulationOrchestration(unittest.TestCase):
     def _build_context(self, candidate_source_mode, use_weekly_alpha_gate):
         param_combinations = np.array(
@@ -80,8 +73,10 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
             strategy_params={
                 "candidate_source_mode": candidate_source_mode,
                 "use_weekly_alpha_gate": use_weekly_alpha_gate,
-                "tier_hysteresis_mode": "legacy",
+                "tier_hysteresis_mode": "strict_hysteresis_v1",
                 "cooldown_period_days": 5,
+                "min_liquidity_20d_avg_value": 123,
+                "min_tier12_coverage_ratio": 0.45,
             },
             execution_params_base={},
             db_connection_str="mysql+pymysql://user:pw@host/db",
@@ -118,26 +113,44 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         tickers = ["005930", "000660", "005930", "000660"]
         return _FakeGpuFrame(dates, tickers, mem_bytes=2048)
 
+    @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
+    @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
+    @patch("src.optimization.gpu.parameter_simulation._get_context")
+    def test_find_optimal_parameters_rejects_legacy_hysteresis_mode(
+        self,
+        mock_get_context,
+        mock_gpu_deps,
+        mock_core_deps,
+    ):
+        ctx = self._build_context("tier", False)
+        ctx.strategy_params["tier_hysteresis_mode"] = "legacy"
+        mock_get_context.return_value = ctx
+        mock_gpu_deps.return_value = self._fake_gpu_deps()
+        mock_core_deps.return_value = self._fake_core_deps()
+
+        with self.assertRaisesRegex(ValueError, "Unsupported tier_hysteresis_mode"):
+            sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
+
     @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
     @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
+    @patch("src.optimization.gpu.parameter_simulation.prepare_market_data_bundle")
     @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
     @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
-    @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
-    @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
+    @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
     @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
     @patch("src.optimization.gpu.parameter_simulation._get_context")
-    def test_find_optimal_parameters_skips_weekly_preload_in_tier_mode(
+    def test_find_optimal_parameters_uses_tier_only_runtime_inputs(
         self,
         mock_get_context,
         mock_gpu_deps,
         mock_core_deps,
         mock_preload_all,
-        mock_preload_weekly,
-        mock_build_empty_weekly,
+        mock_preload_pit_mask,
         mock_preload_tier,
-        _mock_batch_size,
+        mock_batch_size,
+        mock_prepare_market_data,
         mock_run_gpu,
         mock_analyze,
     ):
@@ -145,8 +158,10 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         mock_gpu_deps.return_value = self._fake_gpu_deps()
         mock_core_deps.return_value = self._fake_core_deps()
         mock_preload_all.return_value = self._fake_all_data_gpu()
-        mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
         mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
+        mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
+        prepared_market_data = {"prepared": True}
+        mock_prepare_market_data.return_value = prepared_market_data
         mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
             (param_batch.shape[0], 2), dtype=np.float32
         )
@@ -157,8 +172,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         best_params, _ = sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
 
-        mock_preload_weekly.assert_not_called()
-        mock_build_empty_weekly.assert_called_once()
         mock_preload_all.assert_called_once()
         _, kwargs = mock_preload_all.call_args
         self.assertTrue(kwargs["use_adjusted_prices"])
@@ -166,62 +179,25 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertEqual(kwargs["universe_mode"], "optimistic_survivor")
         _, tier_kwargs = mock_preload_tier.call_args
         self.assertEqual(tier_kwargs["universe_mode"], "optimistic_survivor")
+        self.assertEqual(tier_kwargs["min_liquidity_20d_avg_value"], 123)
+        self.assertAlmostEqual(float(tier_kwargs["min_tier12_coverage_ratio"]), 0.45, places=6)
+        mock_prepare_market_data.assert_called_once()
+        _, batch_kwargs = mock_batch_size.call_args
+        self.assertEqual(batch_kwargs["fixed_data_memory_bytes"], 2248)
         run_call = mock_run_gpu.call_args
-        self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
-        self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
-        self.assertEqual(run_call.args[7]["universe_mode"], "optimistic_survivor")
+        self.assertEqual(run_call.args[6]["candidate_source_mode"], "tier")
+        self.assertFalse(run_call.args[6]["use_weekly_alpha_gate"])
+        self.assertEqual(run_call.args[6]["universe_mode"], "optimistic_survivor")
+        self.assertIs(run_call.kwargs["prepared_market_data"], prepared_market_data)
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
-    @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
-    @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
-    @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
-    @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
-    @patch("src.optimization.gpu.parameter_simulation.build_empty_weekly_filtered_gpu")
-    @patch("src.optimization.gpu.parameter_simulation.preload_weekly_filtered_stocks_to_gpu")
-    @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
-    @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
-    @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
-    @patch("src.optimization.gpu.parameter_simulation._get_context")
-    def test_find_optimal_parameters_coerces_weekly_mode_to_tier_path(
-        self,
-        mock_get_context,
-        mock_gpu_deps,
-        mock_core_deps,
-        mock_preload_all,
-        mock_preload_weekly,
-        mock_build_empty_weekly,
-        mock_preload_tier,
-        _mock_batch_size,
-        mock_run_gpu,
-        mock_analyze,
-    ):
-        mock_get_context.return_value = self._build_context("weekly", False)
-        mock_gpu_deps.return_value = self._fake_gpu_deps()
-        mock_core_deps.return_value = self._fake_core_deps()
-        mock_preload_all.return_value = self._fake_all_data_gpu()
-        mock_preload_weekly.return_value = _FakeWeeklyFrame(mem_bytes=128)
-        mock_build_empty_weekly.return_value = _FakeWeeklyFrame(mem_bytes=0)
-        mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
-        mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
-            (param_batch.shape[0], 2), dtype=np.float32
-        )
-        mock_analyze.return_value = ({}, pd.DataFrame({"calmar_ratio": [1.0]}))
+    def test_runtime_candidate_policy_rejects_weekly_mode(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("weekly", False)
 
-        sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
-
-        mock_preload_weekly.assert_not_called()
-        mock_build_empty_weekly.assert_called_once()
-        mock_preload_all.assert_called_once()
-        _, kwargs = mock_preload_all.call_args
-        self.assertTrue(kwargs["use_adjusted_prices"])
-        self.assertEqual(kwargs["adjusted_price_gate_start_date"], "2013-11-20")
-        self.assertEqual(kwargs["universe_mode"], "optimistic_survivor")
-        _, tier_kwargs = mock_preload_tier.call_args
-        self.assertEqual(tier_kwargs["universe_mode"], "optimistic_survivor")
-        run_call = mock_run_gpu.call_args
-        self.assertEqual(run_call.args[7]["candidate_source_mode"], "tier")
-        self.assertFalse(run_call.args[7]["use_weekly_alpha_gate"])
-        self.assertEqual(run_call.args[7]["universe_mode"], "optimistic_survivor")
+    def test_runtime_candidate_policy_rejects_weekly_alpha_gate(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
+            normalize_runtime_candidate_policy("tier", True)
 
     @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
     @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
@@ -238,7 +214,6 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             sim.find_optimal_parameters("2013-01-01", "2013-12-31", 10_000_000.0)
-
 
 if __name__ == "__main__":
     unittest.main()

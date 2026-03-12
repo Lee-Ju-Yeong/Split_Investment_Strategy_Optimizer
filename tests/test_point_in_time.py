@@ -15,6 +15,7 @@ from src.backtest.cpu.strategy import MagicSplitStrategy
 class DummyPortfolio:
     def __init__(self, initial_cash=1_000_000):
         self.initial_cash = initial_cash
+        self.cash = float(initial_cash)
         self.positions = {}
 
     def get_total_value(self, *_args, **_kwargs):
@@ -101,9 +102,12 @@ class TestPointInTimeStrategy(unittest.TestCase):
     @staticmethod
     def _build_data_handler_mock(stock_df):
         handler = MagicMock()
-        handler.get_filtered_stock_codes.return_value = ['005930']
         handler.get_previous_trading_date.side_effect = (
             lambda trading_dates, idx: trading_dates[idx - 1] if idx and idx > 0 else None
+        )
+        handler.get_candidates_with_tier_fallback_pit_gated.return_value = (
+            ["005930"],
+            "TIER_1_SNAPSHOT_ASOF",
         )
         handler.get_stock_row_as_of.side_effect = (
             lambda ticker, as_of_date, _start, _end: stock_df.asof(pd.to_datetime(as_of_date))

@@ -13,21 +13,25 @@ import time
 from datetime import datetime
 
 try:
+    from ...candidate_runtime_policy import normalize_runtime_candidate_policy
     from ...price_policy import (
         is_adjusted_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
     from ...universe_policy import (
         is_survivor_optimistic_mode,
         resolve_universe_mode,
     )
 except ImportError:  # pragma: no cover
+    from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
     from universe_policy import (  # type: ignore
         is_survivor_optimistic_mode,
         resolve_universe_mode,
@@ -35,25 +39,58 @@ except ImportError:  # pragma: no cover
 from .analysis import analyze_and_save_results
 from .context import PRIORITY_MAP_REV, _ensure_core_deps, _ensure_gpu_deps, _get_context
 from .data_loading import (
-    build_empty_weekly_filtered_gpu,
     preload_all_data_to_gpu,
+    preload_pit_universe_mask_to_tensor,
     preload_tier_data_to_tensor,
-    preload_weekly_filtered_stocks_to_gpu,
 )
-from .kernel import get_optimal_batch_size, run_gpu_optimization
+from .kernel import get_optimal_batch_size, prepare_market_data_bundle, run_gpu_optimization
 
 
 DEFAULT_FALLBACK_TARGET_BATCHES = 8
 DEFAULT_FALLBACK_MIN_BATCH_SIZE = 256
 DEFAULT_FALLBACK_MAX_BATCH_SIZE = 2048
+PREPARED_MARKET_BYTES_PER_CELL = 48
 
 
-def _coerce_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
+def _is_gpu_oom_error(error, cp_module):
+    if isinstance(error, MemoryError):
+        return True
+
+    oom_cls = None
+    cuda_module = getattr(cp_module, "cuda", None)
+    if cuda_module is not None:
+        memory_module = getattr(cuda_module, "memory", None)
+        if memory_module is not None:
+            oom_cls = getattr(memory_module, "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(error, oom_cls):
+        return True
+
+    message = str(error).lower()
+    markers = (
+        "out_of_memory",
+        "out of memory",
+        "std::bad_alloc",
+        "failed to allocate",
+        "cudaerroroutofmemory",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _release_gpu_memory(cp_module):
+    try:
+        cp_module.get_default_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+    try:
+        cp_module.get_default_pinned_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+
+
+def _to_cpu_array(array_like, np_module):
+    if hasattr(array_like, "get"):
+        return array_like.get()
+    return np_module.asarray(array_like)
 
 
 def _to_positive_int(value):
@@ -78,11 +115,15 @@ def _resolve_adaptive_fallback_batch_size(num_combinations):
 
 
 def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations):
-    if optimal_batch_size:
-        batch_size = min(int(optimal_batch_size), num_combinations)
-        return batch_size, "auto"
-
     configured_batch_size = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+    if optimal_batch_size:
+        auto_batch_size = min(int(optimal_batch_size), num_combinations)
+        if configured_batch_size:
+            batch_size = min(auto_batch_size, configured_batch_size)
+            source = "auto-capped-by-config" if batch_size < auto_batch_size else "auto"
+            return batch_size, source
+        return auto_batch_size, "auto"
+
     if configured_batch_size:
         batch_size = min(configured_batch_size, num_combinations)
         return batch_size, "config.simulation_batch_size"
@@ -91,22 +132,49 @@ def _resolve_batch_size(optimal_batch_size, backtest_settings, num_combinations)
     return batch_size, "adaptive-safe-default"
 
 
-def _should_preload_weekly_candidates(candidate_source_mode, use_weekly_alpha_gate):
+def _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers):
     return (
-        candidate_source_mode == "weekly"
-        or (candidate_source_mode == "hybrid_transition" and _coerce_bool(use_weekly_alpha_gate))
+        int(max(num_trading_days, 0))
+        * int(max(num_tickers, 0))
+        * PREPARED_MARKET_BYTES_PER_CELL
     )
 
 
-def _normalize_candidate_source_mode(candidate_source_mode, use_weekly_alpha_gate):
-    requested_mode = str(candidate_source_mode).strip()
-    _ = _coerce_bool(use_weekly_alpha_gate)
-    if requested_mode != "tier":
-        print(
-            f"[Warning] candidate_source_mode='{requested_mode}' is deprecated. "
-            "Forcing 'tier' (A-path) for CPU/GPU parity."
-        )
-    return "tier", False
+def _measure_prepared_market_data_bytes(
+    prepared_market_data,
+    *,
+    num_trading_days,
+    num_tickers,
+):
+    if not prepared_market_data:
+        return 0
+
+    measured_bytes = 0
+
+    all_data_reset_idx = prepared_market_data.get("all_data_reset_idx")
+    if all_data_reset_idx is not None and hasattr(all_data_reset_idx, "memory_usage"):
+        measured_bytes += int(all_data_reset_idx.memory_usage(deep=True).sum())
+
+    for key in (
+        "open_prices_tensor",
+        "close_prices_tensor",
+        "high_prices_tensor",
+        "low_prices_tensor",
+        "zero_signal_prices_gpu",
+        "zero_signal_tiers_gpu",
+    ):
+        value = prepared_market_data.get(key)
+        if value is not None and hasattr(value, "nbytes"):
+            measured_bytes += int(value.nbytes)
+
+    rank_tensors = prepared_market_data.get("candidate_rank_tensors") or {}
+    for value in rank_tensors.values():
+        if hasattr(value, "nbytes"):
+            measured_bytes += int(value.nbytes)
+
+    if measured_bytes > 0:
+        return measured_bytes
+    return _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers)
 
 
 # -----------------------------------------------------------------------------
@@ -118,25 +186,29 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     '전체 시뮬레이션 결과'를 DataFrame으로 반환합니다.
     (WFO 오케스트레이터가 이 결과를 받아 분석을 수행합니다.)
     """
-    cp, _, create_engine, _ = _ensure_gpu_deps()
-    _, pd = _ensure_core_deps()
-
     ctx = _get_context()
     config = ctx.config
     db_connection_str = ctx.db_connection_str
     backtest_settings = ctx.backtest_settings
     strategy_params = ctx.strategy_params
 
+    execution_tier_hysteresis_mode = normalize_tier_hysteresis_mode(
+        strategy_params.get("tier_hysteresis_mode", "strict_hysteresis_v1")
+    )
+
+    cp, _, create_engine, _ = _ensure_gpu_deps()
+    np, pd = _ensure_core_deps()
+
     # Avoid mutating cached dicts.
     execution_params = dict(ctx.execution_params_base)
     execution_params["cooldown_period_days"] = strategy_params.get("cooldown_period_days", 5)
-    normalized_mode, normalized_weekly_gate = _normalize_candidate_source_mode(
+    normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
         strategy_params.get("candidate_source_mode", "tier"),
         strategy_params.get("use_weekly_alpha_gate", False),
     )
     execution_params["candidate_source_mode"] = normalized_mode
     execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
-    execution_params["tier_hysteresis_mode"] = strategy_params.get("tier_hysteresis_mode", "legacy")
+    execution_params["tier_hysteresis_mode"] = execution_tier_hysteresis_mode
     universe_mode = resolve_universe_mode(
         strategy_params,
         universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
@@ -168,19 +240,6 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         adjusted_price_gate_start_date=adjusted_gate_start_date,
         universe_mode=universe_mode,
     )
-    needs_weekly_candidates = _should_preload_weekly_candidates(
-        execution_params["candidate_source_mode"],
-        execution_params["use_weekly_alpha_gate"],
-    )
-    if needs_weekly_candidates:
-        weekly_filtered_gpu = preload_weekly_filtered_stocks_to_gpu(
-            db_connection_str,
-            start_date,
-            end_date,
-        )
-    else:
-        print("⏭️ Skipping weekly filtered preload (mode=tier, weekly gate disabled).")
-        weekly_filtered_gpu = build_empty_weekly_filtered_gpu()
 
     sql_engine = create_engine(db_connection_str)
     trading_dates_query = f"""
@@ -206,12 +265,51 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         all_tickers,
         trading_dates_pd,
         universe_mode=universe_mode,
+        min_liquidity_20d_avg_value=int(strategy_params.get("min_liquidity_20d_avg_value", 0) or 0),
+        min_tier12_coverage_ratio=strategy_params.get("min_tier12_coverage_ratio"),
+    )
+    pit_universe_mask_tensor = preload_pit_universe_mask_to_tensor(
+        db_connection_str,
+        start_date,
+        end_date,
+        all_tickers,
+        trading_dates_pd,
     )
 
-    fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum() + weekly_filtered_gpu.memory_usage(deep=True).sum())
-    fixed_mem += int(tier_tensor.nbytes)
+    prepared_market_data = None
+    prepared_bundle_bytes = 0
+    try:
+        prepared_market_data = prepare_market_data_bundle(
+            all_data_gpu,
+            all_tickers,
+            trading_dates_pd,
+            execution_params,
+        )
+        prepared_bundle_bytes = _measure_prepared_market_data_bytes(
+            prepared_market_data,
+            num_trading_days=len(trading_dates_pd),
+            num_tickers=len(all_tickers),
+        )
+    except Exception as err:
+        if not _is_gpu_oom_error(err, cp):
+            raise
+        _release_gpu_memory(cp)
+        print(
+            "[GPU_WARNING] OOM while preparing reusable market-data bundle. "
+            "Falling back to legacy per-batch preparation."
+        )
 
-    optimal_batch_size = get_optimal_batch_size(config, len(all_tickers), fixed_mem)
+    fixed_mem = int(all_data_gpu.memory_usage(deep=True).sum())
+    fixed_mem += int(tier_tensor.nbytes)
+    fixed_mem += int(pit_universe_mask_tensor.nbytes)
+    fixed_mem += int(prepared_bundle_bytes)
+
+    optimal_batch_size = get_optimal_batch_size(
+        config=config,
+        num_tickers=len(all_tickers),
+        fixed_data_memory_bytes=fixed_mem,
+        num_trading_days=len(trading_dates_pd),
+    )
     batch_size, batch_size_source = _resolve_batch_size(
         optimal_batch_size=optimal_batch_size,
         backtest_settings=backtest_settings,
@@ -222,52 +320,103 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     if batch_size_source == "auto":
         print(f"✅ Using automatically calculated optimal batch size: {batch_size}")
+    elif batch_size_source == "auto-capped-by-config":
+        configured_cap = _to_positive_int(backtest_settings.get("simulation_batch_size"))
+        print(
+            "✅ Using auto batch size capped by config: "
+            f"{batch_size} (simulation_batch_size={configured_cap})"
+        )
     else:
         print(
             "⚠️ Using fallback batch size "
             f"({batch_size_source}): {batch_size}"
         )
 
-    num_batches = (ctx.num_combinations + batch_size - 1) // batch_size
-    print(f"  - Total Simulations: {ctx.num_combinations} | Batch Size: {batch_size} | Batches: {num_batches}")
+    estimated_batches = (ctx.num_combinations + batch_size - 1) // batch_size
+    print(
+        "  - Total Simulations: "
+        f"{ctx.num_combinations} | Batch Size: {batch_size} | "
+        f"Estimated Batches: {estimated_batches}"
+    )
 
-    all_daily_values_list = []
+    num_days = len(trading_dates_pd)
+    daily_values_result_cpu = np.empty((ctx.num_combinations, num_days), dtype=np.float32)
     total_kernel_time = 0.0
-    for idx in range(num_batches):
-        start_idx = idx * batch_size
-        end_idx = min((idx + 1) * batch_size, ctx.num_combinations)
-        param_batch = ctx.param_combinations[start_idx:end_idx]
+    cursor = 0
+    executed_batches = 0
+    current_batch_size = batch_size
 
-        print(f"\n  --- Running Batch {idx + 1}/{num_batches} (Sims {start_idx}-{end_idx - 1}) ---")
+    while cursor < ctx.num_combinations:
+        remaining = ctx.num_combinations - cursor
+        attempt_batch_size = min(current_batch_size, remaining)
+        attempt = 0
 
-        start_time_kernel = time.time()
-        daily_values_batch = run_gpu_optimization(
-            param_batch,
-            all_data_gpu,
-            weekly_filtered_gpu,
-            all_tickers,
-            trading_date_indices_gpu,
-            trading_dates_pd,
-            initial_cash,
-            execution_params,
-            tier_tensor=tier_tensor,
-        )
-        batch_time = time.time() - start_time_kernel
-        total_kernel_time += batch_time
-        print(f"  - Batch {idx + 1} Kernel Execution Time: {batch_time:.2f}s")
+        while True:
+            attempt += 1
+            start_idx = cursor
+            end_idx = start_idx + attempt_batch_size
+            param_batch = ctx.param_combinations[start_idx:end_idx]
 
-        all_daily_values_list.append(daily_values_batch)
+            print(
+                "\n  --- Running Batch "
+                f"{executed_batches + 1} (Sims {start_idx}-{end_idx - 1}, "
+                f"size={attempt_batch_size}, attempt={attempt}) ---"
+            )
+
+            start_time_kernel = time.time()
+            try:
+                daily_values_batch = run_gpu_optimization(
+                    param_batch,
+                    all_data_gpu,
+                    all_tickers,
+                    trading_date_indices_gpu,
+                    trading_dates_pd,
+                    initial_cash,
+                    execution_params,
+                    tier_tensor=tier_tensor,
+                    pit_universe_mask_tensor=pit_universe_mask_tensor,
+                    prepared_market_data=prepared_market_data,
+                )
+                daily_values_result_cpu[start_idx:end_idx] = _to_cpu_array(
+                    daily_values_batch,
+                    np,
+                )
+                batch_time = time.time() - start_time_kernel
+                total_kernel_time += batch_time
+                print(f"  - Batch {executed_batches + 1} Kernel Execution Time: {batch_time:.2f}s")
+                del daily_values_batch
+                _release_gpu_memory(cp)
+                break
+            except Exception as err:
+                batch_time = time.time() - start_time_kernel
+                if not _is_gpu_oom_error(err, cp):
+                    raise
+                _release_gpu_memory(cp)
+                if attempt_batch_size <= 1:
+                    raise RuntimeError(
+                        "GPU OOM persists even with batch_size=1; aborting simulation."
+                    ) from err
+                reduced_batch_size = max(attempt_batch_size // 2, 1)
+                print(
+                    "[GPU_WARNING] OOM in batch "
+                    f"{executed_batches + 1} after {batch_time:.2f}s. "
+                    f"Reducing batch size {attempt_batch_size} -> {reduced_batch_size} and retrying."
+                )
+                attempt_batch_size = reduced_batch_size
+                continue
+
+        cursor = end_idx
+        executed_batches += 1
+        current_batch_size = min(current_batch_size, attempt_batch_size)
 
     print(f"\n  - Total GPU Kernel Execution Time: {total_kernel_time:.2f}s")
-    if not all_daily_values_list:
+    if ctx.num_combinations <= 0:
         print("[Error] No simulation results were generated.")
         return {}, pd.DataFrame()
 
-    daily_values_result = cp.vstack(all_daily_values_list)
-
     best_params_for_log, all_results_df = analyze_and_save_results(
         ctx.param_combinations,
-        daily_values_result,
+        daily_values_result_cpu,
         trading_dates_pd,
         save_to_file=False,
     )

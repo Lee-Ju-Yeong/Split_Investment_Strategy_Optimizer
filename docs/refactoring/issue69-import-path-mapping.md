@@ -19,9 +19,9 @@
 
 | 영역 | 기존/호환 경로 | 신규 구현 경로 | 상태 | 비고 |
 | --- | --- | --- | --- | --- |
-| Pipeline orchestrator | `src.pipeline_batch` | `src.pipeline.batch` | Done | wrapper 유지 |
+| Pipeline orchestrator | `src.pipeline_batch` | `src.pipeline.batch` | Done | thin wrapper 유지(2026-03-07 재정렬) |
 | Ticker universe batch | `src.ticker_universe_batch` | `src.pipeline.ticker_universe_batch` | Done | wrapper 유지 |
-| OHLCV batch | `src.ohlcv_batch` | `src.pipeline.ohlcv_batch` | Done | wrapper 유지 |
+| OHLCV batch | `src.ohlcv_batch` | `src.pipeline.ohlcv_batch` | Done | thin wrapper 유지(2026-03-07 재정렬) |
 | Daily tier batch | `src.daily_stock_tier_batch` | `src.pipeline.daily_stock_tier_batch` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
 | Financial collector | `src.financial_collector` | `src.data.collectors.financial_collector` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
 | Investor collector | `src.investor_trading_collector` | `src.data.collectors.investor_trading_collector` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
@@ -30,7 +30,7 @@
 | CPU strategy | `src.strategy` | `src.backtest.cpu.strategy` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
 | CPU portfolio | `src.portfolio` | `src.backtest.cpu.portfolio` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
 | CPU execution | `src.execution` | `src.backtest.cpu.execution` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
-| GPU optimization library | `src.parameter_simulation_gpu_lib` | `src.optimization.gpu.*` | Done | wrapper 유지 |
+| GPU optimization library | `src.parameter_simulation_gpu_lib` | `src.optimization.gpu.*` | Done | compat facade 유지(Gate B 예외) |
 | GPU optimization entrypoint | `src.parameter_simulation_gpu` | `src.parameter_simulation_gpu_lib -> src.optimization.gpu.parameter_simulation` | Done | import-safe wrapper 유지 (#60) |
 | GPU strategy kernel | `src.backtest_strategy_gpu` | `src.backtest.gpu.*` | Removed (#93 Stage 2) | wrapper 삭제(2026-02-17) |
 

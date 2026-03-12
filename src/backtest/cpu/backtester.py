@@ -36,10 +36,63 @@ class BacktestEngine:
         self.logger = logger or logging.getLogger(__name__)
         self.debug_ticker = debug_ticker
 
+    def _clear_tier_candidate_cache_if_supported(self):
+        clear_manifest = getattr(
+            self.data_handler,
+            "clear_lazy_tier_candidate_cache",
+            None,
+        )
+        if not callable(clear_manifest):
+            return
+
+        clear_manifest()
+
+    def _prepare_strict_frozen_candidate_manifest_if_supported(self, trading_dates):
+        prepare_manifest = getattr(
+            self.data_handler,
+            "prepare_strict_frozen_candidate_manifest",
+            None,
+        )
+        if not callable(prepare_manifest):
+            return
+
+        summary = prepare_manifest(
+            trading_dates,
+            candidate_lookup_error_policy=getattr(
+                self.strategy,
+                "candidate_lookup_error_policy",
+                "raise",
+            ),
+            min_liquidity_20d_avg_value=getattr(
+                self.strategy,
+                "min_liquidity_20d_avg_value",
+                None,
+            ),
+            min_tier12_coverage_ratio=getattr(
+                self.strategy,
+                "min_tier12_coverage_ratio",
+                None,
+            ),
+        )
+        if summary:
+            self.logger.info("[FrozenCandidateManifest] %s", summary)
+
+    def _clear_runtime_lookup_cache_if_supported(self):
+        clear_lookup_cache = getattr(
+            self.data_handler,
+            "clear_runtime_lookup_cache",
+            None,
+        )
+        if not callable(clear_lookup_cache):
+            return
+        clear_lookup_cache()
+
     def run(self):
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)
+        self._clear_tier_candidate_cache_if_supported()
+        self._prepare_strict_frozen_candidate_manifest_if_supported(trading_dates)
         entry_stats = {
             "entry_opportunity_days": 0,
             "candidate_eval_days": 0,
@@ -57,6 +110,8 @@ class BacktestEngine:
             "active_candidate_count_sum": 0,
             "ranked_candidate_count_sum": 0,
             "selected_signal_count_sum": 0,
+            "pit_failure_days_by_code": {},
+            "pit_failure_days_by_stage": {},
         }
 
         debug_ticker = self.debug_ticker
@@ -66,6 +121,7 @@ class BacktestEngine:
         
         # tqdm의 mininterval을 늘려 로그 출력이 밀리지 않게 함
         for i, current_date in enumerate(tqdm(trading_dates, desc="Backtesting Progress", mininterval=1.0)):
+            self._clear_runtime_lookup_cache_if_supported()
             if debug_ticker and self.logger.isEnabledFor(logging.DEBUG):
                 try:
                     stock_data = self.data_handler.load_stock_data(debug_ticker, self.start_date, self.end_date)
@@ -134,6 +190,16 @@ class BacktestEngine:
                     entry_stats["no_signal_date_days"] += 1
                 elif tier_source.startswith("CANDIDATE_LOOKUP_ERROR"):
                     entry_stats["lookup_error_days"] += 1
+                    failure_code = str(entry_context.get("pit_failure_code") or "").strip()
+                    failure_stage = str(entry_context.get("pit_failure_stage") or "").strip()
+                    if failure_code:
+                        entry_stats["pit_failure_days_by_code"][failure_code] = (
+                            int(entry_stats["pit_failure_days_by_code"].get(failure_code, 0)) + 1
+                        )
+                    if failure_stage:
+                        entry_stats["pit_failure_days_by_stage"][failure_stage] = (
+                            int(entry_stats["pit_failure_days_by_stage"].get(failure_stage, 0)) + 1
+                        )
                 elif tier_source.startswith("CANDIDATE_SOURCE_MISSING"):
                     entry_stats["source_missing_days"] += 1
                 elif tier_source.startswith("NO_AVAILABLE_SLOTS"):
@@ -166,6 +232,18 @@ class BacktestEngine:
             # --- 2. 일별 포트폴리오 가치 및 상태 기록 ---
             total_value = self.portfolio.get_total_value(current_date, self.data_handler)
             self.portfolio.record_daily_snapshot(current_date, total_value)
+            capture_positions_snapshot = bool(
+                getattr(self.portfolio, "capture_daily_positions_snapshot", False)
+            )
+            positions_df = None
+            if capture_positions_snapshot or self.logger.isEnabledFor(logging.DEBUG):
+                positions_df = self.portfolio.get_positions_snapshot(
+                    current_date,
+                    self.data_handler,
+                    total_value,
+                )
+                if capture_positions_snapshot:
+                    self.portfolio.record_positions_snapshot(current_date, positions_df)
 
             # --- 3. [신규 로직] 당일 발생한 모든 거래에 최종 포트폴리오 가치 업데이트 ---
             num_trades_after = len(self.portfolio.trade_history)
@@ -196,7 +274,12 @@ class BacktestEngine:
 
                 log_message = header + summary_str
 
-                positions_df = self.portfolio.get_positions_snapshot(current_date, self.data_handler, total_value)
+                if positions_df is None:
+                    positions_df = self.portfolio.get_positions_snapshot(
+                        current_date,
+                        self.data_handler,
+                        total_value,
+                    )
                 if not positions_df.empty:
                     positions_df["Avg Buy Price"] = positions_df["Avg Buy Price"].map("{:,.0f}".format)
                     positions_df["Current Price"] = positions_df["Current Price"].map("{:,.0f}".format)
@@ -299,6 +382,8 @@ class BacktestEngine:
             "avg_active_candidates": round(avg_active_candidates, 2),
             "avg_ranked_candidates": round(avg_ranked_candidates, 2),
             "avg_selected_signals": round(avg_selected_signals, 2),
+            "pit_failure_days_by_code": dict(sorted(entry_stats["pit_failure_days_by_code"].items())),
+            "pit_failure_days_by_stage": dict(sorted(entry_stats["pit_failure_days_by_stage"].items())),
         }
         setattr(self.portfolio, "run_metrics", self.last_run_metrics)
         self.logger.info("[EntryMetrics] %s", self.last_run_metrics)

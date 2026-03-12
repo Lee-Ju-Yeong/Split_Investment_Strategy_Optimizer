@@ -11,6 +11,15 @@ import pandas as pd
 import numpy as np
 import uuid
 
+try:
+    from ...candidate_runtime_policy import normalize_runtime_candidate_policy
+    from ...data_handler import build_pit_failure_record
+    from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
+except ImportError:  # pragma: no cover
+    from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
+    from data_handler import build_pit_failure_record  # type: ignore
+    from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 class Position:
@@ -42,6 +51,8 @@ class Strategy(ABC):
         raise NotImplementedError("generate_additional_buy_signals() 메소드를 구현해야 합니다.")
 
 class MagicSplitStrategy(Strategy):
+    VALID_ADDITIONAL_BUY_PRIORITIES = {"lowest_order", "highest_drop"}
+
     def __init__(
         self,
         max_stocks,
@@ -61,9 +72,10 @@ class MagicSplitStrategy(Strategy):
         use_weekly_alpha_gate=False,
         min_liquidity_20d_avg_value=0,
         min_tier12_coverage_ratio=0.0,
-        tier_hysteresis_mode="legacy",
+        tier_hysteresis_mode="strict_hysteresis_v1",
         candidate_lookup_error_policy="raise",
         buy_commission_rate=0.00015,
+        enable_candidate_rank_trace=False,
     ):
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -71,18 +83,22 @@ class MagicSplitStrategy(Strategy):
         self.sell_profit_rate = sell_profit_rate
         self.backtest_start_date = pd.to_datetime(backtest_start_date)
         self.backtest_end_date = pd.to_datetime(backtest_end_date)
-        self.additional_buy_priority = additional_buy_priority
+        self.additional_buy_priority = self._normalize_additional_buy_priority(additional_buy_priority)
         self.cooldown_period_days = cooldown_period_days
         self.stop_loss_rate = stop_loss_rate
         self.max_splits_limit = max_splits_limit
         self.max_inactivity_period = max_inactivity_period
         
         # [Issue #67]
-        self.candidate_source_mode = candidate_source_mode
-        self.use_weekly_alpha_gate = use_weekly_alpha_gate
+        normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
+            candidate_source_mode,
+            use_weekly_alpha_gate,
+        )
+        self.candidate_source_mode = normalized_mode
+        self.use_weekly_alpha_gate = normalized_weekly_gate
         self.min_liquidity_20d_avg_value = min_liquidity_20d_avg_value
         self.min_tier12_coverage_ratio = min_tier12_coverage_ratio
-        self.tier_hysteresis_mode = str(tier_hysteresis_mode).strip().lower()
+        self.tier_hysteresis_mode = normalize_tier_hysteresis_mode(tier_hysteresis_mode)
         self.candidate_lookup_error_policy = str(candidate_lookup_error_policy).strip().lower()
         if self.candidate_lookup_error_policy not in {"raise", "skip"}:
             raise ValueError(
@@ -90,10 +106,8 @@ class MagicSplitStrategy(Strategy):
                 f"{candidate_lookup_error_policy!r}. supported=[raise, skip]"
             )
         self.buy_commission_rate = float(buy_commission_rate)
-        self.strict_hysteresis_enabled = (
-            self.tier_hysteresis_mode == "strict_hysteresis_v1"
-            and self.candidate_source_mode in {"tier", "hybrid_transition"}
-        )
+        self.enable_candidate_rank_trace = bool(enable_candidate_rank_trace)
+        self.strict_hysteresis_enabled = True
         
         self.investment_per_order = 0
         self.previous_month = -1
@@ -107,8 +121,23 @@ class MagicSplitStrategy(Strategy):
             "selected_count": 0,
             "strategy_candidate_mode": self._resolve_candidate_mode(),
         }
+        self.candidate_rank_history = []
         self.candidate_lookup_error_count = 0
         self.first_candidate_lookup_error = None
+        self.last_candidate_lookup_error = None
+        self.candidate_lookup_error_counts_by_code = {}
+
+    @classmethod
+    def _normalize_additional_buy_priority(cls, value):
+        key = str(value).strip().lower()
+        if key == "biggest_drop":
+            key = "highest_drop"
+        if key not in cls.VALID_ADDITIONAL_BUY_PRIORITIES:
+            raise ValueError(
+                "Unsupported additional_buy_priority="
+                f"{value!r}. supported=[lowest_order, highest_drop]"
+            )
+        return key
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -116,12 +145,7 @@ class MagicSplitStrategy(Strategy):
         return data_handler.get_previous_trading_date(trading_dates, current_day_idx)
 
     def _resolve_candidate_mode(self):
-        if self.candidate_source_mode != "tier":
-            logger.warning(
-                f"[Warning] candidate_source_mode='{self.candidate_source_mode}' is deprecated. "
-                "Forcing 'tier' (A-path)."
-            )
-        return "tier"
+        return self.candidate_source_mode
 
     @staticmethod
     def _build_entry_context(
@@ -133,6 +157,8 @@ class MagicSplitStrategy(Strategy):
         active_candidate_count=0,
         ranked_candidate_count=0,
         selected_count=0,
+        pit_failure_code=None,
+        pit_failure_stage=None,
     ):
         return {
             "signal_date": signal_date,
@@ -142,7 +168,42 @@ class MagicSplitStrategy(Strategy):
             "ranked_candidate_count": int(ranked_candidate_count),
             "selected_count": int(selected_count),
             "strategy_candidate_mode": strategy_candidate_mode,
+            "pit_failure_code": pit_failure_code,
+            "pit_failure_stage": pit_failure_stage,
         }
+
+    def _record_candidate_lookup_error(self, failure_record):
+        if not failure_record:
+            return
+        self.candidate_lookup_error_count += 1
+        if self.first_candidate_lookup_error is None:
+            self.first_candidate_lookup_error = dict(failure_record)
+        self.last_candidate_lookup_error = dict(failure_record)
+        code = str(failure_record.get("code") or "unknown_candidate_lookup_error")
+        self.candidate_lookup_error_counts_by_code[code] = (
+            int(self.candidate_lookup_error_counts_by_code.get(code, 0)) + 1
+        )
+
+    @staticmethod
+    def _build_candidate_rank_rows(current_date, signal_date, sorted_candidates):
+        trade_date_str = pd.to_datetime(current_date).strftime("%Y-%m-%d")
+        signal_date_str = pd.to_datetime(signal_date).strftime("%Y-%m-%d")
+        rows = []
+        for rank, candidate in enumerate(sorted_candidates, start=1):
+            rows.append(
+                {
+                    "trade_date": trade_date_str,
+                    "signal_date": signal_date_str,
+                    "rank": int(rank),
+                    "ticker": str(candidate["ticker"]),
+                    "entry_composite_score_q": int(candidate["entry_composite_score_q"]),
+                    "flow_score_q": int(candidate["flow_score_q"]),
+                    "atr_score_q": int(candidate["atr_score_q"]),
+                    "market_cap_q": int(candidate["market_cap_q"]),
+                    "atr_14_ratio": float(candidate["atr_14_ratio"]),
+                }
+            )
+        return rows
 
     @staticmethod
     def _coerce_tier_value(tier_info):
@@ -180,6 +241,10 @@ class MagicSplitStrategy(Strategy):
         divided = price / tick_size
         rounded = round(divided, 5)
         return math.ceil(rounded) * tick_size
+
+    @staticmethod
+    def _mul_f32(a, b):
+        return float(np.float32(a) * np.float32(b))
 
     def _calculate_monthly_investment(self, current_date, current_day_idx, trading_dates, portfolio, data_handler):
         # 전일 날짜를 기준으로 자산을 평가하도록 로직 변경
@@ -226,30 +291,20 @@ class MagicSplitStrategy(Strategy):
             candidate_codes = []
             
             # --- [Issue #67] Candidate Source Logic Start ---
-            get_tier_candidates = getattr(data_handler, "get_candidates_with_tier_fallback", None)
-            get_tier_candidates_pit = getattr(data_handler, "get_candidates_with_tier_fallback_pit", None)
-            if callable(get_tier_candidates_pit) or callable(get_tier_candidates):
+            get_tier_candidates_pit_gated = getattr(
+                data_handler,
+                "get_candidates_with_tier_fallback_pit_gated",
+                None,
+            )
+            if callable(get_tier_candidates_pit_gated):
                 try:
-                    tier_result = None
                     used_tier = ""
                     raw_candidate_count = 0
-                    if callable(get_tier_candidates_pit):
-                        get_tier_candidates_pit_gated = getattr(
-                            data_handler,
-                            "get_candidates_with_tier_fallback_pit_gated",
-                            None,
-                        )
-                        if callable(get_tier_candidates_pit_gated):
-                            tier_result = get_tier_candidates_pit_gated(
-                                signal_date,
-                                min_liquidity_20d_avg_value=self.min_liquidity_20d_avg_value,
-                                min_tier12_coverage_ratio=self.min_tier12_coverage_ratio,
-                            )
-                        else:
-                            tier_result = get_tier_candidates_pit(signal_date)
-                    if not (isinstance(tier_result, tuple) and len(tier_result) == 2):
-                        tier_result = get_tier_candidates(signal_date)
-                    tier_codes, used_tier = tier_result
+                    tier_codes, used_tier = get_tier_candidates_pit_gated(
+                        signal_date,
+                        min_liquidity_20d_avg_value=self.min_liquidity_20d_avg_value,
+                        min_tier12_coverage_ratio=self.min_tier12_coverage_ratio,
+                    )
                     raw_candidate_count = len(tier_codes)
                     candidate_codes = tier_codes
                     if self.strict_hysteresis_enabled and used_tier.startswith("TIER_2_FALLBACK"):
@@ -268,29 +323,40 @@ class MagicSplitStrategy(Strategy):
                             f"Fallback: Tier 1 (0) -> Tier 2 ({raw_candidate_count}){blocked_suffix}"
                         )
                 except Exception as exc:
+                    failure_record = build_pit_failure_record(
+                        exc,
+                        trade_date=current_date,
+                        signal_date=signal_date,
+                        fallback_code="candidate_lookup_runtime_error",
+                        fallback_stage="candidate_lookup",
+                    )
+                    self._record_candidate_lookup_error(failure_record)
+                    self.last_entry_context = self._build_entry_context(
+                        signal_date,
+                        "CANDIDATE_LOOKUP_ERROR",
+                        strategy_candidate_mode=resolved_mode,
+                        pit_failure_code=(failure_record or {}).get("code"),
+                        pit_failure_stage=(failure_record or {}).get("stage"),
+                    )
                     if self.candidate_lookup_error_policy == "raise":
                         logger.exception(
-                            "Tier candidate lookup failed (%s). "
-                            "Aborting run by candidate_lookup_error_policy=raise.",
-                            type(exc).__name__,
+                            "[PITCandidateFailure] code=%s stage=%s policy=raise trade_date=%s signal_date=%s "
+                            "message=%s",
+                            (failure_record or {}).get("code"),
+                            (failure_record or {}).get("stage"),
+                            (failure_record or {}).get("trade_date"),
+                            (failure_record or {}).get("signal_date"),
+                            (failure_record or {}).get("message"),
                         )
                         raise
-                    self.candidate_lookup_error_count += 1
-                    if self.first_candidate_lookup_error is None:
-                        self.first_candidate_lookup_error = {
-                            "trade_date": str(pd.to_datetime(current_date).date()),
-                            "signal_date": (
-                                str(pd.to_datetime(signal_date).date())
-                                if signal_date is not None
-                                else None
-                            ),
-                            "exception_type": type(exc).__name__,
-                            "message": str(exc)[:240],
-                        }
                     logger.warning(
-                        "Tier candidate lookup failed (%s). "
-                        "Returning empty candidate set by candidate_lookup_error_policy=skip.",
-                        type(exc).__name__,
+                        "[PITCandidateFailure] code=%s stage=%s policy=skip trade_date=%s signal_date=%s "
+                        "message=%s. Returning empty candidate set.",
+                        (failure_record or {}).get("code"),
+                        (failure_record or {}).get("stage"),
+                        (failure_record or {}).get("trade_date"),
+                        (failure_record or {}).get("signal_date"),
+                        (failure_record or {}).get("message"),
                     )
                     candidate_codes = []
                     raw_candidate_count = 0
@@ -300,9 +366,17 @@ class MagicSplitStrategy(Strategy):
                     used_tier,
                     strategy_candidate_mode=resolved_mode,
                     raw_candidate_count=raw_candidate_count,
+                    pit_failure_code=(self.last_candidate_lookup_error or {}).get("code")
+                    if used_tier == "CANDIDATE_LOOKUP_ERROR"
+                    else None,
+                    pit_failure_stage=(self.last_candidate_lookup_error or {}).get("stage")
+                    if used_tier == "CANDIDATE_LOOKUP_ERROR"
+                    else None,
                 )
             else:
-                logger.warning("get_candidates_with_tier_fallback missing. Returning empty candidate set.")
+                logger.warning(
+                    "get_candidates_with_tier_fallback_pit_gated missing. Returning empty candidate set."
+                )
                 candidate_codes = []
                 self.last_entry_context = self._build_entry_context(
                     signal_date,
@@ -323,12 +397,30 @@ class MagicSplitStrategy(Strategy):
                     continue
                 active_candidates.append(code)
             self.last_entry_context["active_candidate_count"] = len(active_candidates)
-            
+
+            candidate_rows_by_ticker = {}
+            get_stock_rows_as_of = getattr(data_handler, "get_stock_rows_as_of", None)
+            if active_candidates and callable(get_stock_rows_as_of):
+                batch_rows = get_stock_rows_as_of(
+                    active_candidates,
+                    signal_date,
+                    self.backtest_start_date,
+                    self.backtest_end_date,
+                )
+                if isinstance(batch_rows, dict):
+                    candidate_rows_by_ticker = batch_rows
+
             ranked_candidates = []
             for ticker in active_candidates:
-                signal_row = data_handler.get_stock_row_as_of(
-                    ticker, signal_date, self.backtest_start_date, self.backtest_end_date
-                )
+                if ticker in candidate_rows_by_ticker:
+                    signal_row = candidate_rows_by_ticker[ticker]
+                else:
+                    signal_row = data_handler.get_stock_row_as_of(
+                        ticker,
+                        signal_date,
+                        self.backtest_start_date,
+                        self.backtest_end_date,
+                    )
                 if signal_row is None or "atr_14_ratio" not in signal_row.index:
                     continue
                 latest_atr = signal_row["atr_14_ratio"]
@@ -379,11 +471,13 @@ class MagicSplitStrategy(Strategy):
                     .rank(method="average", pct=True, ascending=True)
                     .fillna(0.0)
                 )
+                ranked_df["flow_score_q"] = (ranked_df["flow_score"] * 10000.0).round().astype(int)
                 ranked_df["atr_score"] = (
                     pd.to_numeric(ranked_df["atr_14_ratio"], errors="coerce")
                     .rank(method="average", pct=True, ascending=True)
                     .fillna(0.0)
                 )
+                ranked_df["atr_score_q"] = (ranked_df["atr_score"] * 10000.0).round().astype(int)
                 ranked_df["entry_composite_score"] = (
                     (0.50 * ranked_df["cheap_effective"])
                     + (0.30 * ranked_df["flow_score"])
@@ -398,6 +492,10 @@ class MagicSplitStrategy(Strategy):
                     inplace=True,
                 )
                 sorted_candidates = ranked_df.to_dict("records")
+                if self.enable_candidate_rank_trace:
+                    self.candidate_rank_history.extend(
+                        self._build_candidate_rank_rows(current_date, signal_date, sorted_candidates)
+                    )
             # 슬롯이 찰 때까지만 신호 생성
             num_new_entries = 0
             temp_cash = float(portfolio.cash)
@@ -474,47 +572,92 @@ class MagicSplitStrategy(Strategy):
         if signal_date is None:
             return buy_signals
 
-        # 추가 매수 신호 생성 로직
-        for ticker in list(portfolio.positions.keys()):
-            # 당일 매도된 종목은 추가 매수 안 함
+        holdings_tickers = list(portfolio.positions.keys())
+        tier_map = None
+        get_tiers_as_of = getattr(data_handler, "get_tiers_as_of", None)
+        if holdings_tickers and callable(get_tiers_as_of):
+            batch_tiers = get_tiers_as_of(
+                signal_date,
+                tickers=holdings_tickers,
+                allowed_tiers=[1, 2],
+            )
+            if isinstance(batch_tiers, dict):
+                tier_map = batch_tiers
+
+        eligible_tickers = []
+        eligible_positions = {}
+        for ticker in holdings_tickers:
             if self.cooldown_tracker.get(ticker) == current_day_idx:
                 continue
-            tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
+            if isinstance(tier_map, dict):
+                tier_info = tier_map.get(ticker)
+            else:
+                tier_info = data_handler.get_stock_tier_as_of(ticker, signal_date)
             tier_value = self._coerce_tier_value(tier_info)
             if tier_value <= 0 or tier_value > 2:
                 continue
-            
+
             positions = portfolio.positions[ticker]
-            # [핵심 수정] GPU의 'is_not_new_today' 규칙과 동일한 보호 장치
-            # 이 종목의 첫 번째 매수(order 1)가 오늘 이전에 이루어졌는지 확인합니다.
+            if len(positions) >= self.max_splits_limit:
+                continue
+
             first_position = next((p for p in positions if p.order == 1), None)
             if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
                 continue
-            
-            signal_row = data_handler.get_stock_row_as_of(
-                ticker, signal_date, self.backtest_start_date, self.backtest_end_date
+
+            eligible_tickers.append(ticker)
+            eligible_positions[ticker] = positions
+
+        signal_rows_by_ticker = {}
+        get_stock_rows_as_of = getattr(data_handler, "get_stock_rows_as_of", None)
+        if eligible_tickers and callable(get_stock_rows_as_of):
+            batch_rows = get_stock_rows_as_of(
+                eligible_tickers,
+                signal_date,
+                self.backtest_start_date,
+                self.backtest_end_date,
             )
+            if isinstance(batch_rows, dict):
+                signal_rows_by_ticker = batch_rows
+
+        # 추가 매수 신호 생성 로직
+        for ticker in eligible_tickers:
+            positions = eligible_positions[ticker]
+            if ticker in signal_rows_by_ticker:
+                signal_row = signal_rows_by_ticker[ticker]
+            else:
+                signal_row = data_handler.get_stock_row_as_of(
+                    ticker,
+                    signal_date,
+                    self.backtest_start_date,
+                    self.backtest_end_date,
+                )
             if signal_row is None:
                 continue
-
-            if not any(p.order == 1 for p in positions):
-                continue
-
-            if len(positions) >= self.max_splits_limit:
-                continue    
             
             signal_close = signal_row["close_price"]
             signal_low = signal_row["low_price"]
-            if signal_close <= 0:
+            if signal_close <= 0 or signal_low <= 0:
                 continue
 
             last_pos = portfolio.positions[ticker][-1]
-            buy_trigger_price = last_pos.buy_price * (1 - self.additional_buy_drop_rate)
+            buy_trigger_price = self._mul_f32(
+                last_pos.buy_price,
+                np.float32(1.0) - np.float32(self.additional_buy_drop_rate),
+            )
             
             if signal_low <= buy_trigger_price:
                 if self.investment_per_order > 0:
                     new_pos = Position(signal_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
-                    sort_metric = len(portfolio.positions[ticker]) if self.additional_buy_priority == "lowest_order" else -((last_pos.buy_price - signal_close) / last_pos.buy_price)
+                    if self.additional_buy_priority == "lowest_order":
+                        sort_metric = len(portfolio.positions[ticker])
+                    elif self.additional_buy_priority == "highest_drop":
+                        sort_metric = -((last_pos.buy_price - signal_close) / last_pos.buy_price)
+                    else:
+                        raise ValueError(
+                            "Unsupported additional_buy_priority="
+                            f"{self.additional_buy_priority!r}. supported=[lowest_order, highest_drop]"
+                        )
                     buy_signals.append(self._create_buy_signal(current_date, ticker, self.investment_per_order, new_pos, 2, sort_metric, "추가 매수(하락)", buy_trigger_price))
 
         # 추가 매수 신호 내에서의 정렬
@@ -536,6 +679,8 @@ class MagicSplitStrategy(Strategy):
         return {
             "error_count": int(self.candidate_lookup_error_count),
             "first_error": self.first_candidate_lookup_error,
+            "last_error": self.last_candidate_lookup_error,
+            "failure_counts": dict(sorted(self.candidate_lookup_error_counts_by_code.items())),
             "policy": self.candidate_lookup_error_policy,
         }
 
@@ -567,10 +712,14 @@ class MagicSplitStrategy(Strategy):
             reason = ""
             trigger_price = current_price
 
-            if current_price <= avg_buy_price * (1.0 + self.stop_loss_rate):
+            stop_loss_trigger_price = self._mul_f32(
+                avg_buy_price,
+                np.float32(1.0) + np.float32(self.stop_loss_rate),
+            )
+            if current_price <= stop_loss_trigger_price:
                 liquidate = True
                 reason = "손절매 (평균가 기준)"
-                trigger_price = avg_buy_price * (1.0 + self.stop_loss_rate)
+                trigger_price = stop_loss_trigger_price
 
             if not liquidate:
                 last_trade_idx = portfolio.last_trade_day_indices.get(ticker)
@@ -599,7 +748,10 @@ class MagicSplitStrategy(Strategy):
                 if p.open_date is not None and p.open_date >= current_date:
                     continue
                 
-                sell_trigger_price = p.buy_price * (1 + self.sell_profit_rate)
+                sell_trigger_price = self._mul_f32(
+                    p.buy_price,
+                    np.float32(1.0) + np.float32(self.sell_profit_rate),
+                )
                 if current_high >= sell_trigger_price:
                     signals.append(self._create_sell_signal(current_date, ticker, p, "수익 실현", sell_trigger_price))
                     # 1차 매도 여부와 상관없이 개별 익절이므로 cooldown만 설정
