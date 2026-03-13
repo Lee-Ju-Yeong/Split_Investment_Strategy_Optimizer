@@ -360,6 +360,142 @@ class TestGpuNewEntrySignals(unittest.TestCase):
         self.assertEqual(float(positions_after[0, 1, 0, 0].item()), 2.0)
         self.assertEqual(float(portfolio_state_after[0, 0].item()), 17.0)
 
+    def test_new_entry_matches_reference_with_heterogeneous_budget_commission_and_active_shrink(self):
+        portfolio_state = cp.asarray(
+            [
+                [150.0, 100.0],
+                [230.0, 120.0],
+                [340.0, 100.0],
+            ],
+            dtype=cp.float32,
+        )
+        positions_state = cp.zeros((3, 3, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((3, 3), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.full((3, 3), -1, dtype=cp.int32)
+        current_prices = cp.asarray([95.0, 40.0, 30.0], dtype=cp.float32)
+        signal_close_prices = cp.asarray([96.0, 41.0, 31.0], dtype=cp.float32)
+        candidate_tickers_for_day = cp.asarray([0, 1, 2], dtype=cp.int32)
+        param_combinations = self._params_matrix([3, 3, 3])
+
+        portfolio_state_after, positions_after, last_trade_after = _process_new_entry_signals_gpu(
+            portfolio_state=portfolio_state.copy(),
+            positions_state=positions_state.copy(),
+            cooldown_state=cooldown_state.copy(),
+            last_trade_day_idx_state=last_trade_day_idx_state.copy(),
+            current_day_idx=4,
+            cooldown_period_days=5,
+            param_combinations=param_combinations,
+            current_prices=current_prices,
+            signal_close_prices=signal_close_prices,
+            candidate_tickers_for_day=candidate_tickers_for_day,
+            candidate_atrs_for_day=cp.asarray([0.4, 0.3, 0.2], dtype=cp.float32),
+            buy_commission_rate=0.10,
+            log_buffer=cp.zeros((32, 5), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["A", "B", "C"],
+        )
+
+        expected_portfolio, expected_positions, expected_last_trade = self._python_reference_new_entry(
+            portfolio_state=portfolio_state.get().tolist(),
+            positions_state=positions_state.get().tolist(),
+            cooldown_state=cooldown_state.get().tolist(),
+            current_day_idx=4,
+            cooldown_period_days=5,
+            param_combinations=param_combinations.get().tolist(),
+            current_prices=current_prices.get().tolist(),
+            candidate_tickers_for_day=candidate_tickers_for_day.get().tolist(),
+            buy_commission_rate=0.10,
+        )
+
+        self.assertEqual(
+            [round(float(value), 6) for value in portfolio_state_after[:, 0].get().tolist()],
+            [round(float(row[0]), 6) for row in expected_portfolio],
+        )
+        self.assertEqual(
+            positions_after[:, :, 0, 0].get().tolist(),
+            [[stock[0][0] for stock in sim] for sim in expected_positions],
+        )
+        self.assertEqual(last_trade_after.get().tolist(), expected_last_trade)
+        self.assertEqual(
+            positions_after[:, :, 0, 0].get().tolist(),
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 2.0, 3.0],
+            ],
+        )
+
+    def test_new_entry_matches_reference_with_heterogeneous_budget_commission_and_active_set_shrink(self):
+        portfolio_state = cp.asarray(
+            [
+                [215.0, 100.0],
+                [105.0, 100.0],
+                [220.0, 120.0],
+            ],
+            dtype=cp.float32,
+        )
+        positions_state = cp.zeros((3, 3, 3, 3), dtype=cp.float32)
+        cooldown_state = cp.full((3, 3), -1, dtype=cp.int32)
+        last_trade_day_idx_state = cp.full((3, 3), -1, dtype=cp.int32)
+        current_prices = cp.asarray([100.0, 40.0, 30.0], dtype=cp.float32)
+        signal_close_prices = cp.asarray([101.0, 41.0, 31.0], dtype=cp.float32)
+        candidate_tickers_for_day = cp.asarray([0, 1, 2], dtype=cp.int32)
+        param_combinations = self._params_matrix([2, 2, 2])
+
+        portfolio_state_after, positions_after, last_trade_after = _process_new_entry_signals_gpu(
+            portfolio_state=portfolio_state.copy(),
+            positions_state=positions_state.copy(),
+            cooldown_state=cooldown_state.copy(),
+            last_trade_day_idx_state=last_trade_day_idx_state.copy(),
+            current_day_idx=4,
+            cooldown_period_days=5,
+            param_combinations=param_combinations,
+            current_prices=current_prices,
+            signal_close_prices=signal_close_prices,
+            candidate_tickers_for_day=candidate_tickers_for_day,
+            candidate_atrs_for_day=cp.asarray([0.5, 0.4, 0.3], dtype=cp.float32),
+            buy_commission_rate=0.10,
+            log_buffer=cp.zeros((32, 5), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["A", "B", "C"],
+        )
+
+        expected_portfolio, expected_positions, expected_last_trade = self._python_reference_new_entry(
+            portfolio_state=portfolio_state.get().tolist(),
+            positions_state=positions_state.get().tolist(),
+            cooldown_state=cooldown_state.get().tolist(),
+            current_day_idx=4,
+            cooldown_period_days=5,
+            param_combinations=param_combinations.get().tolist(),
+            current_prices=current_prices.get().tolist(),
+            candidate_tickers_for_day=candidate_tickers_for_day.get().tolist(),
+            buy_commission_rate=0.10,
+        )
+
+        self.assertEqual(
+            [round(float(value), 6) for value in portfolio_state_after[:, 0].get().tolist()],
+            [round(float(row[0]), 6) for row in expected_portfolio],
+        )
+        self.assertEqual(
+            positions_after[:, :, 0, 0].get().tolist(),
+            [[stock[0][0] for stock in sim] for sim in expected_positions],
+        )
+        self.assertEqual(last_trade_after.get().tolist(), expected_last_trade)
+        self.assertEqual(
+            positions_after[:, :, 0, 0].get().tolist(),
+            [
+                [1.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+        )
+        self.assertEqual(
+            [round(float(value), 6) for value in portfolio_state_after[:, 0].get().tolist()],
+            [17.0, 17.0, 110.0],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
