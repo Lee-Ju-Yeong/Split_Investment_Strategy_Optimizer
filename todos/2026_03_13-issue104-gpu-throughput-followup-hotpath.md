@@ -11,7 +11,7 @@
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
 - Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, 현재 worktree는 다시 baseline 경로로 돌아왔습니다. breakdown probe까지 끝난 지금은 다음 최적화 대상을 `additional_buy`로 좁힌 상태입니다.
-- Next action: `additional_buy` 경로의 첫 safe slice(`H-005-a`) 계약을 고정하고, 전체 의미론을 건드리지 않는 범위에서 후보 생성/정렬/순차 rank 처리 중 가장 무거운 부분을 다시 자릅니다.
+- Next action: `H-005-a`를 probe-only slice로 고정하고, `_process_additional_buy_signals_gpu(...)` 내부를 더 잘게 계측해 실제 1차 병목이 `mask`, `cp.where`, `cost/priority`, `sort`, `rank loop`, `state update` 중 어디인지 먼저 확정합니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -303,11 +303,11 @@
 
 ## 19. Next Slice Contract (`H-005-a`)
 ### 19-1. What
-- 목표: `_process_additional_buy_signals_gpu(...)` 안에서 전체 시간 대부분을 쓰는 추가매수 후보 생성/정렬/순차 처리 경로를 다시 잘게 쪼갭니다.
-- 첫 구현 범위는 아주 좁게 잡습니다.
+- 목표: `_process_additional_buy_signals_gpu(...)` 안에서 전체 시간 대부분을 쓰는 추가매수 경로를 바로 최적화하지 않고, 먼저 sub-stage probe로 더 잘게 쪼갭니다.
+- 이번 `H-005-a`는 **probe-only**입니다.
   - 전체 의미론은 그대로 둡니다.
-  - 우선 `additional_buy` 경로 안에서 실제로 시간이 어디에 쓰이는지 더 세분화합니다.
-  - 그 다음 slice는 `cp.where(...)`, `cp.lexsort(...)`, `for rank in range(...)` 중 한 군데만 건드립니다.
+  - `mask_gen`, `candidate_extract`, `cost_priority`, `sort`, `rank_apply`, `state_update` 시간을 분리 계측합니다.
+  - 아직 `cp.where(...)`, `cp.lexsort(...)`, `for rank in range(...)` 알고리즘 자체는 바꾸지 않습니다.
 
 ### 19-2. What must stay the same
 - 추가매수 우선순위(`lowest_order` / `highest_drop`) 결과가 바뀌면 안 됩니다.
@@ -318,13 +318,31 @@
 ### 19-3. Why this is now the best next slice
 - `H-001`, `H-003`, `H-004-a`는 모두 실제 큰 병목이 아닌 곳을 건드렸거나, canonical 기준으로는 비용이 더 커졌습니다.
 - 이번 probe에서는 `additional_buy`가 kernel 시간 대부분을 차지하는 것이 확인됐습니다.
-- 그래서 다음엔 “혹시 느릴지도 모르는 곳”이 아니라, “이미 느리다고 증명된 곳”만 가는 게 맞습니다.
+- 다만 `additional_buy` 안에서 **어느 연산이 제일 느린지**는 아직 확정되지 않았습니다.
+- 그래서 다음엔 “바로 고치기”보다 “이미 느리다고 증명된 곳 안을 더 잘게 재기”가 먼저입니다.
 
 ### 19-4. Verification plan
-- 먼저 `additional_buy` 내부 sub-stage probe를 추가할지 검토합니다.
-- 첫 구현은 slice를 작게 나눠 parity risk를 낮춥니다.
+- `H-005-a`는 계측만 추가하므로, probe 전후 결과 의미가 바뀌지 않아야 합니다.
 - 구현 후 확인:
   - `tests.test_backtest_strategy_gpu`
-  - `tests.test_gpu_new_entry_signals`와 별개로 추가매수 회귀셋 보강 필요 여부 검토
-  - canonical 2-run 재측정
-  - 필요 시 strict parity canary 재확인
+  - `tests.test_issue98_perf_measure`
+  - `issue98_perf_measure --kernel-breakdown --runs 1` 재실행
+  - `summary.json`에서 `additional_buy_*` sub-stage가 모두 집계되는지 확인
+
+## 20. Multi-Agent Direction Review (Codex blind-first + Gemini post-check)
+- 2026-03-13: `multi-agent-with-codex-gemini`로 `H-005-a` 방향성을 구현 전에 다시 검토했습니다.
+- Codex 1차 블라인드 의견 요약:
+  - 한 관점은 `active-domain compaction`이 유망하다고 봤습니다.
+  - 한 관점은 `rank loop`의 반복 재스캔 제거가 가장 작은 blast radius라고 봤습니다.
+  - 한 관점은 `initial_buy_mask` 생성부의 2D broadcast/temp 축소가 가장 안전하다고 봤습니다.
+- 하지만 세 의견 모두 공통으로 동의한 점은 같았습니다.
+  - 지금은 `additional_buy`가 병목인 건 확실하다.
+  - 다만 그 안에서 어떤 sub-stage가 1차 병목인지는 아직 모른다.
+  - 따라서 첫 slice는 최적화가 아니라 fine-grained profiling이어야 한다.
+- Gemini 사후 대조도 같은 결론을 줬습니다.
+  - `Fine-grained Profiling First`
+  - 이유: micro-benchmark 부재, parity risk, memory-bandwidth saturation 가능성
+- 최종 통합 판정:
+  - 상태: `실행`
+  - 실행안: `H-005-a`를 probe-only slice로 진행
+  - 다음 실제 최적화는 `H-005-b`로 분리하고, `H-005-a` 결과를 본 뒤 고릅니다.
