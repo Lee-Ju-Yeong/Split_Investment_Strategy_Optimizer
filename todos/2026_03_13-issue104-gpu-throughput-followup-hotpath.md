@@ -1,17 +1,17 @@
 # Issue #104: GPU Throughput Follow-up Hot Path
 
 > Type: `implementation`
-> Status: `in_progress`
+> Status: `done`
 > Priority: `P1`
 > Last updated: 2026-03-13
 > Related issues: `#104`, `#98`, `#56`
-> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; H-004-a was also implemented/tested/measured, then rolled back after canonical regression confirmation; breakdown probe now shows that additional_buy dominates the kernel; H-005-a probe-only instrumentation and first measurement are complete; next target is state_update micro-probe inside additional_buy`
+> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; H-004-a was also implemented/tested/measured, then rolled back after canonical regression confirmation; H-005-a / H-005-b-0 probes narrowed the true bottleneck to additional_buy last-trade dedup; H-005-b replaced cp.unique-based dedup with direct idempotent update; final canonical 2-run and strict parity both passed`
 
 ## 1. One-Page Summary
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
-- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, `H-005-a` / `H-005-b-0` probe 결과를 바탕으로 `H-005-b` direct-update slice 구현과 회귀 테스트까지 끝난 상태입니다.
-- Next action: `issue98_perf_measure --kernel-breakdown --runs 1`로 `H-005-b` 구현 결과를 다시 측정해 `additional_buy_state_last_trade_update_s`가 실제로 줄었는지 확인합니다.
+- Current status: GitHub issue `#104` 구현 tranche는 완료됐습니다. `H-001`, `H-003`, `H-004-a`는 모두 canonical 회귀로 롤백했고, `H-005-a` / `H-005-b-0` probe로 실제 병목을 additional_buy last-trade dedup으로 좁힌 뒤 `H-005-b` direct-update slice를 구현했습니다. 그 결과 current HEAD canonical 2-run과 strict parity를 모두 통과했습니다.
+- Next action: follow-up backlog가 새로 생기기 전까지는 이 tranche를 다시 열지 않습니다. probe instrumentation은 `--kernel-breakdown` gated tool로 유지하고, 다음 hot-path tranche가 필요해질 때 재사용합니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -404,6 +404,41 @@
   - `additional_buy_state_update_s`
   - `additional_buy_s`
   - `median_kernel_s`, `median_wall_s`
+- 최종 측정 결과:
+  - probe 1-run:
+    - `results/issue98_measure/pr104_h005b_janfeb2024_cov020_20260313_212214/summary.json`
+    - `median_kernel_s = 50.23s`
+    - `median_wall_s = 86.55s`
+    - `additional_buy_state_last_trade_update_s = 0.04s`
+  - canonical final 2-run:
+    - `results/issue98_measure/pr104_h005b_final_janfeb2024_cov020_20260313_212906/summary.json`
+    - `median_kernel_s = 51.015s`
+    - `median_wall_s = 87.295s`
+    - baseline(`pr98_head_final_janfeb2024_cov020_20260312_223231`) 대비:
+      - kernel `+94.96%`
+      - wall `+91.68%`
+    - `oom_retry = false / false`
+    - `batch_count = 4 / 4`
+- parity reconfirmation:
+  - `results/issue98_measure/parity_canary/issue98_combo_shortlist_ad_20260312_report_all.json`
+  - `failed = 0`
+  - `decision_level_parity_zero_mismatch = true`
+  - `promotion_blocked = false`
+- 최종 판정:
+  - `H-005-b`는 keep
+  - `#104` tranche 목표는 달성
+  - probe instrumentation은 후속 hot-path tranche 재사용을 위해 gated 도구로 유지
+
+## 21. Final Close Recommendation
+- 2026-03-13 기준 `#104`는 close 권고입니다.
+- 이유:
+  - exploratory slice 세 개(`H-001`, `H-003`, `H-004-a`)는 모두 canonical 회귀로 정리되어 재시도 비용을 낮췄습니다.
+  - `H-005-a` / `H-005-b-0` probe로 병목을 additional-buy last-trade dedup으로 좁혔습니다.
+  - `H-005-b`가 canonical 2-run과 strict parity를 모두 통과했습니다.
+- 후속 규칙:
+  - `--kernel-breakdown` instrumentation은 유지합니다.
+  - 추가 GPU hot-path 작업은 새 issue/tranche로 엽니다.
+  - 이 문서는 done evidence로 유지하고, 새 실험 로그는 여기에 누적하지 않습니다.
 
 ## 20. Multi-Agent Direction Review (Codex blind-first + Gemini post-check)
 - 2026-03-13: `multi-agent-with-codex-gemini`로 `H-005-a` 방향성을 구현 전에 다시 검토했습니다.
