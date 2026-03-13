@@ -37,6 +37,12 @@ def _empty_kernel_stage_totals() -> dict[str, float]:
         "sell_s": 0.0,
         "new_entry_s": 0.0,
         "additional_buy_s": 0.0,
+        "additional_buy_mask_gen_s": 0.0,
+        "additional_buy_candidate_extract_s": 0.0,
+        "additional_buy_cost_priority_s": 0.0,
+        "additional_buy_sort_s": 0.0,
+        "additional_buy_rank_apply_s": 0.0,
+        "additional_buy_state_update_s": 0.0,
         "valuation_s": 0.0,
     }
 
@@ -563,6 +569,8 @@ def run_magic_split_strategy_on_gpu(
                 strict_cash_rounding=strict_cash_rounding,
                 current_date=current_date,
                 signal_date=signal_date,
+                kernel_stage_totals=kernel_stage_totals,
+                kernel_stage_timing_enabled=kernel_stage_timing_enabled,
             )
             _record_stage_duration(
                 kernel_stage_totals,

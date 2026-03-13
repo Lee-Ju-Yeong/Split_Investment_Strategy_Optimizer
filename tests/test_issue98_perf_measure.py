@@ -92,7 +92,7 @@ class TestIssue98PerfMeasure(unittest.TestCase):
                         "✅ PIT mask loaded and tensorized. Shape: (41, 2532). Time: 0.35s",
                         "✅ Reusable market-data bundle prepared. Time: 2.50s",
                         "✅ GPU Tensors created successfully in 0.08s.",
-                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1119.00 monthly_rebalance_s=0.50 candidate_select_s=10.00 candidate_payload_s=11.00 strict_rerank_s=0.00 sell_s=300.00 new_entry_s=420.00 additional_buy_s=250.00 valuation_s=122.50",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1119.00 monthly_rebalance_s=0.50 candidate_select_s=10.00 candidate_payload_s=11.00 strict_rerank_s=0.00 sell_s=300.00 new_entry_s=420.00 additional_buy_s=250.00 additional_buy_mask_gen_s=50.00 additional_buy_candidate_extract_s=20.00 additional_buy_cost_priority_s=40.00 additional_buy_sort_s=60.00 additional_buy_rank_apply_s=70.00 additional_buy_state_update_s=10.00 valuation_s=122.50",
                         "Total GPU Kernel Execution Time: 1114.65s",
                         "Elapsed (wall clock) time (h:mm:ss or m:ss): 19:24.88",
                         "--- Running Batch 1",
@@ -114,7 +114,7 @@ class TestIssue98PerfMeasure(unittest.TestCase):
                         "✅ PIT mask loaded and tensorized. Shape: (41, 2532). Time: 0.34s",
                         "✅ Reusable market-data bundle prepared. Time: 2.20s",
                         "✅ GPU Tensors created successfully in 0.07s.",
-                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1121.00 monthly_rebalance_s=0.60 candidate_select_s=9.80 candidate_payload_s=10.80 strict_rerank_s=0.00 sell_s=301.00 new_entry_s=421.00 additional_buy_s=251.00 valuation_s=123.00",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1121.00 monthly_rebalance_s=0.60 candidate_select_s=9.80 candidate_payload_s=10.80 strict_rerank_s=0.00 sell_s=301.00 new_entry_s=421.00 additional_buy_s=251.00 additional_buy_mask_gen_s=51.00 additional_buy_candidate_extract_s=21.00 additional_buy_cost_priority_s=41.00 additional_buy_sort_s=61.00 additional_buy_rank_apply_s=71.00 additional_buy_state_update_s=11.00 valuation_s=123.00",
                         "Total GPU Kernel Execution Time: 1117.06s",
                         "Elapsed (wall clock) time (h:mm:ss or m:ss): 19:17.62",
                         "--- Running Batch 1",
@@ -169,6 +169,8 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             self.assertAlmostEqual(summary["median_stage_breakdown_s"]["analysis_s"], 0.805, places=3)
             self.assertAlmostEqual(summary["run1"]["kernel_stage_breakdown_s"]["new_entry_s"], 420.0, places=2)
             self.assertAlmostEqual(summary["median_kernel_stage_breakdown_s"]["sell_s"], 300.5, places=2)
+            self.assertAlmostEqual(summary["run1"]["kernel_stage_breakdown_s"]["additional_buy_sort_s"], 60.0, places=2)
+            self.assertAlmostEqual(summary["median_kernel_stage_breakdown_s"]["additional_buy_mask_gen_s"], 50.5, places=2)
 
     def test_parse_run_log_sums_multiple_kernel_breakdown_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -176,8 +178,8 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             log_path.write_text(
                 "\n".join(
                     [
-                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=10.00 sell_s=1.00 new_entry_s=2.00 additional_buy_s=7.00",
-                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=20.00 sell_s=3.50 new_entry_s=4.50 additional_buy_s=12.00",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=10.00 sell_s=1.00 new_entry_s=2.00 additional_buy_s=7.00 additional_buy_sort_s=5.50",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=20.00 sell_s=3.50 new_entry_s=4.50 additional_buy_s=12.00 additional_buy_sort_s=9.25",
                         "Total GPU Kernel Execution Time: 30.10s",
                         "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:31.00",
                         "Exit status: 0",
@@ -193,6 +195,7 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["sell_s"], 4.5, places=2)
             self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["new_entry_s"], 6.5, places=2)
             self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["additional_buy_s"], 19.0, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["additional_buy_sort_s"], 14.75, places=2)
 
 
 if __name__ == "__main__":

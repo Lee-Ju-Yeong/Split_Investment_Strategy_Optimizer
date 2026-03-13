@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-13
 > Related issues: `#104`, `#98`, `#56`
-> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; H-004-a was also implemented/tested/measured, then rolled back after canonical regression confirmation; breakdown probe now shows that additional_buy dominates the kernel and should be the next target`
+> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; H-004-a was also implemented/tested/measured, then rolled back after canonical regression confirmation; breakdown probe now shows that additional_buy dominates the kernel; H-005-a probe-only instrumentation and first measurement are complete; next target is state_update micro-probe inside additional_buy`
 
 ## 1. One-Page Summary
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
-- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, 현재 worktree는 다시 baseline 경로로 돌아왔습니다. breakdown probe까지 끝난 지금은 다음 최적화 대상을 `additional_buy`로 좁힌 상태입니다.
-- Next action: `H-005-a`를 probe-only slice로 고정하고, `_process_additional_buy_signals_gpu(...)` 내부를 더 잘게 계측해 실제 1차 병목이 `mask`, `cp.where`, `cost/priority`, `sort`, `rank loop`, `state update` 중 어디인지 먼저 확정합니다.
+- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, `H-005-a` probe-only instrumentation과 첫 1-run 측정까지 끝난 상태입니다.
+- Next action: `additional_buy_state_update_s`를 더 잘게 쪼개는 `H-005-b-0` micro-probe를 넣고, `final_compact / slot_lookup / position_write / last_trade_update` 중 어디가 1차 병목인지 확정합니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -326,8 +326,46 @@
 - 구현 후 확인:
   - `tests.test_backtest_strategy_gpu`
   - `tests.test_issue98_perf_measure`
+  - `tests.test_gpu_engine_prep_path`
   - `issue98_perf_measure --kernel-breakdown --runs 1` 재실행
   - `summary.json`에서 `additional_buy_*` sub-stage가 모두 집계되는지 확인
+
+### 19-5. Implementation status
+- 2026-03-13: `H-005-a` probe-only instrumentation 구현 완료.
+- 추가된 sub-stage key:
+  - `additional_buy_mask_gen_s`
+  - `additional_buy_candidate_extract_s`
+  - `additional_buy_cost_priority_s`
+  - `additional_buy_sort_s`
+  - `additional_buy_rank_apply_s`
+  - `additional_buy_state_update_s`
+- 엔진은 `kernel_stage_timing_enabled=True`일 때 위 키를 누적하고, `issue98_perf_measure`는 이를 `kernel_stage_breakdown_s` / `median_kernel_stage_breakdown_s`로 집계합니다.
+- 구현 검증:
+  - `tests.test_issue98_perf_measure`
+  - `tests.test_gpu_engine_prep_path`
+  - `tests.test_backtest_strategy_gpu`
+  - 결과: `35 tests OK`
+
+### 19-6. First probe result
+- 측정 artifact:
+  - `results/issue98_measure/pr104_h005a_probe_janfeb2024_cov020_20260313_200426/summary.json`
+- 1-run canonical 결과:
+  - `median_kernel_s = 1019.06`
+  - `median_wall_s = 1055.52`
+  - `oom_retry = false`
+  - `batch_count = 4`
+- `additional_buy` 내부 sub-stage:
+  - `additional_buy_s = 980.78s`
+  - `additional_buy_state_update_s = 969.18s`
+  - `additional_buy_rank_apply_s = 6.80s`
+  - `additional_buy_mask_gen_s = 2.67s`
+  - `additional_buy_cost_priority_s = 1.07s`
+  - `additional_buy_sort_s = 0.17s`
+  - `additional_buy_candidate_extract_s = 0.08s`
+- 해석:
+  - `additional_buy` 안의 1차 병목은 `sort`, `cp.where`, `cost 계산`이 아니라 `state_update`입니다.
+  - 즉, “무엇을 살지 결정하는 연산”보다 “결정된 추가매수를 큰 상태 배열에 반영하는 연산”이 거의 전부의 시간을 차지합니다.
+  - 다음 실제 최적화는 `state_update`를 다시 더 잘게 쪼개는 쪽이 가장 안전합니다.
 
 ## 20. Multi-Agent Direction Review (Codex blind-first + Gemini post-check)
 - 2026-03-13: `multi-agent-with-codex-gemini`로 `H-005-a` 방향성을 구현 전에 다시 검토했습니다.

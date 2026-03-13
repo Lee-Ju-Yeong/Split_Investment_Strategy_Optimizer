@@ -15,6 +15,17 @@ from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
 from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
 from .utils import _sort_candidates_by_atr_then_ticker as _sort_candidates_by_atr_then_ticker_gpu
 
+
+def _record_gpu_probe_duration(
+    stage_totals: dict[str, float] | None,
+    stage_name: str,
+    start_ts,
+    enabled: bool,
+) -> None:
+    if not enabled or stage_totals is None or start_ts is None:
+        return
+    stage_totals[stage_name] = stage_totals.get(stage_name, 0.0) + max(time.time() - start_ts, 0.0)
+
 def create_gpu_data_tensors(all_data_gpu: cudf.DataFrame, all_tickers: list, trading_dates_pd: pd.Index) -> dict:
     """
     [수정] 인덱스 매핑을 사용하여 Long-format cuDF를 Wide-format CuPy 텐서로 직접 변환합니다.
@@ -342,6 +353,8 @@ def _process_additional_buy_signals_gpu(
     strict_cash_rounding: bool = False,
     current_date: pd.Timestamp = None,
     signal_date: pd.Timestamp = None,
+    kernel_stage_totals: dict[str, float] | None = None,
+    kernel_stage_timing_enabled: bool = False,
 ):
     """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
@@ -373,6 +386,7 @@ def _process_additional_buy_signals_gpu(
                 "stock_idx": int(all_tickers.index(trace_ticker)) if trace_ticker in all_tickers else -1,
             }
 
+    mask_gen_start = time.time() if kernel_stage_timing_enabled else None
     open_day_indices = positions_state[..., 2]
     # last split은 split index가 아니라 최신 open_day_idx 기준으로 선택한다.
     # 부분청산 hole-fill 이후에도 "가장 최근 매수"를 trigger 기준으로 유지하기 위함.
@@ -432,15 +446,29 @@ def _process_additional_buy_signals_gpu(
                 f"capital={float(portfolio_state[trace_sim, 0].item()):.2f} "
                 f"invest={float(portfolio_state[trace_sim, 1].item()):.2f}"
             )
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_mask_gen_s",
+        mask_gen_start,
+        kernel_stage_timing_enabled,
+    )
     if not cp.any(initial_buy_mask):
         return portfolio_state, positions_state, last_trade_day_idx_state
 
     buy_commission_rate_f32 = cp.float32(buy_commission_rate)
 
     # 2. 모든 후보에 대한 비용 및 우선순위 계산 (벡터화)
+    candidate_extract_start = time.time() if kernel_stage_timing_enabled else None
     sim_indices, stock_indices = cp.where(initial_buy_mask)
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_candidate_extract_s",
+        candidate_extract_start,
+        kernel_stage_timing_enabled,
+    )
     
     # 비용 계산
+    cost_priority_start = time.time() if kernel_stage_timing_enabled else None
     candidate_investments = portfolio_state[sim_indices, 1]
     candidate_opens = current_opens[stock_indices]
     exec_prices = adjust_price_up_gpu(candidate_opens)
@@ -468,6 +496,12 @@ def _process_additional_buy_signals_gpu(
     price_epsilon = 1e-9
     scores_highest_drop = (candidate_last_buy_prices - candidate_signal_closes) / (candidate_last_buy_prices + price_epsilon)
     priority_scores = cp.where(add_buy_priorities == 0, scores_lowest_order, -scores_highest_drop)
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_cost_priority_s",
+        cost_priority_start,
+        kernel_stage_timing_enabled,
+    )
 
     if trace_cfg is not None and trace_cfg["stock_idx"] >= 0:
         trace_sim = trace_cfg["sim_idx"]
@@ -490,6 +524,7 @@ def _process_additional_buy_signals_gpu(
     # 3. 시뮬레이션 ID와 우선순위로 후보 정렬
     # lexsort는 마지막 행부터 정렬하므로, 우선순위가 낮은 키(stock_indices)를 먼저, 높은 키(sim_indices)를 나중에 넣습니다.
     # (sim_idx 오름차순 -> priority_score 오름차순 -> stock_idx 오름차순)
+    sort_start = time.time() if kernel_stage_timing_enabled else None
     sort_keys = cp.vstack((stock_indices, priority_scores, sim_indices))
     sorted_indices = cp.lexsort(sort_keys)
     
@@ -499,8 +534,15 @@ def _process_additional_buy_signals_gpu(
     sorted_quantities = quantities[sorted_indices]
     sorted_exec_prices = exec_prices[sorted_indices]
     sorted_priority_scores = priority_scores[sorted_indices]
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_sort_s",
+        sort_start,
+        kernel_stage_timing_enabled,
+    )
 
     # 4. CPU parity semantics: 순위 순차 처리 + 비싸면 skip, 다음 후보 계속 시도
+    rank_apply_start = time.time() if kernel_stage_timing_enabled else None
     _, sim_start_indices = cp.unique(sorted_sims, return_index=True)
     candidate_offsets = cp.arange(sorted_sims.size, dtype=cp.int32)
     run_owner = cp.searchsorted(sim_start_indices, candidate_offsets, side="right") - 1
@@ -527,6 +569,12 @@ def _process_additional_buy_signals_gpu(
         accepted_costs = sorted_costs[accepted_indices]
         final_buy_mask[accepted_indices] = True
         remaining_capital[accepted_sims] -= accepted_costs
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_rank_apply_s",
+        rank_apply_start,
+        kernel_stage_timing_enabled,
+    )
 
     if trace_cfg is not None and trace_cfg["stock_idx"] >= 0:
         trace_sim = trace_cfg["sim_idx"]
@@ -556,6 +604,7 @@ def _process_additional_buy_signals_gpu(
         return portfolio_state, positions_state, last_trade_day_idx_state
 
     # 5. 최종 매수 목록을 기반으로 상태 병렬 업데이트
+    state_update_start = time.time() if kernel_stage_timing_enabled else None
     # 매수가 실행될 후보들의 정보
     final_sims = sorted_sims[final_buy_mask]
     final_stocks = sorted_stocks[final_buy_mask]
@@ -585,6 +634,12 @@ def _process_additional_buy_signals_gpu(
     # 중복된 (sim, stock)이 있을 수 있으므로 unique 처리 후 업데이트
     unique_final_trades, _ = cp.unique(cp.vstack([final_sims, final_stocks]), axis=1, return_index=True)
     last_trade_day_idx_state[unique_final_trades[0], unique_final_trades[1]] = current_day_idx
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_state_update_s",
+        state_update_start,
+        kernel_stage_timing_enabled,
+    )
 
     # 디버깅 로그
     if debug_mode and cp.any(cp.isin(final_sims, cp.array([0]))):
