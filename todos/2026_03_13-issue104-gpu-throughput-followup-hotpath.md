@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-13
 > Related issues: `#104`, `#98`, `#56`
-> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; next recommended slice is H-004`
+> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; H-004-a was also implemented/tested/measured, then rolled back after canonical regression confirmation; breakdown probe now shows that additional_buy dominates the kernel and should be the next target`
 
 ## 1. One-Page Summary
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
-- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`과 `H-003` 모두 구현, 테스트, canonical 측정까지 마친 뒤 rollback했습니다. 현재 worktree는 다시 baseline 경로로 돌아왔습니다.
-- Next action: `H-004`(`PO`)를 다음 slice로 올려서 CPU loader / cache / engine reuse 계열을 좁게 측정합니다.
+- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, 현재 worktree는 다시 baseline 경로로 돌아왔습니다. breakdown probe까지 끝난 지금은 다음 최적화 대상을 `additional_buy`로 좁힌 상태입니다.
+- Next action: `additional_buy` 경로의 첫 safe slice(`H-005-a`) 계약을 고정하고, 전체 의미론을 건드리지 않는 범위에서 후보 생성/정렬/순차 rank 처리 중 가장 무거운 부분을 다시 자릅니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -63,8 +63,10 @@
 - [x] live-path slice 구현 + engine-level regression test 추가
 - [x] `H-003` canonical throughput 재측정
 - [x] `H-003` rollback
-- [ ] `H-004` slice contract 고정
-- [ ] `H-004` 구현 + 측정
+- [x] `H-004` slice contract 고정
+- [x] `H-004` 구현
+- [x] `H-004` canonical 측정
+- [x] `H-004` rollback
 
 ## 7. Follow-up Backlog Reclassification
 ### 7-1. 이번 문서에서 다시 고정한 규칙
@@ -165,6 +167,17 @@
   - `oom_retry`: 둘 다 `false/false`, `batch_count`: 둘 다 `4/4`
 - 2026-03-13: 해석 정리. `H-003`은 문자열 materialization을 줄이려던 의도는 맞았지만, canonical lane에서는 candidate rank tensor 준비 + cuDF payload/sort 경로 비용이 더 커서 총 throughput이 악화된 것으로 판단.
 - 2026-03-13: `H-003` 코드 rollback 완료. 이번 tranche의 다음 우선순위는 parity 리스크가 낮은 `H-004`(`PO`)로 재설정.
+- 2026-03-13: `H-004-a` 구현. `find_optimal_parameters(...)`에서 이미 로드한 `all_data_gpu`의 multi-index를 사용해 `trading_dates_pd`, `all_tickers`를 직접 구성하도록 변경. 같은 run 안에서 `create_engine(...) + pd.read_sql(...)`로 거래일 목록을 다시 읽는 CPU-side 중복 준비를 제거.
+- 2026-03-13: `H-004-a` 회귀 검증 실행. `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_parameter_simulation_orchestration tests.test_gpu_parameter_batch_fallback -v` -> `19 tests OK`.
+- 2026-03-13: canonical `Jan-Feb 2024` 2-run 재측정(`pr104_h004a_janfeb2024_cov020`) 결과, current-head baseline(`pr98_head_final_janfeb2024_cov020_20260312_223231`) 대비 성능 악화 확인.
+  - `median_kernel_s`: `1011.80s -> 1091.59s` (`-7.89%`)
+  - `median_wall_s`: `1049.52s -> 1121.56s` (`-6.86%`)
+  - `oom_retry`: 둘 다 `false/false`, `batch_count`: 둘 다 `4/4`
+- 2026-03-13: 해석 정리. `H-004-a`는 “DB 재조회 제거” 아이디어 자체는 맞았지만, canonical lane에서는 제거한 SQL 비용보다 `all_data_gpu.index`에서 날짜/티커 축을 다시 뽑아 `to_pandas()/sorted(...)`로 CPU 객체를 재구성하는 비용이 더 컸을 가능성이 높다고 판단.
+- 2026-03-13: `H-004-a` 코드 rollback 완료. 이번 tranche는 세 slice 연속 canonical no-go가 나온 상태라, 다음 구현 전엔 prep/wall breakdown 기준으로 병목을 다시 좁혀서 재우선순위화하기로 함.
+- 2026-03-13: breakdown 수집 경로 추가. `issue98_perf_measure`가 기존 로그에서 `all_data_load / tier_load / pit_mask_load / prepared_bundle / wide_tensor_build / analysis` 시간을 파싱해 `summary.json`의 `stage_breakdown_s`, `median_stage_breakdown_s`에 같이 남기도록 확장.
+- 2026-03-13: `prepare_market_data_bundle(...)` 성공/실패 시간도 로그에 직접 남기도록 계측 추가. 다음부터는 “prep이 느린지, kernel이 느린지, analysis가 느린지”를 summary만 보고도 빠르게 구분할 수 있음.
+- 2026-03-13: kernel breakdown probe 추가. `MAGICSPLIT_KERNEL_BREAKDOWN=1` 또는 `issue98_perf_measure --kernel-breakdown`일 때 `sell / candidate_select / candidate_payload / strict_rerank / new_entry / additional_buy / valuation` 누적 시간을 `[GPU_KERNEL_BREAKDOWN]` 한 줄로 남기고, 이를 `summary.json`의 `kernel_stage_breakdown_s`, `median_kernel_stage_breakdown_s`로 함께 집계하도록 확장.
 
 ## 11. H-001 Interim Decision
 - 상태: `No-Go for promotion`
@@ -218,3 +231,100 @@
   - CPU loader / cache / engine reuse는 전략 의미론을 건드리지 않으면서 전체 반복 시간을 줄일 여지가 있습니다.
 - 초심자용 한 줄:
   - 이제는 “매수/정렬 로직을 더 건드리는 것”보다 “같은 일을 덜 준비하고 덜 다시 읽는 것”부터 보는 게 더 합리적입니다.
+
+## 16. H-004 First Contract (`H-004-a`)
+### 16-1. What
+- 목표: `find_optimal_parameters(...)` 안의 CPU-side 준비 단계에서, 이미 메모리에 올린 정보로 대체 가능한 중복 작업을 줄입니다.
+- 첫 구현 범위는 아주 좁게 잡습니다.
+  - `all_data_gpu`를 이미 로드한 뒤 다시 `create_engine(...) + pd.read_sql(...)`로 거래일 목록을 읽는 경로를 검토합니다.
+  - 같은 run 안에서 이미 확보한 `all_data_gpu`의 인덱스/내용으로 `trading_dates_pd`, `all_tickers`를 안정적으로 만들 수 있으면 그 경로를 우선합니다.
+- 쉽게 말하면:
+  - 이미 들고 있는 데이터에서 알 수 있는 정보를, DB에 한 번 더 물어보지 않도록 줄여보는 시도입니다.
+
+### 16-2. What must stay the same
+- `trading_dates_pd`의 정렬 순서와 값은 기존과 같아야 합니다.
+- `all_tickers`는 기존처럼 정렬된 목록이어야 합니다.
+- 기간 필터링 결과(`start_date ~ end_date`)가 바뀌면 안 됩니다.
+- GPU kernel 입력(`all_data_gpu`, `tier_tensor`, `pit_universe_mask_tensor`, `prepared_market_data`) 의미론은 건드리지 않습니다.
+- cross-run 전역 캐시나 프로세스 간 공유 상태는 이번 slice 범위에 넣지 않습니다.
+
+### 16-3. Why this is a better next slice
+- `H-001`, `H-003`은 둘 다 `PC`였고, canonical 기준으로는 둘 다 회귀였습니다.
+- `H-004-a`는 `PO`입니다.
+- 즉, 전략 결과를 바꾸지 않고도 wall time 쪽에서 개선 여지를 볼 수 있습니다.
+- 이번 slice는 “GPU kernel을 더 빠르게”보다 “커널에 들어가기 전에 덜 준비하기”에 가깝습니다.
+
+### 16-4. Verification plan
+- 최소 단위 검증:
+  - 기존 경로와 새 경로가 같은 `trading_dates_pd`, 같은 `all_tickers`를 만드는지 테스트
+  - 기존 경로와 새 경로가 같은 `prepared_market_data` shape contract를 유지하는지 확인
+- 구현 후 확인:
+  - `tests.test_gpu_engine_prep_path`
+  - 필요 시 `tests.test_gpu_candidate_metrics_asof`
+  - canonical 2-run 재측정
+- 기대값:
+  - kernel time은 같거나 거의 같아도 괜찮습니다.
+  - wall time이 줄어드는지가 이번 slice의 핵심입니다.
+
+## 17. H-004 Final Decision
+- 상태: `Rolled back after measurement`
+- 무엇을 바꿨나:
+  - `find_optimal_parameters(...)`가 이미 로드한 `all_data_gpu`에서 거래일 축과 티커 축을 직접 계산하도록 바꿨습니다.
+  - 같은 run 안에서 별도 SQL engine을 만들고 `DailyStockPrice`에서 거래일 목록을 다시 읽는 경로를 제거했습니다.
+- 측정 결과:
+  - `kernel`: `-7.89%`
+  - `wall`: `-6.86%`
+- 왜 멈췄나:
+  - 없앤 일은 `SELECT DISTINCT date ...` 한 번이었고, 전체 run에서 차지하는 비중이 생각보다 작았을 가능성이 큽니다.
+  - 대신 새 경로는 `all_data_gpu.index`에서 `date/ticker` unique를 뽑고, `to_pandas()`와 `sorted(...)`로 CPU 객체를 다시 만드는 비용이 추가됐습니다.
+  - 쉽게 말하면, “DB에 다시 안 물어보는” 대신 “이미 큰 장부에서 다시 목록을 정리하는” 비용이 생겨서 오히려 손해가 난 그림에 가깝습니다.
+- 최종 판단:
+  - 기본 경로에서는 rollback이 맞습니다.
+  - `H-001`처럼 memory-lean 보조 가치가 있는 것도 아니고, `H-003`처럼 live-path 정렬 비용을 줄이는 연구 가설로 남길 정도의 신호도 부족했습니다.
+
+## 18. Breakdown-Driven Reprioritization
+- 현재까지 `H-001`, `H-003`, `H-004-a` 모두 canonical 기준 `No-Go`였습니다.
+- 그래서 다음 단계는 “바로 다음 구현”보다 “어디가 진짜 wall 병목인지 다시 좁히기”가 더 중요했습니다.
+- 2026-03-13 probe 결과:
+  - `wall = 1128.75s`
+  - `kernel = 1081.12s`
+  - `pre_kernel_stage_s = 32.59s`
+  - raw log 4배치 합산 기준 `additional_buy_s = 1048.95s`
+  - 같은 기준 `candidate_payload_s = 7.23s`, `new_entry_s = 18.53s`, `sell_s = 5.54s`
+- 해석:
+  - kernel이 여전히 전체 시간의 대부분입니다.
+  - 그 kernel 안에서도 거의 전부가 `additional_buy`에 몰려 있습니다.
+  - 반대로 `candidate_payload`, `new_entry`, `sell`은 지금 canonical 기준으로는 1차 병목이 아닙니다.
+- 측정 메모:
+  - 첫 probe 시점의 `summary.json`은 `[GPU_KERNEL_BREAKDOWN]` 첫 줄만 집계했습니다.
+  - raw `run1.log`를 다시 합산해 4배치 기준 누적치를 확인했고, 이후 `issue98_perf_measure` 파서를 여러 breakdown 줄 합산 방식으로 보정했습니다.
+- 초심자용 한 줄:
+  - 이제는 “뭔가 줄이면 빨라질 것 같은 곳”이 아니라, 실제로 시간이 거의 다 쓰이는 `additional_buy`만 집중해서 보는 게 맞습니다.
+
+## 19. Next Slice Contract (`H-005-a`)
+### 19-1. What
+- 목표: `_process_additional_buy_signals_gpu(...)` 안에서 전체 시간 대부분을 쓰는 추가매수 후보 생성/정렬/순차 처리 경로를 다시 잘게 쪼갭니다.
+- 첫 구현 범위는 아주 좁게 잡습니다.
+  - 전체 의미론은 그대로 둡니다.
+  - 우선 `additional_buy` 경로 안에서 실제로 시간이 어디에 쓰이는지 더 세분화합니다.
+  - 그 다음 slice는 `cp.where(...)`, `cp.lexsort(...)`, `for rank in range(...)` 중 한 군데만 건드립니다.
+
+### 19-2. What must stay the same
+- 추가매수 우선순위(`lowest_order` / `highest_drop`) 결과가 바뀌면 안 됩니다.
+- `cash`, `temp_capital`, `available_slots` 차감 타이밍이 바뀌면 안 됩니다.
+- 동일 simulation 안에서 rank별 추가매수 순서가 바뀌면 안 됩니다.
+- CPU/GPU strict parity 계약은 유지되어야 합니다.
+
+### 19-3. Why this is now the best next slice
+- `H-001`, `H-003`, `H-004-a`는 모두 실제 큰 병목이 아닌 곳을 건드렸거나, canonical 기준으로는 비용이 더 커졌습니다.
+- 이번 probe에서는 `additional_buy`가 kernel 시간 대부분을 차지하는 것이 확인됐습니다.
+- 그래서 다음엔 “혹시 느릴지도 모르는 곳”이 아니라, “이미 느리다고 증명된 곳”만 가는 게 맞습니다.
+
+### 19-4. Verification plan
+- 먼저 `additional_buy` 내부 sub-stage probe를 추가할지 검토합니다.
+- 첫 구현은 slice를 작게 나눠 parity risk를 낮춥니다.
+- 구현 후 확인:
+  - `tests.test_backtest_strategy_gpu`
+  - `tests.test_gpu_new_entry_signals`와 별개로 추가매수 회귀셋 보강 필요 여부 검토
+  - canonical 2-run 재측정
+  - 필요 시 strict parity canary 재확인

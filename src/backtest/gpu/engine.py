@@ -28,6 +28,32 @@ from .logic import (
 from .utils import _resolve_signal_date_for_gpu
 
 
+def _empty_kernel_stage_totals() -> dict[str, float]:
+    return {
+        "monthly_rebalance_s": 0.0,
+        "candidate_select_s": 0.0,
+        "candidate_payload_s": 0.0,
+        "strict_rerank_s": 0.0,
+        "sell_s": 0.0,
+        "new_entry_s": 0.0,
+        "additional_buy_s": 0.0,
+        "valuation_s": 0.0,
+    }
+
+
+def _record_stage_duration(stage_totals: dict[str, float], stage_name: str, start_ts, enabled: bool) -> None:
+    if not enabled or start_ts is None:
+        return
+    stage_totals[stage_name] += max(time.time() - start_ts, 0.0)
+
+
+def _print_kernel_stage_breakdown(stage_totals: dict[str, float], *, total_loop_s: float) -> None:
+    parts = [f"total_loop_s={total_loop_s:.2f}"]
+    for stage_name, duration_s in stage_totals.items():
+        parts.append(f"{stage_name}={duration_s:.2f}")
+    print("[GPU_KERNEL_BREAKDOWN] " + " ".join(parts))
+
+
 def _forward_fill_asof_tensor(price_tensor: cp.ndarray) -> cp.ndarray:
     """
     Forward-fill along day axis for as-of semantics.
@@ -287,6 +313,8 @@ def run_magic_split_strategy_on_gpu(
     progress_log_interval_days = int(execution_params.get("progress_log_interval_days", 100))
     progress_log_enabled = bool(execution_params.get("progress_log_enabled", True))
     run_start_ts = time.time()
+    kernel_stage_timing_enabled = bool(execution_params.get("kernel_stage_timing_enabled", False))
+    kernel_stage_totals = _empty_kernel_stage_totals()
     processed_days = 0
 
     if prepared_market_data is None:
@@ -323,9 +351,15 @@ def run_magic_split_strategy_on_gpu(
         # 평가 기준가는 월 블록 시작일의 전일 종가 또는 초기값
         eval_prices = previous_prices_gpu if start_idx > 0 else zero_signal_prices_gpu
         current_rebalance_date = trading_dates_pd_cpu[start_idx]
-        
+        monthly_rebalance_start = time.time() if kernel_stage_timing_enabled else None
         portfolio_state = _calculate_monthly_investment_gpu(
             portfolio_state, positions_state, param_combinations, eval_prices, current_rebalance_date, debug_mode
+        )
+        _record_stage_duration(
+            kernel_stage_totals,
+            "monthly_rebalance_s",
+            monthly_rebalance_start,
+            kernel_stage_timing_enabled,
         )
         #  디버깅 및 검증을 위한 임시 '일일 루프' (향후 단일 커널로 대체될 부분)
         for day_idx in range(start_idx, end_idx):
@@ -351,6 +385,7 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers_gpu = zero_signal_tiers_gpu
 
             # --- [Issue #67] Candidate Selection Logic ---
+            candidate_select_start = time.time() if kernel_stage_timing_enabled else None
             final_candidate_indices = cp.array([], dtype=cp.int32)
             if signal_day_idx >= 0 and tier_tensor is not None:
                 signal_tiers = tier_tensor[signal_day_idx]
@@ -367,9 +402,16 @@ def run_magic_split_strategy_on_gpu(
                     final_candidate_indices = cp.where(tier2_mask)[0].astype(cp.int32, copy=False)
             if final_candidate_indices.size > 1:
                 final_candidate_indices = cp.unique(final_candidate_indices)
+            _record_stage_duration(
+                kernel_stage_totals,
+                "candidate_select_s",
+                candidate_select_start,
+                kernel_stage_timing_enabled,
+            )
 
             # (D) Valid Data Check + deterministic ranking metrics
             # (CompositeScore -> MarketCap -> Ticker)
+            candidate_payload_start = time.time() if kernel_stage_timing_enabled else None
             ranked_records_for_day = []
             if final_candidate_indices.size > 0 and signal_date is not None:
                 valid_candidate_metrics_df = _collect_candidate_rank_metrics(
@@ -395,9 +437,16 @@ def run_magic_split_strategy_on_gpu(
             else:
                 candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                 candidate_atrs_for_day = cp.array([], dtype=cp.float32)
+            _record_stage_duration(
+                kernel_stage_totals,
+                "candidate_payload_s",
+                candidate_payload_start,
+                kernel_stage_timing_enabled,
+            )
 
             # 2-2. 월별 투자금 재계산
             # --- 신호 처리 함수 호출 (기존과 동일) ---
+            sell_start = time.time() if kernel_stage_timing_enabled else None
             portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_today_mask = _process_sell_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
                 param_combinations,
@@ -412,10 +461,17 @@ def run_magic_split_strategy_on_gpu(
                 trading_dates_pd_cpu=trading_dates_pd_cpu,
                 sell_mask_workspace=zero_sell_mask_gpu,
             )
+            _record_stage_duration(
+                kernel_stage_totals,
+                "sell_s",
+                sell_start,
+                kernel_stage_timing_enabled,
+            )
             # Strict single-sim parity path:
             # CPU ranks only active candidates (post-sell holdings/cooldown filtered).
             # GPU fast path ranks all tier candidates first, then skips during execution.
             # Re-rank on active subset to match CPU semantics when parity_mode='strict'.
+            strict_rerank_start = time.time() if kernel_stage_timing_enabled else None
             if strict_cash_rounding and num_combinations == 1 and candidate_tickers_for_day.size > 0:
                 held_mask_sim0 = cp.any(positions_state[0, :, :, 0] > 0, axis=1)
                 cooldown_row_sim0 = cooldown_state[0]
@@ -461,6 +517,12 @@ def run_magic_split_strategy_on_gpu(
                             valid_candidate_metrics_df=filtered_metrics_df,
                             return_ranked_records=debug_mode,
                         )
+            _record_stage_duration(
+                kernel_stage_totals,
+                "strict_rerank_s",
+                strict_rerank_start,
+                kernel_stage_timing_enabled,
+            )
             if debug_mode:
                 signal_str = signal_date.strftime('%Y-%m-%d') if signal_date is not None else "None"
                 preview = ", ".join([str(row[0]) for row in ranked_records_for_day[:10]])
@@ -474,6 +536,7 @@ def run_magic_split_strategy_on_gpu(
                     ranked_records=ranked_records_for_day,
                 ):
                     print(line)
+            new_entry_start = time.time() if kernel_stage_timing_enabled else None
             portfolio_state, positions_state, last_trade_day_idx_state = _process_new_entry_signals_gpu(
                 portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, day_idx,
                 cooldown_period_days, param_combinations, current_opens_gpu, signal_closes_gpu,
@@ -482,6 +545,13 @@ def run_magic_split_strategy_on_gpu(
                 all_tickers=all_tickers,
                 strict_cash_rounding=strict_cash_rounding,
             )
+            _record_stage_duration(
+                kernel_stage_totals,
+                "new_entry_s",
+                new_entry_start,
+                kernel_stage_timing_enabled,
+            )
+            additional_buy_start = time.time() if kernel_stage_timing_enabled else None
             portfolio_state, positions_state, last_trade_day_idx_state = _process_additional_buy_signals_gpu(
                 portfolio_state, positions_state, last_trade_day_idx_state, sell_occurred_today_mask, day_idx,
                 param_combinations,
@@ -494,12 +564,25 @@ def run_magic_split_strategy_on_gpu(
                 current_date=current_date,
                 signal_date=signal_date,
             )
+            _record_stage_duration(
+                kernel_stage_totals,
+                "additional_buy_s",
+                additional_buy_start,
+                kernel_stage_timing_enabled,
+            )
         
             # --- 일일 포트폴리오 가치 업데이트 (기존과 동일) ---
+            valuation_start = time.time() if kernel_stage_timing_enabled else None
             stock_quantities = cp.sum(positions_state[..., 0], axis=2)
             stock_market_values = stock_quantities * current_prices_gpu
             total_stock_value = cp.sum(stock_market_values, axis=1)
             daily_portfolio_values[:, day_idx] = portfolio_state[:, 0] + total_stock_value
+            _record_stage_duration(
+                kernel_stage_totals,
+                "valuation_s",
+                valuation_start,
+                kernel_stage_timing_enabled,
+            )
             if debug_mode:
                 capital_snapshot = portfolio_state[0, 0].get()
                 stock_val_snapshot = total_stock_value[0].get()
@@ -562,6 +645,11 @@ def run_magic_split_strategy_on_gpu(
                 )
             # 월 블록의 마지막 날 종가를 다음 리밸런싱을 위한 평가 기준으로 저장
         previous_prices_gpu = close_prices_tensor[end_idx - 1].copy()
+    if kernel_stage_timing_enabled:
+        _print_kernel_stage_breakdown(
+            kernel_stage_totals,
+            total_loop_s=max(time.time() - run_start_ts, 0.0),
+        )
     # [추가] 루프 종료 후, 에러 로그 분석 및 출력
     if not debug_mode and log_counter[0] > 0:
         print("\n" + "="*60)
