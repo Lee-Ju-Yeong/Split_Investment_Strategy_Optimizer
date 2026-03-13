@@ -35,7 +35,7 @@
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
-| `P0` | `ShortSellingDaily` publication lag 정리 | In Progress | 공매도 데이터 same-date 반영은 PIT 리스크 후보이며, 비인증 KRX 경로는 현재 호스트에서 막혀 있다 | 로그인 세션 주입 smoke를 증적 경로로 고정하고, 임시 `lag=3 + same-date 금지` 정책을 코드에 반영 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
+| `P0` | `ShortSellingDaily` publication lag 정리 | In Progress | 공매도 데이터 same-date 반영은 PIT 리스크 후보이며, 비인증 KRX 경로는 현재 호스트에서 막혀 있다 | 임시 `lag=3 + same-date 금지` 정책은 코드 반영 완료. 이제 shadow diff / backfill 범위를 정리하고 영향 구간을 증적으로 남긴다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `P1` | `#104` GPU throughput follow-up hot path | Done | `H-001`, `H-003`, `H-004-a`는 canonical 회귀로 정리했고, `H-005-b`가 `cp.unique` 기반 additional-buy last-trade dedup 제거 후 canonical 2-run `+94.96% / +91.68%`와 strict parity를 함께 통과했다 | 새 hot-path tranche가 생기기 전까지 재개하지 않는다. 필요 시 `--kernel-breakdown` probe를 재사용한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
