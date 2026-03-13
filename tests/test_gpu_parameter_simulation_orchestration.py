@@ -191,6 +191,50 @@ class TestGpuParameterSimulationOrchestration(unittest.TestCase):
         self.assertIs(run_call.kwargs["prepared_market_data"], prepared_market_data)
         self.assertEqual(best_params["additional_buy_priority"], "highest_drop")
 
+    @patch("src.optimization.gpu.parameter_simulation.analyze_and_save_results")
+    @patch("src.optimization.gpu.parameter_simulation.run_gpu_optimization")
+    @patch("src.optimization.gpu.parameter_simulation.prepare_market_data_bundle")
+    @patch("src.optimization.gpu.parameter_simulation.get_optimal_batch_size", return_value=1)
+    @patch("src.optimization.gpu.parameter_simulation.preload_tier_data_to_tensor")
+    @patch("src.optimization.gpu.parameter_simulation.preload_pit_universe_mask_to_tensor")
+    @patch("src.optimization.gpu.parameter_simulation.preload_all_data_to_gpu")
+    @patch("src.optimization.gpu.parameter_simulation._ensure_core_deps")
+    @patch("src.optimization.gpu.parameter_simulation._ensure_gpu_deps")
+    @patch("src.optimization.gpu.parameter_simulation._get_context")
+    def test_find_optimal_parameters_enables_kernel_breakdown_via_env(
+        self,
+        mock_get_context,
+        mock_gpu_deps,
+        mock_core_deps,
+        mock_preload_all,
+        mock_preload_pit_mask,
+        mock_preload_tier,
+        mock_batch_size,
+        mock_prepare_market_data,
+        mock_run_gpu,
+        mock_analyze,
+    ):
+        mock_get_context.return_value = self._build_context("tier", False)
+        mock_gpu_deps.return_value = self._fake_gpu_deps()
+        mock_core_deps.return_value = self._fake_core_deps()
+        mock_preload_all.return_value = self._fake_all_data_gpu()
+        mock_preload_tier.return_value = np.zeros((2, 2), dtype=np.int8)
+        mock_preload_pit_mask.return_value = np.zeros((2, 2), dtype=np.int8)
+        mock_prepare_market_data.return_value = {"prepared": True}
+        mock_run_gpu.side_effect = lambda param_batch, *_args, **_kwargs: np.zeros(
+            (param_batch.shape[0], 2), dtype=np.float32
+        )
+        mock_analyze.return_value = (
+            {"additional_buy_priority": 1.0},
+            pd.DataFrame({"calmar_ratio": [1.0]}),
+        )
+
+        with patch.dict(os.environ, {"MAGICSPLIT_KERNEL_BREAKDOWN": "1"}, clear=False):
+            sim.find_optimal_parameters("2024-01-01", "2024-01-03", 10_000_000.0)
+
+        run_call = mock_run_gpu.call_args
+        self.assertTrue(run_call.args[6]["kernel_stage_timing_enabled"])
+
     def test_runtime_candidate_policy_rejects_weekly_mode(self):
         with self.assertRaisesRegex(ValueError, "Unsupported runtime candidate policy"):
             normalize_runtime_candidate_policy("weekly", False)

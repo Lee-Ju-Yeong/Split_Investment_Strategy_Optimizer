@@ -127,6 +127,7 @@ def build_input_snapshot(
     canonical_profile: str,
     run_count: int,
     gpu_sample_interval_sec: int,
+    kernel_breakdown: bool,
 ) -> dict:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     backtest = dict(config.get("backtest_settings", {}))
@@ -147,6 +148,7 @@ def build_input_snapshot(
         "min_tier12_coverage_ratio": strategy.get("min_tier12_coverage_ratio"),
         "measurement_run_count": int(run_count),
         "gpu_sample_interval_sec": int(gpu_sample_interval_sec),
+        "kernel_breakdown": bool(kernel_breakdown),
     }
 
 
@@ -205,6 +207,7 @@ def run_single_measurement(
     outdir: Path,
     config_path: Path,
     gpu_sample_interval_sec: int,
+    kernel_breakdown: bool,
 ) -> int:
     log_path = outdir / f"{run_tag}.log"
     csv_path = outdir / f"{run_tag}.gpu.csv"
@@ -212,6 +215,8 @@ def run_single_measurement(
     env = os.environ.copy()
     env["MAGICSPLIT_CONFIG_PATH"] = str(config_path)
     env["CONDA_NO_PLUGINS"] = "true"
+    if kernel_breakdown:
+        env["MAGICSPLIT_KERNEL_BREAKDOWN"] = "1"
     command = ["/usr/bin/time", "-v", sys.executable, "-m", "src.parameter_simulation_gpu"]
 
     try:
@@ -235,14 +240,54 @@ def parse_run_log(path: Path) -> dict:
     kernel_match = re.search(r"Total GPU Kernel Execution Time: ([0-9.]+)s", text)
     wall_match = re.search(r"Elapsed \(wall clock\) time .*: (.+)", text)
     exit_match = re.search(r"Exit status: ([0-9]+)", text)
+    breakdown_patterns = {
+        "all_data_load_s": r"✅ Data loaded to GPU\. Shape: .* Time: ([0-9.]+)s",
+        "tier_load_s": r"✅ Tier data loaded and tensorized\. Shape: .* Time: ([0-9.]+)s",
+        "pit_mask_load_s": r"✅ PIT mask loaded and tensorized\. Shape: .* Time: ([0-9.]+)s",
+        "prepared_bundle_s": r"✅ Reusable market-data bundle prepared\. Time: ([0-9.]+)s",
+        "wide_tensor_build_s": r"✅ GPU Tensors created successfully in ([0-9.]+)s\.",
+        "analysis_s": r"⏱️  Analysis took: ([0-9.]+) seconds\.",
+    }
+    stage_breakdown = {}
+    for key, pattern in breakdown_patterns.items():
+        match = re.search(pattern, text)
+        stage_breakdown[key] = float(match.group(1)) if match else None
+    kernel_stage_breakdown = {}
+    for kernel_breakdown_match in re.finditer(r"\[GPU_KERNEL_BREAKDOWN\]\s+(.+)", text):
+        for token in kernel_breakdown_match.group(1).split():
+            if "=" not in token:
+                continue
+            key, raw_value = token.split("=", 1)
+            try:
+                kernel_stage_breakdown[key] = kernel_stage_breakdown.get(key, 0.0) + float(raw_value)
+            except ValueError:
+                continue
+    pre_kernel_keys = (
+        "all_data_load_s",
+        "tier_load_s",
+        "pit_mask_load_s",
+        "prepared_bundle_s",
+        "wide_tensor_build_s",
+    )
+    pre_kernel_values = [stage_breakdown[key] for key in pre_kernel_keys if stage_breakdown[key] is not None]
+    pre_kernel_stage_s = sum(pre_kernel_values) if pre_kernel_values else None
+    wall_clock_s = _parse_wall_to_seconds(wall_match.group(1)) if wall_match else None
+    kernel_s = float(kernel_match.group(1)) if kernel_match else None
+    non_kernel_overhead_s = None
+    if wall_clock_s is not None and kernel_s is not None:
+        non_kernel_overhead_s = wall_clock_s - kernel_s
     return {
         "path": str(path),
-        "kernel_s": float(kernel_match.group(1)) if kernel_match else None,
+        "kernel_s": kernel_s,
         "wall_clock": wall_match.group(1).strip() if wall_match else None,
-        "wall_clock_s": _parse_wall_to_seconds(wall_match.group(1)) if wall_match else None,
+        "wall_clock_s": wall_clock_s,
         "batch_count": len(re.findall(r"--- Running Batch ", text)),
         "oom_retry": "[GPU_WARNING] OOM" in text,
         "exit_code": int(exit_match.group(1)) if exit_match else None,
+        "stage_breakdown_s": stage_breakdown,
+        "kernel_stage_breakdown_s": kernel_stage_breakdown,
+        "pre_kernel_stage_s": pre_kernel_stage_s,
+        "non_kernel_overhead_s": non_kernel_overhead_s,
     }
 
 
@@ -280,6 +325,8 @@ def build_summary(*, outdir: Path, canonical_profile: str, research_only: bool) 
     }
     kernel_values = []
     wall_values = []
+    stage_values = {}
+    kernel_stage_values = {}
 
     for run_tag in run_tags:
         run_summary = parse_run_log(outdir / f"{run_tag}.log")
@@ -289,9 +336,29 @@ def build_summary(*, outdir: Path, canonical_profile: str, research_only: bool) 
             kernel_values.append(run_summary["kernel_s"])
         if run_summary["wall_clock_s"] is not None:
             wall_values.append(run_summary["wall_clock_s"])
+        for key, value in run_summary.get("stage_breakdown_s", {}).items():
+            if value is None:
+                continue
+            stage_values.setdefault(key, []).append(value)
+        for key, value in run_summary.get("kernel_stage_breakdown_s", {}).items():
+            kernel_stage_values.setdefault(key, []).append(value)
+        if run_summary.get("pre_kernel_stage_s") is not None:
+            stage_values.setdefault("pre_kernel_stage_s", []).append(run_summary["pre_kernel_stage_s"])
+        if run_summary.get("non_kernel_overhead_s") is not None:
+            stage_values.setdefault("non_kernel_overhead_s", []).append(run_summary["non_kernel_overhead_s"])
 
     summary["median_kernel_s"] = statistics.median(kernel_values) if kernel_values else None
     summary["median_wall_s"] = statistics.median(wall_values) if wall_values else None
+    summary["median_stage_breakdown_s"] = {
+        key: statistics.median(values)
+        for key, values in sorted(stage_values.items())
+        if values
+    }
+    summary["median_kernel_stage_breakdown_s"] = {
+        key: statistics.median(values)
+        for key, values in sorted(kernel_stage_values.items())
+        if values
+    }
     return summary
 
 
@@ -325,6 +392,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_GPU_SAMPLE_INTERVAL_SEC,
         help="nvidia-smi sampling interval in seconds. Default=5.",
     )
+    parser.add_argument(
+        "--kernel-breakdown",
+        action="store_true",
+        help="Enable optional engine-level kernel stage timing for breakdown probes.",
+    )
     return parser
 
 
@@ -356,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         canonical_profile=args.canonical_profile,
         run_count=int(args.runs),
         gpu_sample_interval_sec=int(args.gpu_sample_interval_sec),
+        kernel_breakdown=bool(args.kernel_breakdown),
     )
     write_json(outdir / "input_snapshot.json", input_snapshot)
 
@@ -369,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
             outdir=outdir,
             config_path=config_path,
             gpu_sample_interval_sec=int(args.gpu_sample_interval_sec),
+            kernel_breakdown=bool(args.kernel_breakdown),
         )
         run_exit_codes.append(exit_code)
         print(f"[issue98_perf_measure] finished {run_tag} exit_code={exit_code}")

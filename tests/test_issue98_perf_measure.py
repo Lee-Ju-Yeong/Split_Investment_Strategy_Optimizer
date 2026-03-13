@@ -6,6 +6,7 @@ from src.issue98_perf_measure import (
     build_env_snapshot_lines,
     build_input_snapshot,
     build_summary,
+    parse_run_log,
 )
 
 
@@ -66,6 +67,7 @@ class TestIssue98PerfMeasure(unittest.TestCase):
                 canonical_profile="issue98_profile",
                 run_count=2,
                 gpu_sample_interval_sec=5,
+                kernel_breakdown=True,
             )
 
             self.assertEqual(snapshot["label"], "pr98_demo")
@@ -76,6 +78,7 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             self.assertEqual(snapshot["candidate_source_mode"], "tier")
             self.assertEqual(snapshot["measurement_run_count"], 2)
             self.assertEqual(snapshot["gpu_sample_interval_sec"], 5)
+            self.assertTrue(snapshot["kernel_breakdown"])
             self.assertIsNotNone(snapshot["config_sha256"])
 
     def test_build_summary_aggregates_logs_and_gpu_csv(self):
@@ -84,12 +87,19 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             (outdir / "run1.log").write_text(
                 "\n".join(
                     [
+                        "✅ Data loaded to GPU. Shape: (103367, 9). Time: 30.76s",
+                        "✅ Tier data loaded and tensorized. Shape: (41, 2532). Time: 1.61s",
+                        "✅ PIT mask loaded and tensorized. Shape: (41, 2532). Time: 0.35s",
+                        "✅ Reusable market-data bundle prepared. Time: 2.50s",
+                        "✅ GPU Tensors created successfully in 0.08s.",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1119.00 monthly_rebalance_s=0.50 candidate_select_s=10.00 candidate_payload_s=11.00 strict_rerank_s=0.00 sell_s=300.00 new_entry_s=420.00 additional_buy_s=250.00 additional_buy_mask_gen_s=50.00 additional_buy_candidate_extract_s=20.00 additional_buy_cost_priority_s=40.00 additional_buy_sort_s=60.00 additional_buy_rank_apply_s=70.00 additional_buy_state_update_s=10.00 additional_buy_state_final_compact_s=3.00 additional_buy_state_slot_lookup_s=2.00 additional_buy_state_position_write_s=4.00 additional_buy_state_last_trade_update_s=1.00 valuation_s=122.50",
                         "Total GPU Kernel Execution Time: 1114.65s",
                         "Elapsed (wall clock) time (h:mm:ss or m:ss): 19:24.88",
                         "--- Running Batch 1",
                         "--- Running Batch 2",
                         "--- Running Batch 3",
                         "--- Running Batch 4",
+                        "⏱️  Analysis took: 0.71 seconds.",
                         "Exit status: 0",
                     ]
                 )
@@ -99,12 +109,19 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             (outdir / "run2.log").write_text(
                 "\n".join(
                     [
+                        "✅ Data loaded to GPU. Shape: (103367, 9). Time: 17.64s",
+                        "✅ Tier data loaded and tensorized. Shape: (41, 2532). Time: 1.54s",
+                        "✅ PIT mask loaded and tensorized. Shape: (41, 2532). Time: 0.34s",
+                        "✅ Reusable market-data bundle prepared. Time: 2.20s",
+                        "✅ GPU Tensors created successfully in 0.07s.",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=1121.00 monthly_rebalance_s=0.60 candidate_select_s=9.80 candidate_payload_s=10.80 strict_rerank_s=0.00 sell_s=301.00 new_entry_s=421.00 additional_buy_s=251.00 additional_buy_mask_gen_s=51.00 additional_buy_candidate_extract_s=21.00 additional_buy_cost_priority_s=41.00 additional_buy_sort_s=61.00 additional_buy_rank_apply_s=71.00 additional_buy_state_update_s=11.00 additional_buy_state_final_compact_s=3.50 additional_buy_state_slot_lookup_s=2.50 additional_buy_state_position_write_s=4.25 additional_buy_state_last_trade_update_s=1.25 valuation_s=123.00",
                         "Total GPU Kernel Execution Time: 1117.06s",
                         "Elapsed (wall clock) time (h:mm:ss or m:ss): 19:17.62",
                         "--- Running Batch 1",
                         "--- Running Batch 2",
                         "--- Running Batch 3",
                         "--- Running Batch 4",
+                        "⏱️  Analysis took: 0.90 seconds.",
                         "Exit status: 0",
                     ]
                 )
@@ -145,6 +162,43 @@ class TestIssue98PerfMeasure(unittest.TestCase):
             self.assertEqual(summary["run1"]["batch_count"], 4)
             self.assertEqual(summary["run1"]["gpu_mem_used_max_mib"], 2210)
             self.assertEqual(summary["run2"]["gpu_util_median"], 3.0)
+            self.assertAlmostEqual(summary["run1"]["stage_breakdown_s"]["all_data_load_s"], 30.76, places=2)
+            self.assertAlmostEqual(summary["run2"]["stage_breakdown_s"]["analysis_s"], 0.90, places=2)
+            self.assertAlmostEqual(summary["run1"]["pre_kernel_stage_s"], 35.30, places=2)
+            self.assertAlmostEqual(summary["median_stage_breakdown_s"]["prepared_bundle_s"], 2.35, places=2)
+            self.assertAlmostEqual(summary["median_stage_breakdown_s"]["analysis_s"], 0.805, places=3)
+            self.assertAlmostEqual(summary["run1"]["kernel_stage_breakdown_s"]["new_entry_s"], 420.0, places=2)
+            self.assertAlmostEqual(summary["median_kernel_stage_breakdown_s"]["sell_s"], 300.5, places=2)
+            self.assertAlmostEqual(summary["run1"]["kernel_stage_breakdown_s"]["additional_buy_sort_s"], 60.0, places=2)
+            self.assertAlmostEqual(summary["median_kernel_stage_breakdown_s"]["additional_buy_mask_gen_s"], 50.5, places=2)
+            self.assertAlmostEqual(summary["run1"]["kernel_stage_breakdown_s"]["additional_buy_state_last_trade_update_s"], 1.0, places=2)
+            self.assertAlmostEqual(summary["median_kernel_stage_breakdown_s"]["additional_buy_state_final_compact_s"], 3.25, places=2)
+
+    def test_parse_run_log_sums_multiple_kernel_breakdown_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "run1.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=10.00 sell_s=1.00 new_entry_s=2.00 additional_buy_s=7.00 additional_buy_sort_s=5.50 additional_buy_state_last_trade_update_s=1.25",
+                        "[GPU_KERNEL_BREAKDOWN] total_loop_s=20.00 sell_s=3.50 new_entry_s=4.50 additional_buy_s=12.00 additional_buy_sort_s=9.25 additional_buy_state_last_trade_update_s=2.75",
+                        "Total GPU Kernel Execution Time: 30.10s",
+                        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:31.00",
+                        "Exit status: 0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            parsed = parse_run_log(log_path)
+
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["total_loop_s"], 30.0, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["sell_s"], 4.5, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["new_entry_s"], 6.5, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["additional_buy_s"], 19.0, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["additional_buy_sort_s"], 14.75, places=2)
+            self.assertAlmostEqual(parsed["kernel_stage_breakdown_s"]["additional_buy_state_last_trade_update_s"], 4.0, places=2)
 
 
 if __name__ == "__main__":

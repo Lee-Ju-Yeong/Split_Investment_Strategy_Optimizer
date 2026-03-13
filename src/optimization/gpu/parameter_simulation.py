@@ -140,6 +140,13 @@ def _estimate_prepared_market_tensor_bytes(num_trading_days, num_tickers):
     )
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _measure_prepared_market_data_bytes(
     prepared_market_data,
     *,
@@ -209,6 +216,8 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     execution_params["candidate_source_mode"] = normalized_mode
     execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
     execution_params["tier_hysteresis_mode"] = execution_tier_hysteresis_mode
+    if _env_flag_enabled("MAGICSPLIT_KERNEL_BREAKDOWN"):
+        execution_params["kernel_stage_timing_enabled"] = True
     universe_mode = resolve_universe_mode(
         strategy_params,
         universe_mode=os.environ.get("MAGICSPLIT_UNIVERSE_MODE"),
@@ -248,7 +257,12 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         WHERE date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY date
     """
-    trading_dates_pd_df = pd.read_sql(trading_dates_query, sql_engine, parse_dates=["date"], index_col="date")
+    trading_dates_pd_df = pd.read_sql(
+        trading_dates_query,
+        sql_engine,
+        parse_dates=["date"],
+        index_col="date",
+    )
     trading_dates_pd = trading_dates_pd_df.index
     trading_date_indices_gpu = cp.arange(len(trading_dates_pd), dtype=cp.int32)
 
@@ -278,6 +292,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
 
     prepared_market_data = None
     prepared_bundle_bytes = 0
+    prepared_bundle_start = time.time()
     try:
         prepared_market_data = prepare_market_data_bundle(
             all_data_gpu,
@@ -290,12 +305,17 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
             num_trading_days=len(trading_dates_pd),
             num_tickers=len(all_tickers),
         )
+        print(
+            "✅ Reusable market-data bundle prepared. "
+            f"Time: {time.time() - prepared_bundle_start:.2f}s"
+        )
     except Exception as err:
         if not _is_gpu_oom_error(err, cp):
             raise
         _release_gpu_memory(cp)
         print(
-            "[GPU_WARNING] OOM while preparing reusable market-data bundle. "
+            "[GPU_WARNING] OOM while preparing reusable market-data bundle "
+            f"after {time.time() - prepared_bundle_start:.2f}s. "
             "Falling back to legacy per-batch preparation."
         )
 
