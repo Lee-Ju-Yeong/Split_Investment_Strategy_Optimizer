@@ -843,6 +843,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
             financial_df=financial_df,
             investor_df=pd.DataFrame(),
             short_balance_df=short_balance_df,
+            short_selling_publication_lag_trading_days=0,
             lookback_days=2,
             financial_lag_days=0,
             tier1_position_lookback_days=5,
@@ -907,6 +908,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
             financial_df=financial_df,
             investor_df=pd.DataFrame(),
             short_balance_df=short_balance_df,
+            short_selling_publication_lag_trading_days=0,
             lookback_days=2,
             financial_lag_days=0,
             tier1_position_lookback_days=5,
@@ -995,6 +997,7 @@ class TestDailyStockTierBatch(unittest.TestCase):
             financial_df=financial_df,
             investor_df=pd.DataFrame(),
             short_balance_df=short_balance_df,
+            short_selling_publication_lag_trading_days=0,
             lookback_days=2,
             financial_lag_days=0,
             tier1_position_lookback_days=5,
@@ -1009,6 +1012,77 @@ class TestDailyStockTierBatch(unittest.TestCase):
         ].iloc[0]
         self.assertEqual(latest["tier"], 1)
         self.assertNotIn("sbv_ratio_extreme", str(latest["reason"]))
+
+    def test_sbv_ratio_uses_available_date_after_publication_lag(self):
+        dates = pd.date_range("2024-01-01", periods=5, freq="D")
+        price_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0042",
+                    "date": date_value,
+                    "close_price": 100,
+                    "volume": 20_000_000,
+                    "high_price": 110,
+                    "low_price": 90,
+                    "adj_close": 92,
+                    "adj_high": 110,
+                    "adj_low": 90,
+                    "price_vs_5y_low_pct": 0.20,
+                    "price_vs_10y_low_pct": 0.20,
+                }
+                for date_value in dates
+            ]
+        )
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0042",
+                    "date": date_value,
+                    "roe": 12.0,
+                    "bps": 1000.0,
+                    "div_yield": 1.0,
+                }
+                for date_value in dates
+            ]
+        )
+        short_balance_df = pd.DataFrame(
+            [
+                {
+                    "stock_code": "A0042",
+                    "date": pd.Timestamp("2024-01-01"),
+                    "short_balance_value": 30_000_000,
+                    "market_cap": 1_000_000_000,
+                }
+            ]
+        )
+
+        output = build_daily_stock_tier_frame(
+            price_df=price_df,
+            financial_df=financial_df,
+            investor_df=pd.DataFrame(),
+            short_balance_df=short_balance_df,
+            short_selling_publication_lag_trading_days=2,
+            lookback_days=2,
+            financial_lag_days=0,
+            tier1_position_lookback_days=5,
+            tier1_position_min_periods_days=2,
+            tier1_quality_lookback_days=2,
+            danger_liquidity=300_000_000,
+            prime_liquidity=1_000_000_000,
+            sbv_tier3_consecutive_days=1,
+        )
+
+        original_day = output[
+            (output["stock_code"] == "A0042") & (output["date"] == "2024-01-01")
+        ].iloc[0]
+        available_day = output[
+            (output["stock_code"] == "A0042") & (output["date"] == "2024-01-03")
+        ].iloc[0]
+
+        self.assertTrue(pd.isna(original_day["sbv_ratio"]))
+        self.assertGreater(float(available_day["sbv_ratio"]), 0.0272)
+        self.assertEqual(int(available_day["tier"]), 3)
+        self.assertIn("sbv_ratio_extreme", str(available_day["reason"]))
 
     def test_upsert_daily_stock_tier_uses_chunked_batches(self):
         conn = self._FakeConn()
