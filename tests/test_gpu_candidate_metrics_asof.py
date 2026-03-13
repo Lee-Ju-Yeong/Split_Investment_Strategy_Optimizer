@@ -15,7 +15,6 @@ from src.backtest.gpu.data import (
     create_candidate_rank_tensors,
     ensure_cheap_score_columns,
 )
-from src.backtest.gpu.engine import _collect_candidate_rank_metrics
 
 
 class TestGpuCandidateMetricsAsOf(unittest.TestCase):
@@ -172,68 +171,6 @@ class TestGpuCandidateMetricsAsOf(unittest.TestCase):
         )
         self.assertEqual(legacy_records, tensor_records)
 
-    def test_tensor_gather_without_ticker_strings_matches_legacy_live_payload(self):
-        trading_dates = pd.DatetimeIndex(
-            ["2026-01-06", "2026-01-07", "2026-01-08"],
-            name="date",
-        )
-        all_data = cudf.DataFrame(
-            {
-                "date": pd.to_datetime(
-                    [
-                        "2026-01-06",
-                        "2026-01-07",
-                        "2026-01-06",
-                        "2026-01-08",
-                    ]
-                ),
-                "ticker": ["A", "A", "B", "B"],
-                "ticker_idx": [0, 0, 1, 1],
-                "atr_14_ratio": [0.10, 0.20, 0.30, 0.40],
-                "market_cap": [10_000_000, 11_000_000, 20_000_000, 21_000_000],
-                "cheap_score": [0.40, 0.60, 0.20, 0.90],
-                "cheap_score_confidence": [1.0, 1.0, 0.5, 1.0],
-                "flow5_mcap": [100.0, 110.0, 200.0, 210.0],
-            }
-        )
-        final_candidate_indices = cp.asarray([0, 1], dtype=cp.int32)
-
-        legacy_df = _collect_candidate_rank_metrics_asof(
-            all_data_reset_idx=all_data.copy(deep=True),
-            final_candidate_indices=final_candidate_indices,
-            signal_date=pd.Timestamp("2026-01-07"),
-        )
-        tensor_map = create_candidate_rank_tensors(
-            all_data.copy(deep=True),
-            all_tickers=["A", "B"],
-            trading_dates_pd=trading_dates,
-        )
-        tensor_df = collect_candidate_rank_metrics_from_tensors(
-            rank_metric_tensors=tensor_map,
-            final_candidate_indices=final_candidate_indices,
-            signal_day_idx=1,
-            all_tickers=["A", "B"],
-            include_ticker_strings=False,
-        )
-
-        self.assertNotIn("ticker", tensor_df.columns)
-        self.assertIn("ticker_rank", tensor_df.columns)
-
-        legacy_indices, legacy_atrs, _ = build_ranked_candidate_payload(
-            legacy_df,
-            return_ranked_records=False,
-        )
-        tensor_indices, tensor_atrs, _ = build_ranked_candidate_payload(
-            tensor_df,
-            return_ranked_records=False,
-        )
-
-        self.assertEqual(legacy_indices.get().tolist(), tensor_indices.get().tolist())
-        self.assertEqual(
-            [round(float(value), 6) for value in legacy_atrs.get().tolist()],
-            [round(float(value), 6) for value in tensor_atrs.get().tolist()],
-        )
-
     def test_tensor_gather_preserves_nan_flow_ranking_semantics(self):
         trading_dates = pd.DatetimeIndex(
             ["2026-01-06", "2026-01-07"],
@@ -280,40 +217,6 @@ class TestGpuCandidateMetricsAsOf(unittest.TestCase):
         )
 
         self.assertEqual(legacy_records, tensor_records)
-
-    def test_engine_collect_candidate_rank_metrics_skips_ticker_strings_when_debug_disabled(self):
-        trading_dates = pd.DatetimeIndex(["2026-01-06", "2026-01-07"], name="date")
-        all_data = cudf.DataFrame(
-            {
-                "date": pd.to_datetime(["2026-01-07", "2026-01-07"]),
-                "ticker": ["A", "B"],
-                "ticker_idx": [0, 1],
-                "atr_14_ratio": [0.10, 0.20],
-                "market_cap": [10_000_000, 20_000_000],
-                "cheap_score": [0.50, 0.60],
-                "cheap_score_confidence": [1.0, 1.0],
-                "flow5_mcap": [100.0, 200.0],
-            }
-        )
-        tensor_map = create_candidate_rank_tensors(
-            all_data.copy(deep=True),
-            all_tickers=["A", "B"],
-            trading_dates_pd=trading_dates,
-        )
-
-        metrics_df = _collect_candidate_rank_metrics(
-            all_data_reset_idx=all_data.copy(deep=True),
-            candidate_rank_tensors=tensor_map,
-            final_candidate_indices=cp.asarray([0, 1], dtype=cp.int32),
-            signal_date=pd.Timestamp("2026-01-07"),
-            signal_day_idx=1,
-            all_tickers=["A", "B"],
-            include_ticker_strings=False,
-        )
-
-        self.assertIsNotNone(metrics_df)
-        self.assertNotIn("ticker", metrics_df.columns)
-        self.assertIn("ticker_rank", metrics_df.columns)
 
 
 if __name__ == "__main__":

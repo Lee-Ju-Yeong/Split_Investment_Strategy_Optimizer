@@ -5,13 +5,13 @@
 > Priority: `P1`
 > Last updated: 2026-03-13
 > Related issues: `#104`, `#98`, `#56`
-> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path in data.py/engine.py and targeted regression tests are green; throughput remeasure is pending`
+> Gate status: `issue opened on GitHub; follow-up tranche created from #98 handoff; H-001 was implemented/tested/measured, then rolled back after canonical 4-run regression confirmation; H-003 was re-scoped onto the canonical live path, tested, measured, and then rolled back after canonical regression confirmation; next recommended slice is H-004`
 
 ## 1. One-Page Summary
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
-- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`은 구현, 테스트, canonical 재측정, 4-run 재판정까지 마친 뒤 rollback했습니다. 현재 worktree는 다시 baseline 경로로 돌아왔습니다.
-- Next action: current HEAD 기준 canonical throughput 재측정을 진행합니다. 이번에는 non-debug live path에서 ticker string materialization을 건너뛰는 실제 경로가 측정 대상입니다.
+- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`과 `H-003` 모두 구현, 테스트, canonical 측정까지 마친 뒤 rollback했습니다. 현재 worktree는 다시 baseline 경로로 돌아왔습니다.
+- Next action: `H-004`(`PO`)를 다음 slice로 올려서 CPU loader / cache / engine reuse 계열을 좁게 측정합니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -61,7 +61,10 @@
 - [x] `H-003` 1차 구현 rollback
 - [x] canonical/live path (`data.py` / `engine.py`) 기준 재설계
 - [x] live-path slice 구현 + engine-level regression test 추가
-- [ ] canonical throughput 재측정
+- [x] `H-003` canonical throughput 재측정
+- [x] `H-003` rollback
+- [ ] `H-004` slice contract 고정
+- [ ] `H-004` 구현 + 측정
 
 ## 7. Follow-up Backlog Reclassification
 ### 7-1. 이번 문서에서 다시 고정한 규칙
@@ -74,8 +77,8 @@
 | --- | --- | --- | --- | --- | --- |
 | `H-001` | `PC` | `src/backtest/gpu/logic.py` | `new-entry`에서 전체 `quantities_matrix / total_costs_matrix`를 먼저 만들지 않고, 후보 `k`별로 active simulation subset만 계산 | 현재는 `(num_sims x num_candidates)` 전체 비용 행렬을 먼저 만들고 있어서, 실제로는 곧 inactive 될 simulation까지 upfront 비용을 낸다 | first safe slice 후보 |
 | `H-002` | `PC` | `src/backtest/gpu/logic.py` | `new-entry` 순차 루프를 block 단위 또는 prefix 선택 방식으로 더 줄이기 | 후보 수가 많을수록 순차 스캔 비용이 커진다 | blast radius 큼, `H-001` 뒤로 미룸 |
-| `H-003` | `PC` | `src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py` | canonical/live path의 candidate payload 생성 구간에서 non-debug ticker string materialization을 피하고 numeric `ticker_rank` tie-break로 정렬 유지 | 현재 실제 runtime은 `logic.py`가 아니라 `data.py -> engine.py` 경로를 사용한다 | implemented; remeasure pending |
-| `H-004` | `PO` | CPU loader / cache | CPU I/O / session cache / engine reuse 계열 정리 | GPU만 빠라도 CPU 보조 경로가 느리면 전체 반복 속도가 늘어진다 | hot-path 본체와 분리 가능 |
+| `H-003` | `PC` | `src/backtest/gpu/data.py`, `src/backtest/gpu/engine.py` | canonical/live path의 candidate payload 생성 구간에서 non-debug ticker string materialization을 피하고 numeric `ticker_rank` tie-break로 정렬 유지 | 현재 실제 runtime은 `logic.py`가 아니라 `data.py -> engine.py` 경로를 사용한다 | measured no-go; rolled back |
+| `H-004` | `PO` | CPU loader / cache | CPU I/O / session cache / engine reuse 계열 정리 | GPU만 빠라도 CPU 보조 경로가 느리면 전체 반복 속도가 늘어진다 | next recommended slice |
 
 ### 7-3. 첫 safe slice 선정
 - 선택: `H-001`
@@ -156,6 +159,12 @@
 - 2026-03-13: follow-up review에서 나온 backward-compat gap 보강. legacy/manual `prepared_market_data`에 `ticker_rank`가 없으면 tensor gather 시점에 1회 backfill 후 캐시하도록 수정.
 - 2026-03-13: exact tie-case 테스트 추가. non-debug no-string 경로에서도 `entry_composite_score_q`와 `market_cap_q`가 동률일 때 `ticker_rank`가 마지막 tie-break로 동작하는지 직접 고정.
 - 2026-03-13: compat + tie-case 포함 회귀 검증 실행. `CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_gpu_candidate_metrics_asof tests.test_gpu_candidate_payload_builder tests.test_gpu_engine_prep_path tests.test_backtest_strategy_gpu tests.test_issue67_tier_universe.TestIssue67GpuParityHelpers -v` -> `48 tests OK`.
+- 2026-03-13: canonical `Jan-Feb 2024` 2-run 재측정(`pr104_h003_janfeb2024_cov020_20260313_134103`) 결과, current-head baseline(`pr98_head_final_janfeb2024_cov020_20260312_223231`) 대비 성능 악화 확인.
+  - `median_kernel_s`: `1011.80s -> 1107.565s` (`-9.47%`)
+  - `median_wall_s`: `1049.52s -> 1148.33s` (`-9.41%`)
+  - `oom_retry`: 둘 다 `false/false`, `batch_count`: 둘 다 `4/4`
+- 2026-03-13: 해석 정리. `H-003`은 문자열 materialization을 줄이려던 의도는 맞았지만, canonical lane에서는 candidate rank tensor 준비 + cuDF payload/sort 경로 비용이 더 커서 총 throughput이 악화된 것으로 판단.
+- 2026-03-13: `H-003` 코드 rollback 완료. 이번 tranche의 다음 우선순위는 parity 리스크가 낮은 `H-004`(`PO`)로 재설정.
 
 ## 11. H-001 Interim Decision
 - 상태: `No-Go for promotion`
@@ -186,16 +195,26 @@
   - 이번엔 “정렬 helper를 예쁘게 바꾸는 것”보다, 실제로 성능을 재는 경로가 어디인지 먼저 맞추고 그 경로만 최적화합니다.
 
 ## 14. H-003 Current Status
-- 상태: `Implemented on live path, waiting for measurement`
+- 상태: `Rolled back after measurement`
 - 무엇을 바꿨나:
   - non-debug tensor gather 경로에서 ticker 문자열을 바로 만들지 않도록 바꿨습니다.
   - 대신 `ticker_rank` 숫자 tie-break를 만들고, 실제 payload 정렬은 그 숫자 키로 유지합니다.
   - debug 기록이 필요할 때만 ticker 문자열을 남깁니다.
-- 왜 이 방식이 안전한가:
-  - canonical/live path에 직접 들어갑니다.
-  - 정렬 우선순위는 여전히 `entry_composite_score_q desc -> market_cap_q desc -> ticker asc`와 동등합니다.
-  - backward compatibility를 위해 기존 tensor helper 기본값은 유지하고, engine만 non-debug 경로에서 `include_ticker_strings=False`를 명시합니다.
-  - legacy/manual prepared bundle에는 `ticker_rank`를 1회 backfill해서 late `KeyError` 없이 지나가게 했습니다.
-- 다음 확인:
-  - current HEAD canonical 2-run
-  - 필요 시 strict parity canary 재실행
+- 측정 결과:
+  - `kernel`: `-9.47%`
+  - `wall`: `-9.41%`
+- 왜 멈췄나:
+  - 문자열 생성 비용을 줄인 것보다 candidate rank tensor 준비와 payload 정렬 비용이 더 크게 붙었습니다.
+  - canonical 기준에서는 “조금 나쁨”이 아니라 “꽤 나쁨” 쪽이라 기본 경로 승격 근거가 부족합니다.
+- 최종 판단:
+  - 기본 경로에서는 rollback이 맞습니다.
+  - `H-001`처럼 memory-lean 연구 후보로 남길 정도의 뚜렷한 보조 이점도 이번 slice에서는 확보되지 않았습니다.
+
+## 15. Next Slice Reprioritization
+- 다음 slice: `H-004`
+- 왜 이제 `H-004`인가:
+  - `H-001`, `H-003` 모두 `PC`였고 canonical 기준으로는 둘 다 승격 실패였습니다.
+  - 다음엔 parity 리스크가 낮은 `PO`를 먼저 보는 편이 더 안전합니다.
+  - CPU loader / cache / engine reuse는 전략 의미론을 건드리지 않으면서 전체 반복 시간을 줄일 여지가 있습니다.
+- 초심자용 한 줄:
+  - 이제는 “매수/정렬 로직을 더 건드리는 것”보다 “같은 일을 덜 준비하고 덜 다시 읽는 것”부터 보는 게 더 합리적입니다.

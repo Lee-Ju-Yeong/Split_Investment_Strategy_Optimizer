@@ -16,11 +16,6 @@ RANKING_OPTIONAL_COLUMNS = {
 }
 
 
-def _build_ticker_rank_tensor(all_tickers: list[str]) -> cp.ndarray:
-    ticker_rank_map = {ticker: idx for idx, ticker in enumerate(sorted(all_tickers))}
-    return cp.asarray([ticker_rank_map[ticker] for ticker in all_tickers], dtype=cp.int32)
-
-
 def ensure_cheap_score_columns(metrics_df):
     """
     Ensure ranking columns exist exactly once on the input frame.
@@ -124,7 +119,6 @@ def create_candidate_rank_tensors(
             "flow5_mcap": cp.zeros((num_days, num_tickers), dtype=cp.float64),
             "cheap_score_effective": cp.zeros((num_days, num_tickers), dtype=cp.float64),
             "market_cap_q": cp.zeros((num_days, num_tickers), dtype=cp.int64),
-            "ticker_rank": cp.zeros((num_tickers,), dtype=cp.int32),
         }
 
     if "day_idx" not in all_data_gpu.columns or "ticker_idx" not in all_data_gpu.columns:
@@ -143,7 +137,6 @@ def create_candidate_rank_tensors(
             "flow5_mcap": cp.zeros((num_days, num_tickers), dtype=cp.float64),
             "cheap_score_effective": cp.zeros((num_days, num_tickers), dtype=cp.float64),
             "market_cap_q": cp.zeros((num_days, num_tickers), dtype=cp.int64),
-            "ticker_rank": _build_ticker_rank_tensor(all_tickers),
         }
 
     cheap_score_series = data_valid["cheap_score"].fillna(0).astype("float64")
@@ -174,7 +167,6 @@ def create_candidate_rank_tensors(
         tensor[day_indices, ticker_indices] = values
         tensors[column_name] = _forward_fill_tensor_with_presence(tensor, presence_mask)
 
-    tensors["ticker_rank"] = _build_ticker_rank_tensor(all_tickers)
     return tensors
 
 
@@ -232,7 +224,6 @@ def collect_candidate_rank_metrics_from_tensors(
     final_candidate_indices,
     signal_day_idx: int,
     all_tickers: list[str],
-    include_ticker_strings: bool = True,
 ):
     if signal_day_idx < 0:
         return None
@@ -246,37 +237,27 @@ def collect_candidate_rank_metrics_from_tensors(
         return None
 
     filtered_indices = candidate_indices[valid_mask]
-    ticker_rank = rank_metric_tensors.get("ticker_rank")
-    if ticker_rank is None:
-        ticker_rank = _build_ticker_rank_tensor(all_tickers)
-        rank_metric_tensors["ticker_rank"] = ticker_rank
-    metrics_payload = {
-        "ticker_idx": filtered_indices,
-        "ticker_rank": ticker_rank[filtered_indices],
-        "atr_14_ratio": atr_values[valid_mask],
-        "flow5_mcap": rank_metric_tensors["flow5_mcap"][signal_day_idx, filtered_indices],
-        "cheap_score_effective": rank_metric_tensors["cheap_score_effective"][
-            signal_day_idx, filtered_indices
-        ],
-        "market_cap_q": rank_metric_tensors["market_cap_q"][signal_day_idx, filtered_indices],
-    }
-    if include_ticker_strings:
-        metrics_payload["ticker"] = [
-            all_tickers[int(idx)]
-            for idx in cp.asnumpy(filtered_indices).tolist()
-        ]
-    return cudf.DataFrame(metrics_payload)
+    filtered_tickers = [all_tickers[int(idx)] for idx in cp.asnumpy(filtered_indices).tolist()]
+
+    return cudf.DataFrame(
+        {
+            "ticker_idx": filtered_indices,
+            "ticker": filtered_tickers,
+            "atr_14_ratio": atr_values[valid_mask],
+            "flow5_mcap": rank_metric_tensors["flow5_mcap"][signal_day_idx, filtered_indices],
+            "cheap_score_effective": rank_metric_tensors["cheap_score_effective"][
+                signal_day_idx, filtered_indices
+            ],
+            "market_cap_q": rank_metric_tensors["market_cap_q"][signal_day_idx, filtered_indices],
+        }
+    )
 
 
 def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_records=False):
     if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
         return cp.array([], dtype=cp.int32), cp.array([], dtype=cp.float32), []
 
-    base_columns = ["ticker_idx", "atr_14_ratio"]
-    if "ticker_rank" in valid_candidate_metrics_df.columns:
-        base_columns.append("ticker_rank")
-    else:
-        base_columns.append("ticker")
+    base_columns = ["ticker_idx", "ticker", "atr_14_ratio"]
     if "market_cap_q" in valid_candidate_metrics_df.columns:
         base_columns.append("market_cap_q")
     else:
@@ -291,9 +272,6 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
     if "flow5_mcap" not in valid_candidate_metrics_df.columns:
         ensure_cheap_score_columns(valid_candidate_metrics_df)
     base_columns.append("flow5_mcap")
-    if return_ranked_records and "ticker" in valid_candidate_metrics_df.columns:
-        base_columns.append("ticker")
-    base_columns = list(dict.fromkeys(base_columns))
 
     metrics_rows = valid_candidate_metrics_df[base_columns]
     metrics_rows = metrics_rows.dropna(subset=["ticker_idx", "atr_14_ratio"])
@@ -345,9 +323,8 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
         metrics_rows["entry_composite_score"].fillna(0.0) * 10000.0
     ).round().astype("int64")
 
-    tie_break_column = "ticker_rank" if "ticker_rank" in metrics_rows.columns else "ticker"
     ranked_rows = metrics_rows.sort_values(
-        by=["entry_composite_score_q", "market_cap_q", tie_break_column],
+        by=["entry_composite_score_q", "market_cap_q", "ticker"],
         ascending=[False, False, True],
     )
     candidate_indices_final = cp.asarray(ranked_rows["ticker_idx"].astype("int32"))
@@ -355,8 +332,6 @@ def build_ranked_candidate_payload(valid_candidate_metrics_df, *, return_ranked_
 
     ranked_records = []
     if return_ranked_records:
-        if "ticker" not in ranked_rows.columns:
-            raise ValueError("ticker column is required when return_ranked_records=True")
         ranked_records = list(
             zip(
                 ranked_rows["ticker"].to_arrow().to_pylist(),
