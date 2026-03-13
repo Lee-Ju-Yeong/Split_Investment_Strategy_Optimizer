@@ -605,6 +605,7 @@ def _process_additional_buy_signals_gpu(
 
     # 5. 최종 매수 목록을 기반으로 상태 병렬 업데이트
     state_update_start = time.time() if kernel_stage_timing_enabled else None
+    final_compact_start = time.time() if kernel_stage_timing_enabled else None
     # 매수가 실행될 후보들의 정보
     final_sims = sorted_sims[final_buy_mask]
     final_stocks = sorted_stocks[final_buy_mask]
@@ -614,8 +615,15 @@ def _process_additional_buy_signals_gpu(
 
     # 자본 업데이트 (rank 순차 선택 결과 반영본)
     portfolio_state[:, 0] = remaining_capital
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_state_final_compact_s",
+        final_compact_start,
+        kernel_stage_timing_enabled,
+    )
 
     # 포지션 업데이트: 부분청산으로 split hole이 생길 수 있으므로 첫 empty slot에 기록
+    slot_lookup_start = time.time() if kernel_stage_timing_enabled else None
     split_slot_empty_mask = positions_state[final_sims, final_stocks, :, 0] <= 0
     has_empty_slot = cp.any(split_slot_empty_mask, axis=1)
     if not bool(cp.all(has_empty_slot)):
@@ -625,15 +633,43 @@ def _process_additional_buy_signals_gpu(
             f"missing_slots={missing_slots}"
         )
     split_indices = cp.argmax(split_slot_empty_mask, axis=1).astype(cp.int32)
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_state_slot_lookup_s",
+        slot_lookup_start,
+        kernel_stage_timing_enabled,
+    )
     
+    position_write_start = time.time() if kernel_stage_timing_enabled else None
     positions_state[final_sims, final_stocks, split_indices, 0] = final_quantities
     positions_state[final_sims, final_stocks, split_indices, 1] = final_exec_prices
     positions_state[final_sims, final_stocks, split_indices, 2] = current_day_idx
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_state_position_write_s",
+        position_write_start,
+        kernel_stage_timing_enabled,
+    )
     
     # 마지막 거래일 업데이트
-    # 중복된 (sim, stock)이 있을 수 있으므로 unique 처리 후 업데이트
-    unique_final_trades, _ = cp.unique(cp.vstack([final_sims, final_stocks]), axis=1, return_index=True)
-    last_trade_day_idx_state[unique_final_trades[0], unique_final_trades[1]] = current_day_idx
+    # accepted pair는 원래 (sim, stock) 2D mask에서 나온 좌표를 정렬/필터한 결과라
+    # 직접 scatter update가 가능하다. debug에서만 unique invariant를 확인해 둔다.
+    last_trade_update_start = time.time() if kernel_stage_timing_enabled else None
+    if debug_mode and final_sims.size > 1:
+        final_pairs = cp.stack((final_sims, final_stocks), axis=1)
+        unique_pair_count = int(cp.unique(final_pairs, axis=0).shape[0])
+        if unique_pair_count != int(final_pairs.shape[0]):
+            raise AssertionError(
+                "Duplicate (sim, stock) pairs detected in additional_buy final selection. "
+                f"pair_count={int(final_pairs.shape[0])} unique_pair_count={unique_pair_count}"
+            )
+    last_trade_day_idx_state[final_sims, final_stocks] = current_day_idx
+    _record_gpu_probe_duration(
+        kernel_stage_totals,
+        "additional_buy_state_last_trade_update_s",
+        last_trade_update_start,
+        kernel_stage_timing_enabled,
+    )
     _record_gpu_probe_duration(
         kernel_stage_totals,
         "additional_buy_state_update_s",

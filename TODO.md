@@ -37,7 +37,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `P0` | `ShortSellingDaily` publication lag 정리 | Draft | 공매도 데이터 same-date 반영은 PIT 리스크 후보 | `date` 의미와 `publication_lag_trading_days` 정책 확정 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
-| `P1` | `#104` GPU throughput follow-up hot path | In Progress | `H-001`, `H-003`, `H-004-a` 모두 canonical 회귀로 정리됐고, `H-005-a` 측정 결과 `additional_buy` 내부의 1차 병목이 `state_update`로 확인됐다 | `H-005-b-0`로 `state_update`를 `final_compact / slot_lookup / position_write / last_trade_update`로 더 잘게 계측한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
+| `P1` | `#104` GPU throughput follow-up hot path | In Progress | `H-001`, `H-003`, `H-004-a` 모두 canonical 회귀로 정리됐고, `H-005-a` / `H-005-b-0` probe 결과 `additional_buy_state_last_trade_update`가 핵심 병목으로 좁혀졌다. `H-005-b` direct-update slice 구현과 회귀 테스트도 완료됐다 | `issue98_perf_measure --kernel-breakdown --runs 1`로 direct-update 이후 `additional_buy_state_last_trade_update_s`와 전체 kernel/wall 변화를 확인한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
 ## Roadmap Checkpoint (2026-03-10)

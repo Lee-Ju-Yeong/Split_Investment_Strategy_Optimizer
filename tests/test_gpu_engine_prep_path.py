@@ -300,6 +300,8 @@ class TestGpuEnginePrepPath(unittest.TestCase):
         self.assertIn("kernel_stage_totals", kwargs)
         self.assertIn("additional_buy_mask_gen_s", kwargs["kernel_stage_totals"])
         self.assertIn("additional_buy_state_update_s", kwargs["kernel_stage_totals"])
+        self.assertIn("additional_buy_state_final_compact_s", kwargs["kernel_stage_totals"])
+        self.assertIn("additional_buy_state_last_trade_update_s", kwargs["kernel_stage_totals"])
 
     def test_rejects_legacy_tier_hysteresis_mode(self):
         with self.assertRaisesRegex(ValueError, "Unsupported tier_hysteresis_mode"):

@@ -43,6 +43,10 @@ def _empty_kernel_stage_totals() -> dict[str, float]:
         "additional_buy_sort_s": 0.0,
         "additional_buy_rank_apply_s": 0.0,
         "additional_buy_state_update_s": 0.0,
+        "additional_buy_state_final_compact_s": 0.0,
+        "additional_buy_state_slot_lookup_s": 0.0,
+        "additional_buy_state_position_write_s": 0.0,
+        "additional_buy_state_last_trade_update_s": 0.0,
         "valuation_s": 0.0,
     }
 

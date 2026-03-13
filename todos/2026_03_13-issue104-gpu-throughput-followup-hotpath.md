@@ -10,8 +10,8 @@
 ## 1. One-Page Summary
 - What: `#98`에서 일부러 미뤄둔 더 공격적인 GPU hot-path 최적화를 별도 tranche로 진행하는 문서입니다.
 - Why: `#98`은 current HEAD 기준 canonical 성능 개선과 strict parity 재확인까지 마치고 닫았습니다. 이제는 완료 문서를 오염시키지 않고, 다음 최적화만 분리해서 추적해야 합니다.
-- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, `H-005-a` probe-only instrumentation과 첫 1-run 측정까지 끝난 상태입니다.
-- Next action: `additional_buy_state_update_s`를 더 잘게 쪼개는 `H-005-b-0` micro-probe를 넣고, `final_compact / slot_lookup / position_write / last_trade_update` 중 어디가 1차 병목인지 확정합니다.
+- Current status: GitHub issue `#104`를 만들었고, 로컬 작업 브랜치 `feature/issue98-followup-hotpath`도 준비됐습니다. `H-001`, `H-003`, `H-004-a`까지 모두 구현-측정-판정을 마쳤고, `H-005-a` / `H-005-b-0` probe 결과를 바탕으로 `H-005-b` direct-update slice 구현과 회귀 테스트까지 끝난 상태입니다.
+- Next action: `issue98_perf_measure --kernel-breakdown --runs 1`로 `H-005-b` 구현 결과를 다시 측정해 `additional_buy_state_last_trade_update_s`가 실제로 줄었는지 확인합니다.
 
 ## 2. 초심자용 현재 판단
 ### 2-1. 왜 새 문서로 시작하나
@@ -366,6 +366,44 @@
   - `additional_buy` 안의 1차 병목은 `sort`, `cp.where`, `cost 계산`이 아니라 `state_update`입니다.
   - 즉, “무엇을 살지 결정하는 연산”보다 “결정된 추가매수를 큰 상태 배열에 반영하는 연산”이 거의 전부의 시간을 차지합니다.
   - 다음 실제 최적화는 `state_update`를 다시 더 잘게 쪼개는 쪽이 가장 안전합니다.
+
+### 19-7. `H-005-b-0` State-Update Micro-Probe
+- 2026-03-13: `state_update`를 아래 4개 세부 단계로 다시 쪼개는 probe-only 계측을 추가했습니다.
+  - `additional_buy_state_final_compact_s`
+  - `additional_buy_state_slot_lookup_s`
+  - `additional_buy_state_position_write_s`
+  - `additional_buy_state_last_trade_update_s`
+- 목적:
+  - `state_update`가 느리다는 사실은 확인됐으므로, 이제 그 안에서 무엇이 진짜 병목인지 한 단계 더 줄여 확인합니다.
+  - 이 단계도 여전히 의미론은 바꾸지 않습니다.
+- 검증:
+  - `tests.test_issue98_perf_measure`
+  - `tests.test_gpu_engine_prep_path`
+  - `tests.test_backtest_strategy_gpu`
+  - 결과: `35 tests OK`
+- 다음 측정:
+  - `issue98_perf_measure --kernel-breakdown --runs 1`
+  - `summary.json`에서 위 4개 key의 상대 비중을 비교한 뒤 `H-005-b` 실제 최적화 방향을 고릅니다.
+
+### 19-8. `H-005-b` Direct Last-Trade Update
+- 2026-03-13: `cp.unique(cp.vstack([final_sims, final_stocks]), axis=1, return_index=True)`를 제거하고, `last_trade_day_idx_state[final_sims, final_stocks] = current_day_idx` direct update로 교체했습니다.
+- Why:
+  - `H-005-b-0` probe에서 `additional_buy_state_last_trade_update_s = 1039.60s`로, `state_update` 안의 거의 전부가 마지막 거래일 갱신 구간에 몰렸습니다.
+  - 현재 additional-buy accepted pair는 원래 `(sim, stock)` 2D grid에서 나온 좌표를 정렬/필터한 결과라는 가설을 채택했습니다.
+- Safety guard:
+  - `debug_mode=True`일 때만 `(final_sims, final_stocks)` unique invariant를 확인하도록 넣었습니다.
+  - `tests.test_backtest_strategy_gpu`에 `last_trade_day_idx_state` 전용 회귀 테스트를 추가했습니다.
+- 구현 검증:
+  - `tests.test_backtest_strategy_gpu`
+  - `tests.test_issue98_perf_measure`
+  - `tests.test_gpu_engine_prep_path`
+  - 결과: `36 tests OK`
+- 다음 측정:
+  - `issue98_perf_measure --kernel-breakdown --runs 1`
+  - `additional_buy_state_last_trade_update_s`
+  - `additional_buy_state_update_s`
+  - `additional_buy_s`
+  - `median_kernel_s`, `median_wall_s`
 
 ## 20. Multi-Agent Direction Review (Codex blind-first + Gemini post-check)
 - 2026-03-13: `multi-agent-with-codex-gemini`로 `H-005-a` 방향성을 구현 전에 다시 검토했습니다.
