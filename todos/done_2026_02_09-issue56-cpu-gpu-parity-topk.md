@@ -368,7 +368,7 @@ python -m src.cpu_gpu_parity_topk \
   - `P-005/P-006/P-008/P-009` -> Release Gate(결정 레벨) 필수
   - `P-001/P-002/P-003/P-004/P-007/P-010/P-011/P-012/P-013/P-014` -> Smoke + strict 재검증
 - 성능 리팩토링 상세 의사결정:
-  - parity 비포기 원칙, risk-based 적용 순서(low/medium/high), 금지 패턴은 `todos/2026_02_17-issue98-gpu-throughput-refactor.md`의 `11-5`를 참조한다.
+  - parity 비포기 원칙, risk-based 적용 순서(low/medium/high), 금지 패턴은 `todos/done_2026_02_17-issue98-gpu-throughput-refactor.md`의 `11-5`를 참조한다.
 - 표준 검증 순서:
   - 1) GPU snapshot 생성(`--pipeline-stage gpu`, `--parity-mode strict`)
   - 2) CPU replay(`--pipeline-stage cpu`, 동일 snapshot)

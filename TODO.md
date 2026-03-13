@@ -1,6 +1,6 @@
 # Project Status Dashboard
 
-> Last updated: 2026-03-13
+> Last updated: 2026-03-14
 > Role: 이 파일은 현재 진행 중인 일을 빠르게 파악하는 관제판입니다.
 > Rule: 상세 계획, 작업 로그, 증적은 각 `todos/*.md` 문서가 담당합니다.
 
@@ -30,12 +30,12 @@
 | `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `외부 출시 경계` | Open | 내부 검증 단계와 외부 출시 단계를 분리해서 관리해야 함 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | Done | PR `#103`으로 current HEAD canonical throughput win과 strict parity reconfirmation을 함께 반영했고, 이번 tranche 목표를 종료했다 | [#98](todos/2026_02_17-issue98-gpu-throughput-refactor.md) |
+| `#98 Throughput promotion` | Done | PR `#103`으로 current HEAD canonical throughput win과 strict parity reconfirmation을 함께 반영했고, 이번 tranche 목표를 종료했다 | [#98](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md) |
 
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
-| `P0` | `ShortSellingDaily` publication lag 정리 | In Progress | 공매도 데이터 same-date 반영은 PIT 리스크 후보이며, 비인증 KRX 경로는 현재 호스트에서 막혀 있다 | 임시 `lag=3 + same-date 금지` 정책은 코드 반영 완료. 이제 shadow diff / backfill 범위를 정리하고 영향 구간을 증적으로 남긴다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
+| `P0` | `ShortSellingDaily` publication lag 정리 | In Progress | 공매도 데이터 same-date 반영은 PIT 리스크 후보이며, shadow diff로 `sbv_ratio` 영향과 `DailyStockTier` 영향 범위를 이미 확인했다 | 임시 `lag=3 + same-date 금지` 정책은 코드 반영 완료. shadow diff 결과를 근거로 `DailyStockTier` backfill을 `2013-11-20 ~ 2026-02-06` 범위에서 재개하고, 완료 후 row count / 최신 날짜 / 샘플 검증을 남긴다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `P1` | `#104` GPU throughput follow-up hot path | Done | `H-001`, `H-003`, `H-004-a`는 canonical 회귀로 정리했고, `H-005-b`가 `cp.unique` 기반 additional-buy last-trade dedup 제거 후 canonical 2-run `+94.96% / +91.68%`와 strict parity를 함께 통과했다 | 새 hot-path tranche가 생기기 전까지 재개하지 않는다. 필요 시 `--kernel-breakdown` probe를 재사용한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
 | `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
@@ -99,7 +99,7 @@
   - [#56 parity release gate](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md)
   - [#67 PIT candidate policy](todos/done_2026_02_09-issue67-tier-universe-migration.md)
   - [#97 strict-only governance](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md)
-  - [#98 throughput refactor tranche](todos/2026_02_17-issue98-gpu-throughput-refactor.md)
+  - [#98 throughput refactor tranche](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md)
 - 완료 상태이지만 참고가 필요한 운영 문서:
   - [#93 wrapper deprecation/removal plan](todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md)
 

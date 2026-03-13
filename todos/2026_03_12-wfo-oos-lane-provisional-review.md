@@ -158,5 +158,5 @@
 
 ## 8. 참고 문서
 - [#68 Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
-- [#98 GPU Throughput Refactor](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_17-issue98-gpu-throughput-refactor.md)
+- [#98 GPU Throughput Refactor](/root/projects/Split_Investment_Strategy_Optimizer/todos/done_2026_02_17-issue98-gpu-throughput-refactor.md)
 - [WFO analysis context](/root/projects/Split_Investment_Strategy_Optimizer/llm-context/04_wfo_analysis.md)
