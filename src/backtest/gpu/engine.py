@@ -124,6 +124,7 @@ def _collect_candidate_rank_metrics(
     signal_date,
     signal_day_idx: int,
     all_tickers: list[str],
+    include_ticker_strings: bool = False,
 ):
     if signal_date is None:
         return None
@@ -133,6 +134,7 @@ def _collect_candidate_rank_metrics(
             final_candidate_indices=final_candidate_indices,
             signal_day_idx=signal_day_idx,
             all_tickers=all_tickers,
+            include_ticker_strings=include_ticker_strings,
         )
     return _collect_candidate_rank_metrics_asof(
         all_data_reset_idx=all_data_reset_idx,
@@ -379,6 +381,7 @@ def run_magic_split_strategy_on_gpu(
                     signal_date=signal_date,
                     signal_day_idx=signal_day_idx,
                     all_tickers=all_tickers,
+                    include_ticker_strings=debug_mode,
                 )
 
                 if valid_candidate_metrics_df is None or valid_candidate_metrics_df.empty:
@@ -451,6 +454,7 @@ def run_magic_split_strategy_on_gpu(
                         signal_date=signal_date,
                         signal_day_idx=signal_day_idx,
                         all_tickers=all_tickers,
+                        include_ticker_strings=debug_mode,
                     )
                     if filtered_metrics_df is None or filtered_metrics_df.empty:
                         candidate_tickers_for_day = cp.array([], dtype=cp.int32)

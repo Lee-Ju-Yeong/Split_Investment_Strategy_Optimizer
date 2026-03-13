@@ -87,6 +87,27 @@ class TestGpuCandidatePayloadBuilder(unittest.TestCase):
         self.assertEqual(candidate_indices.get().tolist(), [0, 1])
         self.assertEqual([row[0] for row in ranked_records], ["A", "B"])
 
+    def test_build_ranked_candidate_payload_uses_ticker_rank_as_last_tiebreaker(self):
+        metrics_df = cudf.DataFrame(
+            {
+                "ticker_idx": [1, 0],
+                "ticker_rank": [1, 0],
+                "atr_14_ratio": [0.20, 0.20],
+                "market_cap_q": [7, 7],
+                "cheap_score_effective": [0.50, 0.50],
+                "flow5_mcap": [100.0, 100.0],
+            }
+        )
+
+        candidate_indices, atrs, ranked_records = build_ranked_candidate_payload(
+            valid_candidate_metrics_df=metrics_df,
+            return_ranked_records=False,
+        )
+
+        self.assertEqual(candidate_indices.get().tolist(), [0, 1])
+        self.assertEqual([round(v, 4) for v in atrs.get().tolist()], [0.2, 0.2])
+        self.assertEqual(ranked_records, [])
+
     def test_build_ranked_candidate_payload_prioritizes_effective_cheap_score(self):
         metrics_df = cudf.DataFrame(
             {

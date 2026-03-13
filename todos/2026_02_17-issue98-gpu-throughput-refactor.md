@@ -11,7 +11,7 @@
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
 - Current status: current HEAD 기준 canonical `Jan-Feb 2024` 2-run에서 baseline 대비 약 `+8.5%` throughput win을 다시 확인했고, current HEAD 기준 `A-D` strict parity canary도 `0 mismatch`로 재통과했습니다. 이번 라운드의 `#98` 핵심 목표는 기술적으로 닫힌 상태입니다.
-- Next action: 더 공격적인 `P-008/P-009` 벡터화와 CPU I/O 계열 PO 정리는 follow-up backlog로 분리 검토합니다.
+- Next action: 더 공격적인 `P-008/P-009` 벡터화와 CPU I/O 계열 PO 정리는 follow-up backlog로 분리했고, 후속 작업은 `todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md`에서 진행합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나
