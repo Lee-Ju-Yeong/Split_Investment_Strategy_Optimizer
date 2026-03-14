@@ -126,8 +126,9 @@ walk_forward_settings:
   total_folds: 6
   period_length_days: 365
   # Optional manifest metadata for WFO artifacts.
-  # - `lane_type` is currently recorded as metadata only.
-  # - Use `legacy_wfo` until the new lane-mode split is fully implemented.
+  # - `legacy_wfo`: 기존 overlap/mean aggregation 경로를 그대로 사용하며 provisional로 기록합니다.
+  # - `promotion_evaluation`: single-anchor non-overlap anchored WFO를 사용합니다.
+  # - `research_start_date_robustness`: frozen shortlist multi-anchor 경로가 아직 미구현이라 현재는 거부됩니다.
   lane_type: "legacy_wfo"
   decision_date: "2026-03-14"
   research_data_cutoff: "2021-12-31"
@@ -142,8 +143,8 @@ walk_forward_settings:
   holdout_contaminated_ranges:
     - start: "2025-12-01"
       end: "2026-01-31"
-  # Hybrid lane:
-  # GPU가 상위 후보를 제안한 뒤 CPU가 shortlist를 재실행해 최종 채택합니다.
+  # CPU audit:
+  # GPU가 고른 finalist shortlist를 CPU로 다시 돌려 `pass/fail`만 검산합니다.
   # 이 설정이 켜져 있어도 release/promotion은 별도 gate(`strict_pit`, parity, future reference=0)를 닫아야 합니다.
   cpu_certification_enabled: true
   cpu_certification_top_n: 5

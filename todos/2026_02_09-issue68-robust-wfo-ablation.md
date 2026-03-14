@@ -19,7 +19,8 @@
   - 추가로 `holdout_backtest_executed`, `promotion_WFO_end < holdout_start` 같은 현재 상태 라벨도 더 정직하게 남기도록 강화 중이다.
   - CPU 단계는 `GPU-selected finalist -> CPU pass/fail audit` 쪽으로 1차 정리됐다.
   - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 사유에 반영할 수 있게 됐다.
-  - lane 분리가 끝나기 전까지는 `walk_forward_settings.lane_type=legacy_wfo`만 허용하도록 guardrail을 두는 쪽으로 진행 중이다.
+  - `promotion_evaluation`은 single-anchor non-overlap anchored WFO 의미를 타기 시작했다.
+  - `research_start_date_robustness`는 frozen shortlist multi-anchor 경로가 아직 없어서 현재는 거부한다.
   - 하지만 `hard gate`, `robust score`, `lane_mode`, `holdout 경계`, `artifact guardrail`은 아직 공식 구현 전이다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
   - 추가 숙의 결과, 이 전략의 분할 진입 특성상 `1년 미만 holdout`은 최종 승인용으로 약하다는 쪽으로 기울었다.

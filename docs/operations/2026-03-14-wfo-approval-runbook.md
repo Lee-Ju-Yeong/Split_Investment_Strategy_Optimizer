@@ -59,18 +59,18 @@
 ### 4-2. 아직 구현이 다 안 된 것
 - 현재 `walk_forward_analyzer.py`는 이 새 구조를 100% 자동으로 강제하지 않는다.
 - 특히 아래는 아직 후속 구현이 더 필요하다.
-  - research lane / promotion lane 실행 경로 분리
   - research lane의 carry-over 차단
   - research lane의 composite curve 차단
   - shortlist freeze와 manifest 자동 연결
   - holdout adequacy 지표 자동 기록
 - 현재 반영된 것:
   - CPU 단계는 GPU가 고른 후보를 `pass/fail`로 검산하는 쪽으로 1차 정리됐다.
+  - `promotion_evaluation`은 single-anchor non-overlap anchored WFO로 실제 실행 의미가 분리되기 시작했다.
   - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 이유로 반영할 수 있다.
 - 아직 남은 것:
   - WFO 실행 경로가 governance gate 입력을 자동으로 남기도록 end-to-end 연결
 - 현재 guardrail:
-  - lane 분리가 끝나기 전까지 `walk_forward_settings.lane_type`은 `legacy_wfo`만 허용한다.
+  - `research_start_date_robustness`는 frozen shortlist multi-anchor 경로가 아직 없어서 현재는 거부된다.
 
 ### 4-3. 그래서 이 runbook의 성격
 - 지금은 `완전 자동 운영 매뉴얼`이라기보다
