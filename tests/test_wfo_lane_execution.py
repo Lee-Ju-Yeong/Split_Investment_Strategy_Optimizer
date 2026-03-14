@@ -212,13 +212,31 @@ class TestWfoLaneExecution(unittest.TestCase):
         )
         self.assertEqual(len(candidate_fold_df), 4)
         self.assertEqual(candidate_summary_df["shortlist_candidate_id"].tolist(), [2, 1])
+        self.assertEqual(
+            candidate_summary_df["selection_role"].tolist(),
+            ["champion", "ranked_only"],
+        )
+        self.assertEqual(
+            candidate_summary_df["hard_gate_pass"].tolist(),
+            [True, False],
+        )
         self.assertEqual(final_candidate_manifest["champion_candidate_id"], 2)
-        self.assertEqual(final_candidate_manifest["reserve_candidate_ids"], [1])
+        self.assertEqual(final_candidate_manifest["selection_mode"], "single_champion_only")
+        self.assertEqual(final_candidate_manifest["reserve_candidate_ids"], [])
+        self.assertEqual(final_candidate_manifest["reserve_candidate_signatures"], [])
+        self.assertTrue(final_candidate_manifest["holdout_candidate_pack_forbidden"])
+        self.assertEqual(
+            final_candidate_manifest["reserve_succession_rule"],
+            "prelocked_non_performance_only",
+        )
         self.assertFalse(final_candidate_manifest["holdout_ready"])
         self.assertIn(
             "final_candidate_cpu_audit_not_executed",
             final_candidate_manifest["holdout_readiness_reasons"],
         )
+        self.assertFalse(final_candidate_manifest.get("holdout_attempted", False))
+        self.assertFalse(final_candidate_manifest.get("holdout_success", False))
+        self.assertFalse(final_candidate_manifest.get("holdout_blocked", False))
         self.assertFalse(holdout_manifest["approval_eligible"])
         self.assertTrue(holdout_manifest["promotion_wfo_end_before_holdout"])
         self.assertEqual(curve.index.strftime("%Y-%m-%d").tolist(), [
@@ -228,6 +246,253 @@ class TestWfoLaneExecution(unittest.TestCase):
             "2023-12-31",
         ])
         self.assertAlmostEqual(float(curve.iloc[-1]), 14_400_000.0)
+
+    def test_promotion_lane_can_auto_execute_holdout_from_final_candidate_manifest(self):
+        config = self._promotion_config()
+        config["walk_forward_settings"]["holdout_auto_execute"] = True
+
+        def _fake_find_optimal_parameters(*args, **kwargs):
+            raise AssertionError("promotion lane should not call find_optimal_parameters")
+
+        def _fake_run_single_backtest(*, start_date, end_date, params_dict, initial_cash):
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            duration_days = int((end - start).days + 1)
+            if duration_days > 365:
+                factor = 1.30 if int(params_dict["max_stocks"]) == 30 else 1.10
+                return pd.Series(
+                    [initial_cash, initial_cash * factor],
+                    index=pd.to_datetime([start_date, end_date]),
+                )
+            factor = 1.20 if int(params_dict["max_stocks"]) == 30 else 1.05
+            return pd.Series(
+                [initial_cash, initial_cash * factor],
+                index=pd.to_datetime([start_date, end_date]),
+            )
+
+        def _fake_cpu_run(_config, *, start_date, end_date, params_dict, initial_cash):
+            if (start_date, end_date) == ("2020-01-01", "2023-12-31"):
+                return pd.Series(
+                    [initial_cash, initial_cash * 1.40],
+                    index=pd.to_datetime([start_date, end_date]),
+                ), {
+                    "success": True,
+                    "promotion_blocked": False,
+                    "metrics": {"calmar_ratio": 1.4, "cagr": 0.20, "mdd": -0.10},
+                    "daily_snapshots": [
+                        {"date": "2020-01-01", "total_value": initial_cash, "cash": initial_cash * 0.6, "stock_count": 1},
+                        {"date": "2023-12-31", "total_value": initial_cash * 1.4, "cash": initial_cash * 0.3, "stock_count": 2},
+                    ],
+                    "trade_history": [],
+                    "final_positions": [],
+                }
+            if (start_date, end_date) == ("2025-01-01", "2025-11-30"):
+                return pd.Series(
+                    [initial_cash, initial_cash * 1.12],
+                    index=pd.to_datetime([start_date, end_date]),
+                ), {
+                    "success": True,
+                    "promotion_blocked": False,
+                    "metrics": {"calmar_ratio": 1.1, "cagr": 0.12, "mdd": -0.08},
+                    "daily_snapshots": [
+                        {"date": "2025-01-02", "total_value": initial_cash, "cash": initial_cash * 0.7, "stock_count": 1},
+                        {"date": "2025-06-30", "total_value": initial_cash * 1.05, "cash": initial_cash * 0.2, "stock_count": 3},
+                        {"date": "2025-11-30", "total_value": initial_cash * 1.12, "cash": initial_cash * 0.4, "stock_count": 2},
+                    ],
+                    "trade_history": [
+                        {"date": "2025-01-02", "code": "005930", "trade_type": "BUY", "order": 1},
+                        {"date": "2025-03-15", "code": "005930", "trade_type": "SELL", "order": 1},
+                        {"date": "2025-05-10", "code": "000660", "trade_type": "BUY", "order": 2},
+                    ],
+                    "final_positions": [],
+                }
+            raise AssertionError(f"unexpected cpu window: {start_date}~{end_date}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            pd.DataFrame(
+                [
+                    {
+                        "max_stocks": 20,
+                        "order_investment_ratio": 0.02,
+                        "additional_buy_drop_rate": 0.04,
+                        "sell_profit_rate": 0.05,
+                        "additional_buy_priority": 0.0,
+                        "stop_loss_rate": -0.15,
+                        "max_splits_limit": 10,
+                        "max_inactivity_period": 90,
+                    },
+                    {
+                        "max_stocks": 30,
+                        "order_investment_ratio": 0.03,
+                        "additional_buy_drop_rate": 0.05,
+                        "sell_profit_rate": 0.06,
+                        "additional_buy_priority": 1.0,
+                        "stop_loss_rate": -0.10,
+                        "max_splits_limit": 15,
+                        "max_inactivity_period": 60,
+                    },
+                ]
+            ).to_csv(shortlist_path, index=False)
+            config["walk_forward_settings"]["promotion_shortlist_path"] = shortlist_path.as_posix()
+            previous_cwd = os.getcwd()
+            os.chdir(tmp_dir)
+            try:
+                fake_sim_module = types.ModuleType("src.parameter_simulation_gpu")
+                fake_sim_module.find_optimal_parameters = _fake_find_optimal_parameters
+                fake_gpu_module = types.ModuleType("src.debug_gpu_single_run")
+                fake_gpu_module.run_single_backtest = _fake_run_single_backtest
+                fake_perf_module = types.ModuleType("src.performance_analyzer")
+                fake_perf_module.PerformanceAnalyzer = _FakePerformanceAnalyzer
+
+                with patch("src.analysis.walk_forward_analyzer.load_config", return_value=config), \
+                     patch("src.analysis.walk_forward_analyzer.plot_wfo_results", return_value=None), \
+                     patch("src.analysis.walk_forward_analyzer.run_cpu_single_backtest", side_effect=_fake_cpu_run), \
+                     patch.dict(
+                         sys.modules,
+                         {
+                             "src.parameter_simulation_gpu": fake_sim_module,
+                             "src.debug_gpu_single_run": fake_gpu_module,
+                             "src.performance_analyzer": fake_perf_module,
+                         },
+                     ):
+                    wfo.run_walk_forward_analysis()
+
+                result_dirs = sorted(glob.glob(os.path.join("results", "wfo_run_*")))
+                self.assertEqual(len(result_dirs), 1)
+                result_dir = result_dirs[0]
+                final_candidate_manifest = json.loads(
+                    Path(result_dir, "final_candidate_manifest.json").read_text(encoding="utf-8")
+                )
+                holdout_manifest = json.loads(
+                    Path(result_dir, "holdout_manifest.json").read_text(encoding="utf-8")
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(final_candidate_manifest["cpu_audit_outcome"], "pass")
+        self.assertTrue(final_candidate_manifest["holdout_ready"])
+        self.assertEqual(final_candidate_manifest["holdout_execution_status"], "executed")
+        self.assertTrue(final_candidate_manifest["holdout_attempted"])
+        self.assertTrue(final_candidate_manifest["holdout_success"])
+        self.assertFalse(final_candidate_manifest["holdout_blocked"])
+        self.assertTrue(holdout_manifest["holdout_backtest_executed"])
+        self.assertTrue(holdout_manifest["holdout_backtest_attempted"])
+        self.assertTrue(holdout_manifest["holdout_backtest_success"])
+        self.assertFalse(holdout_manifest["holdout_backtest_blocked"])
+        self.assertEqual(holdout_manifest["trade_count"], 3)
+        self.assertEqual(holdout_manifest["closed_trade_count"], 1)
+        self.assertEqual(holdout_manifest["distinct_entry_months"], 2)
+        self.assertTrue(holdout_manifest["holdout_auto_execute"])
+        self.assertTrue(holdout_manifest["holdout_candidate_hash_verified"])
+        self.assertIn("holdout_too_short=334<730", holdout_manifest["reasons"])
+
+    def test_promotion_lane_auto_execute_blocks_when_no_candidate_passes_hard_gate(self):
+        config = self._promotion_config()
+        config["walk_forward_settings"]["holdout_auto_execute"] = True
+        config["walk_forward_settings"]["selection_contract"] = {
+            "min_promotion_fold_pass_rate": 1.1,
+        }
+
+        def _fake_find_optimal_parameters(*args, **kwargs):
+            raise AssertionError("promotion lane should not call find_optimal_parameters")
+
+        def _fake_run_single_backtest(*, start_date, end_date, params_dict, initial_cash):
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            duration_days = int((end - start).days + 1)
+            if duration_days > 365:
+                factor = 1.30 if int(params_dict["max_stocks"]) == 30 else 1.10
+                return pd.Series(
+                    [initial_cash, initial_cash * factor],
+                    index=pd.to_datetime([start_date, end_date]),
+                )
+            factor = 1.20 if int(params_dict["max_stocks"]) == 30 else 1.05
+            return pd.Series(
+                [initial_cash, initial_cash * factor],
+                index=pd.to_datetime([start_date, end_date]),
+            )
+
+        def _unexpected_cpu_run(*args, **kwargs):
+            raise AssertionError("auto_execute should be blocked before CPU audit or holdout")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            pd.DataFrame(
+                [
+                    {
+                        "max_stocks": 20,
+                        "order_investment_ratio": 0.02,
+                        "additional_buy_drop_rate": 0.04,
+                        "sell_profit_rate": 0.05,
+                        "additional_buy_priority": 0.0,
+                        "stop_loss_rate": -0.15,
+                        "max_splits_limit": 10,
+                        "max_inactivity_period": 90,
+                    },
+                    {
+                        "max_stocks": 30,
+                        "order_investment_ratio": 0.03,
+                        "additional_buy_drop_rate": 0.05,
+                        "sell_profit_rate": 0.06,
+                        "additional_buy_priority": 1.0,
+                        "stop_loss_rate": -0.10,
+                        "max_splits_limit": 15,
+                        "max_inactivity_period": 60,
+                    },
+                ]
+            ).to_csv(shortlist_path, index=False)
+            config["walk_forward_settings"]["promotion_shortlist_path"] = shortlist_path.as_posix()
+            previous_cwd = os.getcwd()
+            os.chdir(tmp_dir)
+            try:
+                fake_sim_module = types.ModuleType("src.parameter_simulation_gpu")
+                fake_sim_module.find_optimal_parameters = _fake_find_optimal_parameters
+                fake_gpu_module = types.ModuleType("src.debug_gpu_single_run")
+                fake_gpu_module.run_single_backtest = _fake_run_single_backtest
+                fake_perf_module = types.ModuleType("src.performance_analyzer")
+                fake_perf_module.PerformanceAnalyzer = _FakePerformanceAnalyzer
+
+                with patch("src.analysis.walk_forward_analyzer.load_config", return_value=config), \
+                     patch("src.analysis.walk_forward_analyzer.plot_wfo_results", return_value=None), \
+                     patch("src.analysis.walk_forward_analyzer.run_cpu_single_backtest", side_effect=_unexpected_cpu_run), \
+                     patch.dict(
+                         sys.modules,
+                         {
+                             "src.parameter_simulation_gpu": fake_sim_module,
+                             "src.debug_gpu_single_run": fake_gpu_module,
+                             "src.performance_analyzer": fake_perf_module,
+                         },
+                     ):
+                    wfo.run_walk_forward_analysis()
+
+                result_dirs = sorted(glob.glob(os.path.join("results", "wfo_run_*")))
+                self.assertEqual(len(result_dirs), 1)
+                result_dir = result_dirs[0]
+                final_candidate_manifest = json.loads(
+                    Path(result_dir, "final_candidate_manifest.json").read_text(encoding="utf-8")
+                )
+                holdout_manifest = json.loads(
+                    Path(result_dir, "holdout_manifest.json").read_text(encoding="utf-8")
+                )
+                lane_manifest = json.loads(
+                    Path(result_dir, "lane_manifest.json").read_text(encoding="utf-8")
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertFalse(final_candidate_manifest["champion_hard_gate_pass"])
+        self.assertEqual(final_candidate_manifest["cpu_audit_outcome"], "blocked_preconditions")
+        self.assertEqual(final_candidate_manifest["holdout_execution_status"], "blocked")
+        self.assertFalse(final_candidate_manifest["holdout_attempted"])
+        self.assertFalse(final_candidate_manifest["holdout_success"])
+        self.assertTrue(final_candidate_manifest["holdout_blocked"])
+        self.assertIn("no_candidate_passed_hard_gate", final_candidate_manifest["holdout_execution_reasons"])
+        self.assertFalse(holdout_manifest["holdout_backtest_attempted"])
+        self.assertFalse(holdout_manifest["holdout_backtest_success"])
+        self.assertTrue(holdout_manifest["holdout_backtest_blocked"])
+        self.assertIsNone(holdout_manifest["holdout_candidate_hash_verified"])
+        self.assertIn("final_candidate_no_hard_gate_pass", lane_manifest["reasons"])
 
     def test_research_lane_uses_frozen_shortlist_multi_anchor_without_composite_curve(self):
         config = self._promotion_config()

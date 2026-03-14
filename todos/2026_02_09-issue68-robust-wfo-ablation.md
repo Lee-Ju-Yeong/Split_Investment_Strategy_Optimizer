@@ -1,11 +1,11 @@
 # Issue #68: Robust WFO / Ablation
 
 > Type: `implementation`
-> Status: `planned`
+> Status: `in_progress`
 > Priority: `P2`
 > Last updated: `2026-03-14`
 > Related issues: `#68`, `#56`, `#67`, `#101`
-> Gate status: `not started`
+> Gate status: `implementation in progress`
 
 ## Summary
 - What:
@@ -21,9 +21,12 @@
   - `strict_only_governance` observation gate는 `lane_manifest.json`, `holdout_manifest.json`이 없으면 clean pass가 되지 않도록 막기 시작했다.
   - `promotion_evaluation`은 `promotion_shortlist_path`를 받아 frozen shortlist 기반 single-anchor non-overlap anchored WFO를 실행할 수 있다.
   - promotion lane은 CPU audit이 `pass`가 아니면 clean approval lane으로 읽지 않도록 reason을 남긴다.
+  - `promotion_candidate_summary.csv`와 `final_candidate_manifest.json`이 추가되어, holdout 직전 `single champion + pre-locked reserve succession` 계약을 artifact로 남기기 시작했다.
+  - `holdout_auto_execute=true`일 때는 `final_candidate_manifest.json`의 champion만 CPU로 holdout을 실행하고, adequacy metric을 계산해 `holdout_manifest.json`에 기록할 수 있다.
+  - 단, 이 자동 실행은 `holdout_start/end configured + champion_hard_gate_pass + final candidate CPU audit pass`일 때만 시도된다.
   - `research_start_date_robustness`는 `research_shortlist_path + research_anchor_start_dates`가 주어지면 frozen shortlist multi-anchor evaluation을 실행할 수 있다.
   - research lane은 `anchor_manifest.json`, `research_anchor_fold_metrics.csv`, `research_metric_distribution_summary.json`을 남기고 단일 합성 curve는 만들지 않는다.
-  - 하지만 `hard gate`, `robust score`, `lane_mode`, `holdout 경계`, `artifact guardrail`은 아직 공식 구현 전이다.
+  - 하지만 `hard gate` 공식식, `robust score` 공식식, reserve 자동 승계, governance의 `final_candidate_manifest` 직접 소비는 아직 공식 구현 전이다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
   - 추가 숙의 결과, 이 전략의 분할 진입 특성상 `1년 미만 holdout`은 최종 승인용으로 약하다는 쪽으로 기울었다.
   - 따라서 구현 목표는 `approval-grade holdout >= 24개월`을 기본값으로 두고, 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급하는 것이다.
@@ -141,10 +144,10 @@
     - `(mean - k*std) * log1p(cluster_size)`
   - 용도:
     - `hard gate` 통과 후보 안에서만 tie-break
-- [ ] `lane_mode` 분기 구현
+- [x] `lane_mode` 분기 구현
   - `research_start_date_robustness`
   - `promotion_evaluation`
-- [ ] research lane guardrail 구현
+- [x] research lane guardrail 구현
   - carry-over 금지
   - `single composite equity curve` 금지
   - `frozen_shortlist_multi_anchor_eval`만 공식 mode로 허용
@@ -159,12 +162,16 @@
 - [ ] shortlist freeze contract 구현
   - `research_data_cutoff <= 2024-12-31`
   - holdout 시작 후 후보 수정 금지
-- [ ] final candidate selection contract 구현
+- [x] final candidate selection contract 구현
   - `promotion_candidate_fold_metrics.csv`
   - `promotion_candidate_summary.csv`
   - `final_candidate_manifest.json`
   - `single champion + pre-locked reserve succession`
   - holdout은 manifest에 봉인된 champion만 입력으로 받음
+  - current v1:
+    - `hard gate -> deterministic tie-break -> single champion`
+    - reserve는 holdout 비교 pack이 아니라 `non-performance failure` 발생 시에만 미리 고정된 순서대로 승계
+    - `weighted super-score` selector는 아직 쓰지 않음
 - [ ] 행동지표 feature 실험
   - `trade_count`
   - `closed_trade_count`
@@ -189,10 +196,12 @@
   - `holdout_manifest.json`
     - 현재 상태:
       - WFO 결과 폴더에 저장 시작
-      - 아직 holdout 백테스트 자동 실행은 연결 전
+      - `holdout_auto_execute=true`일 때는 champion 기준 holdout 실행/adequacy 자동 기록 가능
+      - holdout 상태는 `attempted / success / blocked`로 나눠 기록 시작
   - `final_candidate_manifest.json`
     - 현재 상태:
-      - promotion lane에서 champion/reserve 봉인 artifact로 추가 진행 중
+      - promotion lane에서 champion/reserve 봉인 artifact로 생성
+      - `champion_params`, `reserve_candidates`, `final_candidate_hash`를 함께 남겨 holdout 입력 계약으로 사용 가능
   - `anchor_manifest.json`
   - research lane의 `anchor/fold metric distribution summary`
 
@@ -213,6 +222,9 @@
 - 기본 산출물:
   - `fold_gate_report`
   - 최종 robust parameter CSV
+  - `promotion_candidate_fold_metrics.csv`
+  - `promotion_candidate_summary.csv`
+  - `final_candidate_manifest.json`
   - `lane_manifest.json`
   - `holdout_manifest.json`
 

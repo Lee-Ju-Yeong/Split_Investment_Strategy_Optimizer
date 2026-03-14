@@ -158,6 +158,7 @@ walk_forward_settings:
   # Optional holdout window for `holdout_manifest.json`.
   holdout_start: "2025-01-01"
   holdout_end: "2025-11-30"
+  holdout_auto_execute: false
   holdout_contaminated_ranges:
     - start: "2025-12-01"
       end: "2026-01-31"

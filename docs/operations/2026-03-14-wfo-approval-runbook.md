@@ -90,7 +90,7 @@ git status --short --branch
 ```
 - WFO 관련 설정과 holdout 메타데이터 확인:
 ```bash
-rg -n "walk_forward_settings|lane_type|promotion_shortlist_path|research_shortlist_path|holdout_start|holdout_end" config/config.yaml
+rg -n "walk_forward_settings|lane_type|promotion_shortlist_path|research_shortlist_path|holdout_start|holdout_end|holdout_auto_execute" config/config.yaml
 ```
 - GPU 파라미터 simulation 실행:
 ```bash
@@ -202,6 +202,22 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `promotion_candidate_fold_metrics.csv`
   - `promotion_candidate_summary.csv`
   - `final_candidate_manifest.json`
+- selection contract v1:
+  - 먼저 `hard gate`로 후보를 자른다.
+  - 그다음 남은 후보 안에서 deterministic tie-break로 순위를 고정한다.
+  - 최종적으로 `single champion` 1개만 holdout에 들어간다.
+  - `reserve`는 둘 수 있지만, 이것은 holdout에서 여러 후보를 비교하자는 뜻이 아니다.
+  - reserve는 `CPU audit fail`, `hash mismatch`, `artifact invalidation` 같은 비성능 사유가 있을 때만, 미리 봉인된 순서대로 승계할 수 있다.
+- 현재 v1 tie-break:
+  - `hard_gate_pass`
+  - `promotion_fold_pass_rate`
+  - `promotion_oos_calmar_median`
+  - `promotion_oos_mdd_depth_worst`
+  - `promotion_oos_cagr_median`
+  - 마지막 동점이면 `candidate_signature`
+- 현재 v1에서 일부러 하지 않는 것:
+  - weighted super-score로 한 숫자만 만들어 최종 선정하기
+  - holdout에 후보 pack을 넣고 나중에 더 좋은 것을 고르기
 - 여기서 할 수 있는 말:
   - `고정 출발점 기준 시간 전이 검증을 통과했다`
 
@@ -212,6 +228,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - audit은 `다시 최적화`가 아니다.
   - `pass/fail`에 가깝다.
   - `final_candidate_manifest.json`의 champion/reserve 순서를 바꾸는 용도로 쓰면 안 된다.
+  - champion이 CPU audit에서 비성능 사유로 탈락하면, holdout 전에만 reserve가 미리 정해진 순서대로 승계할 수 있다.
 - 여기서 하면 안 되는 것:
   - CPU 결과를 보고 사실상 새 후보를 다시 뽑기
 
@@ -222,9 +239,13 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
 - 현재 구현 상태:
   - `holdout_start`, `holdout_end`를 config에 넣으면 `holdout_manifest.json`이 함께 저장된다.
-  - 아직 holdout 백테스트 자체가 자동 실행되는 것은 아니므로, manifest에 `holdout_backtest_not_executed`가 남고 `approval_eligible=false`로 유지된다.
+  - `holdout_auto_execute=true`를 같이 넣으면, promotion lane이 끝난 뒤 `final_candidate_manifest.json`의 champion만 CPU로 holdout을 실행한다.
+  - 단, 이 자동 실행은 `holdout window가 설정되어 있고`, `champion이 hard gate를 통과했고`, `final candidate CPU audit`까지 pass인 경우에만 시도된다.
+  - `holdout_auto_execute=false`면 holdout 정책 메타데이터만 남기고, manifest에 `holdout_backtest_not_attempted`가 남는다.
   - `promotion_WFO_end < holdout_start` 여부도 manifest에 함께 남긴다.
-  - `final_candidate_manifest.json`은 holdout 직전 champion/reserve 봉인용이고, 아직 final candidate CPU audit/holdout 실행이 안 끝났으면 `holdout_ready=false`로 남는다.
+  - `final_candidate_manifest.json`은 holdout 직전 champion/reserve 봉인용이고, `champion_params`와 `reserve_candidates`까지 포함해서 holdout 입력 계약을 self-contained하게 남긴다.
+  - `holdout_auto_execute=true`일 때는 `final candidate CPU audit -> holdout 실행 -> adequacy metric 계산`까지 이어지고, 결과가 manifest에 다시 반영된다.
+  - holdout 결과는 이제 `attempted / success / blocked`를 나눠 기록한다. 그래서 “아예 안 돌렸다”, “돌렸는데 막혔다”, “성공적으로 끝났다”를 구분할 수 있다.
 - 현재 저장소 상태:
   - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`
 - 아주 쉽게 말하면:
@@ -298,9 +319,13 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - simulation 결과
 - shortlist
 - selection audit
+- `promotion_candidate_fold_metrics.csv`
+- `promotion_candidate_summary.csv`
+- `final_candidate_manifest.json`
 - lane manifest
 - holdout manifest
-- final candidate manifest
+- `holdout_backtest_summary.json` (`holdout_auto_execute=true`일 때)
+- `holdout_equity_curve_data.csv` (`holdout_auto_execute=true`일 때)
 - research 분포 요약
 - promotion fold 결과
 

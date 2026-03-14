@@ -147,7 +147,10 @@ def build_holdout_manifest(
     wfo_end,
     contaminated_ranges=None,
     adequacy_metrics=None,
-    holdout_backtest_executed: bool = False,
+    holdout_backtest_executed: bool | None = None,
+    holdout_backtest_attempted: bool | None = None,
+    holdout_backtest_success: bool | None = None,
+    holdout_backtest_blocked: bool = False,
     min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
 ) -> dict:
     policy = evaluate_holdout_policy(
@@ -160,16 +163,34 @@ def build_holdout_manifest(
     )
     adequacy = dict(adequacy_metrics or {})
     reasons = list(policy["reasons"])
-    if not holdout_backtest_executed:
-        reasons.append("holdout_backtest_not_executed")
-    approval_eligible = bool(policy["approval_eligible"]) and bool(holdout_backtest_executed)
+    attempted = (
+        bool(holdout_backtest_executed)
+        if holdout_backtest_attempted is None
+        else bool(holdout_backtest_attempted)
+    )
+    success = (
+        bool(holdout_backtest_executed)
+        if holdout_backtest_success is None
+        else bool(holdout_backtest_success)
+    )
+    blocked = bool(holdout_backtest_blocked)
+    if not attempted:
+        reasons.append("holdout_backtest_not_attempted")
+    elif not success:
+        reasons.append("holdout_backtest_not_successful")
+    if blocked:
+        reasons.append("holdout_backtest_blocked")
+    approval_eligible = bool(policy["approval_eligible"]) and bool(success)
     holdout_class = "approval_grade" if approval_eligible else "internal_provisional"
     return {
         "holdout_start": policy["holdout_start"],
         "holdout_end": policy["holdout_end"],
         "wfo_end": policy["wfo_end"],
         "holdout_date_reuse_forbidden": True,
-        "holdout_backtest_executed": bool(holdout_backtest_executed),
+        "holdout_backtest_executed": attempted,
+        "holdout_backtest_attempted": attempted,
+        "holdout_backtest_success": success,
+        "holdout_backtest_blocked": blocked,
         "parity_canary_excluded_ranges": policy["contaminated_ranges"],
         "holdout_class": holdout_class,
         "holdout_length_days": policy["holdout_length_days"],
@@ -234,6 +255,9 @@ def _build_unconfigured_holdout_manifest(
         "wfo_end": _coerce_date(wfo_end).isoformat(),
         "holdout_date_reuse_forbidden": True,
         "holdout_backtest_executed": False,
+        "holdout_backtest_attempted": False,
+        "holdout_backtest_success": False,
+        "holdout_backtest_blocked": False,
         "parity_canary_excluded_ranges": _normalize_contaminated_ranges(contaminated_ranges),
         "holdout_class": "unconfigured",
         "holdout_length_days": None,
@@ -249,7 +273,7 @@ def _build_unconfigured_holdout_manifest(
         "realized_split_depth": None,
         "avg_invested_capital_ratio": None,
         "cash_drag_ratio": None,
-        "reasons": ["holdout_window_missing", "holdout_backtest_not_executed"],
+        "reasons": ["holdout_window_missing", "holdout_backtest_not_attempted"],
     }
 
 
@@ -320,6 +344,7 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
         "holdout_end": wfo_settings.get("holdout_end")
         or wfo_settings.get("internal_provisional_holdout_end"),
         "contaminated_ranges": contaminated_ranges,
+        "auto_execute": bool(wfo_settings.get("holdout_auto_execute", False)),
     }
 
 
@@ -437,6 +462,8 @@ def _resolve_selection_contract_settings(wfo_settings: dict) -> dict:
             settings.get("per_fold_min_oos_calmar_ratio", 0.0)
         ),
         "reserve_count": max(int(settings.get("reserve_count", 2) or 2), 0),
+        "selection_mode": "single_champion_only",
+        "reserve_succession_rule": "prelocked_non_performance_only",
         "tie_break_rule": [
             "hard_gate_pass desc",
             "promotion_fold_pass_rate desc",
@@ -876,6 +903,17 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
             if not oos_mdd_depth_series.empty
             else None
         )
+        hard_gate_fail_reasons = []
+        if ratio_median is None:
+            hard_gate_fail_reasons.append("promotion_oos_is_calmar_ratio_median_missing")
+        elif ratio_median < selection_settings["min_oos_is_calmar_ratio_median"]:
+            hard_gate_fail_reasons.append("promotion_oos_is_calmar_ratio_median_below_min")
+        if fold_pass_rate < selection_settings["min_promotion_fold_pass_rate"]:
+            hard_gate_fail_reasons.append("promotion_fold_pass_rate_below_min")
+        if oos_mdd_depth_p95 is None:
+            hard_gate_fail_reasons.append("promotion_oos_mdd_depth_p95_missing")
+        elif oos_mdd_depth_p95 > selection_settings["max_oos_mdd_depth_p95"]:
+            hard_gate_fail_reasons.append("promotion_oos_mdd_depth_p95_above_max")
         hard_gate_pass = (
             ratio_median is not None
             and ratio_median >= selection_settings["min_oos_is_calmar_ratio_median"]
@@ -896,6 +934,7 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
                 "promotion_oos_mdd_depth_worst": oos_mdd_depth_worst,
                 "promotion_oos_is_calmar_ratio_median": ratio_median,
                 "hard_gate_pass": bool(hard_gate_pass),
+                "hard_gate_fail_reasons": ",".join(hard_gate_fail_reasons),
                 **{key: first_row.get(key) for key in _CPU_CERT_PARAM_KEYS},
             }
         )
@@ -915,6 +954,15 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
         kind="stable",
     ).reset_index(drop=True)
     summary_df["selection_rank"] = summary_df.index + 1
+    summary_df["selection_role"] = "ranked_only"
+    if bool(summary_df["hard_gate_pass"].any()):
+        passing_indices = summary_df.index[summary_df["hard_gate_pass"]].tolist()
+        summary_df.loc[passing_indices[0], "selection_role"] = "champion"
+        reserve_end = 1 + int(selection_settings["reserve_count"])
+        for index in passing_indices[1:reserve_end]:
+            summary_df.loc[index, "selection_role"] = "reserve"
+    else:
+        summary_df.loc[0, "selection_role"] = "provisional_champion_no_gate_pass"
     return summary_df
 
 
@@ -933,17 +981,32 @@ def _build_final_candidate_manifest(
     if candidate_summary_df.empty:
         raise ValueError("Promotion candidate summary is empty.")
     champion = candidate_summary_df.iloc[0].to_dict()
+    champion_params = _extract_strategy_params(champion, {})
     reserve_count = selection_settings["reserve_count"]
+    passing_summary_df = candidate_summary_df[candidate_summary_df["hard_gate_pass"]].reset_index(drop=True)
+    reserve_rows_df = passing_summary_df.iloc[1 : 1 + reserve_count]
     reserve_candidate_ids = [
         int(item)
-        for item in candidate_summary_df["shortlist_candidate_id"].iloc[1 : 1 + reserve_count].tolist()
+        for item in reserve_rows_df["shortlist_candidate_id"].tolist()
     ]
+    reserve_candidate_signatures = reserve_rows_df["candidate_signature"].tolist()
+    reserve_candidates = []
+    for _, reserve_row in reserve_rows_df.iterrows():
+        reserve_record = reserve_row.to_dict()
+        reserve_candidates.append(
+            {
+                "candidate_id": int(reserve_record["shortlist_candidate_id"]),
+                "candidate_signature": reserve_record["candidate_signature"],
+                "params": _extract_strategy_params(reserve_record, {}),
+            }
+        )
     ranking_records = candidate_summary_df[
         [
             "selection_rank",
             "shortlist_candidate_id",
             "candidate_signature",
             "hard_gate_pass",
+            "hard_gate_fail_reasons",
             "promotion_fold_pass_rate",
             "promotion_oos_calmar_median",
             "promotion_oos_mdd_depth_worst",
@@ -953,7 +1016,7 @@ def _build_final_candidate_manifest(
     champion_payload = {
         "shortlist_candidate_id": int(champion["shortlist_candidate_id"]),
         "candidate_signature": champion["candidate_signature"],
-        **{key: champion.get(key) for key in _CPU_CERT_PARAM_KEYS},
+        "params": champion_params,
     }
     readiness_reasons = []
     if not bool(champion.get("hard_gate_pass")):
@@ -962,6 +1025,7 @@ def _build_final_candidate_manifest(
         readiness_reasons.append("final_candidate_cpu_audit_not_executed")
     return {
         "selection_contract_version": selection_settings["selection_contract_version"],
+        "selection_mode": selection_settings["selection_mode"],
         "hard_gate_version": selection_settings["hard_gate_version"],
         "hard_gate_thresholds": {
             "min_promotion_fold_pass_rate": selection_settings["min_promotion_fold_pass_rate"],
@@ -970,6 +1034,9 @@ def _build_final_candidate_manifest(
             "per_fold_min_oos_calmar_ratio": selection_settings["per_fold_min_oos_calmar_ratio"],
         },
         "tie_break_rule": list(selection_settings["tie_break_rule"]),
+        "holdout_candidate_count": 1,
+        "holdout_candidate_pack_forbidden": True,
+        "holdout_selection_forbidden": True,
         "decision_date": _coerce_date(decision_date or datetime.now()).isoformat(),
         "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
         "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
@@ -980,14 +1047,323 @@ def _build_final_candidate_manifest(
         "final_candidate_hash": _hash_json_sha256(champion_payload),
         "champion_candidate_id": int(champion["shortlist_candidate_id"]),
         "champion_candidate_signature": champion["candidate_signature"],
+        "champion_params": champion_params,
         "reserve_candidate_ids": reserve_candidate_ids,
+        "reserve_candidate_signatures": reserve_candidate_signatures,
+        "reserve_candidates": reserve_candidates,
+        "reserve_succession_rule": selection_settings["reserve_succession_rule"],
+        "reserve_promotion_allowed_reasons": [
+            "final_candidate_cpu_audit_fail",
+            "final_candidate_hash_mismatch",
+            "artifact_invalidation",
+        ],
         "champion_hard_gate_pass": bool(champion.get("hard_gate_pass")),
+        "hard_gate_results_by_candidate": ranking_records,
         "cpu_audit_required": bool(cpu_audit_required),
         "cpu_audit_outcome": "pending_final_candidate_audit" if cpu_audit_required else "disabled",
         "holdout_ready": not readiness_reasons,
         "holdout_readiness_reasons": readiness_reasons,
+        "holdout_execution_status": "not_requested",
+        "holdout_execution_reasons": [],
+        "holdout_attempted": False,
+        "holdout_success": False,
+        "holdout_blocked": False,
+        "holdout_summary_path": None,
+        "holdout_curve_path": None,
         "engine_version_hash": engine_version_hash or "unknown",
     }
+
+
+def _build_final_candidate_payload(manifest: dict) -> dict:
+    return {
+        "shortlist_candidate_id": int(manifest["champion_candidate_id"]),
+        "candidate_signature": manifest["champion_candidate_signature"],
+        "params": dict(manifest.get("champion_params") or {}),
+    }
+
+
+def _build_holdout_auto_execute_block_reasons(
+    final_candidate_manifest: dict,
+    *,
+    holdout_start,
+    holdout_end,
+) -> list[str]:
+    reasons = []
+    if not holdout_start or not holdout_end:
+        reasons.append("holdout_window_missing_for_auto_execute")
+    if not bool(final_candidate_manifest.get("champion_hard_gate_pass")):
+        reasons.append("no_candidate_passed_hard_gate")
+    if not dict(final_candidate_manifest.get("champion_params") or {}):
+        reasons.append("champion_params_missing")
+    return reasons
+
+
+def _run_final_candidate_cpu_audit(
+    base_config: dict,
+    final_candidate_manifest: dict,
+    *,
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+) -> dict:
+    audit_result = {
+        "executed": True,
+        "cpu_audit_outcome": "fail",
+        "promotion_blocked": True,
+        "reasons": [],
+        "metrics": {},
+    }
+    try:
+        _curve, cpu_result = run_cpu_single_backtest(
+            base_config,
+            start_date=start_date,
+            end_date=end_date,
+            params_dict=dict(final_candidate_manifest.get("champion_params") or {}),
+            initial_cash=initial_cash,
+        )
+    except Exception as exc:  # pragma: no cover - defensive path
+        audit_result["reasons"] = [f"final_candidate_cpu_audit_exception={type(exc).__name__}"]
+        return audit_result
+
+    success = bool(cpu_result.get("success", False))
+    promotion_blocked = bool(cpu_result.get("promotion_blocked", not success))
+    reasons = list(cpu_result.get("promotion_block_reasons") or [])
+    if not success:
+        reasons.append("final_candidate_cpu_audit_failed")
+    if promotion_blocked:
+        reasons.append("final_candidate_cpu_audit_promotion_blocked")
+    audit_result.update(
+        {
+            "cpu_audit_outcome": "pass" if success and not promotion_blocked else "fail",
+            "promotion_blocked": promotion_blocked,
+            "reasons": reasons,
+            "metrics": dict(cpu_result.get("metrics") or {}),
+        }
+    )
+    return audit_result
+
+
+def _compute_holdout_adequacy_metrics(cpu_result: dict, *, max_stocks: int) -> dict:
+    import pandas as pd
+
+    trade_df = pd.DataFrame(cpu_result.get("trade_history") or [])
+    daily_df = pd.DataFrame(cpu_result.get("daily_snapshots") or [])
+
+    trade_count = int(len(trade_df))
+    if trade_df.empty:
+        closed_trade_count = 0
+        avg_hold_days = 0.0
+        distinct_entry_months = 0
+        realized_split_depth = 0.0
+    else:
+        trade_df = trade_df.copy()
+        trade_df["date"] = pd.to_datetime(trade_df["date"])
+        closed_trade_count = int((trade_df["trade_type"] == "SELL").sum())
+        buy_df = trade_df[trade_df["trade_type"] == "BUY"].copy()
+        realized_split_depth = (
+            float(pd.to_numeric(buy_df["order"], errors="coerce").max())
+            if not buy_df.empty
+            else 0.0
+        )
+        distinct_entry_months = (
+            int(buy_df["date"].dt.to_period("M").nunique())
+            if not buy_df.empty
+            else 0
+        )
+        buy_lookup = {}
+        hold_days = []
+        for record in trade_df.sort_values("date").to_dict("records"):
+            trade_type = str(record.get("trade_type") or "").upper()
+            code = str(record.get("code") or "")
+            order = int(record.get("order") or 0)
+            key = (code, order)
+            if trade_type == "BUY":
+                buy_lookup[key] = pd.to_datetime(record["date"])
+                continue
+            if trade_type != "SELL" or key not in buy_lookup:
+                continue
+            hold_days.append(float((pd.to_datetime(record["date"]) - buy_lookup[key]).days))
+        avg_hold_days = float(sum(hold_days) / len(hold_days)) if hold_days else 0.0
+
+    if daily_df.empty:
+        peak_slot_utilization = 0.0
+        avg_invested_capital_ratio = 0.0
+        cash_drag_ratio = 1.0
+    else:
+        daily_df = daily_df.copy()
+        total_value = pd.to_numeric(daily_df.get("total_value"), errors="coerce")
+        cash = pd.to_numeric(daily_df.get("cash"), errors="coerce")
+        stock_count = pd.to_numeric(daily_df.get("stock_count"), errors="coerce")
+        valid_total_mask = total_value.fillna(0) > 0
+        invested_ratio = ((total_value - cash) / total_value).where(valid_total_mask, 0.0)
+        cash_ratio = (cash / total_value).where(valid_total_mask, 1.0)
+        avg_invested_capital_ratio = float(invested_ratio.fillna(0.0).mean())
+        cash_drag_ratio = float(cash_ratio.fillna(1.0).mean())
+        denominator = max(float(max_stocks), 1.0)
+        peak_slot_utilization = float((stock_count.fillna(0.0) / denominator).max())
+
+    return {
+        "trade_count": trade_count,
+        "closed_trade_count": closed_trade_count,
+        "avg_hold_days": avg_hold_days,
+        "distinct_entry_months": distinct_entry_months,
+        "peak_slot_utilization": peak_slot_utilization,
+        "realized_split_depth": realized_split_depth,
+        "avg_invested_capital_ratio": avg_invested_capital_ratio,
+        "cash_drag_ratio": cash_drag_ratio,
+    }
+
+
+def _run_holdout_from_final_candidate_manifest(
+    base_config: dict,
+    final_candidate_manifest: dict,
+    *,
+    holdout_start: str,
+    holdout_end: str,
+    initial_cash: float,
+    results_dir: str,
+) -> dict:
+    import pandas as pd
+
+    payload = _build_final_candidate_payload(final_candidate_manifest)
+    resolved_hash = _hash_json_sha256(payload)
+    if resolved_hash != str(final_candidate_manifest.get("final_candidate_hash") or ""):
+        return {
+            "attempted": False,
+            "success": False,
+            "blocked": True,
+            "candidate_hash_verified": False,
+            "reasons": ["final_candidate_hash_mismatch"],
+            "adequacy_metrics": {},
+            "metrics": {},
+            "summary_path": None,
+            "curve_path": None,
+        }
+
+    try:
+        curve, cpu_result = run_cpu_single_backtest(
+            base_config,
+            start_date=holdout_start,
+            end_date=holdout_end,
+            params_dict=dict(final_candidate_manifest.get("champion_params") or {}),
+            initial_cash=initial_cash,
+        )
+    except Exception as exc:  # pragma: no cover - defensive path
+        return {
+            "attempted": True,
+            "success": False,
+            "blocked": True,
+            "candidate_hash_verified": True,
+            "reasons": [f"holdout_backtest_exception={type(exc).__name__}"],
+            "adequacy_metrics": {},
+            "metrics": {},
+            "summary_path": None,
+            "curve_path": None,
+        }
+
+    success = bool(cpu_result.get("success", False))
+    promotion_blocked = bool(cpu_result.get("promotion_blocked", not success))
+    reasons = list(cpu_result.get("promotion_block_reasons") or [])
+    if not success:
+        reasons.append("holdout_backtest_failed")
+    if promotion_blocked:
+        reasons.append("holdout_backtest_promotion_blocked")
+    adequacy_metrics = _compute_holdout_adequacy_metrics(
+        cpu_result,
+        max_stocks=int(final_candidate_manifest["champion_params"]["max_stocks"]),
+    )
+    curve_path = None
+    if curve is not None and not curve.empty:
+        curve_path = os.path.join(results_dir, "holdout_equity_curve_data.csv")
+        curve.to_csv(curve_path)
+    summary_payload = {
+        "candidate_id": int(final_candidate_manifest["champion_candidate_id"]),
+        "candidate_hash": final_candidate_manifest["final_candidate_hash"],
+        "holdout_start": str(holdout_start),
+        "holdout_end": str(holdout_end),
+        "success": success,
+        "promotion_blocked": promotion_blocked,
+        "reasons": reasons,
+        "metrics": dict(cpu_result.get("metrics") or {}),
+        "adequacy_metrics": adequacy_metrics,
+        "curve_path": curve_path,
+    }
+    summary_path = _write_json_artifact(
+        os.path.join(results_dir, "holdout_backtest_summary.json"),
+        summary_payload,
+    )
+    return {
+        "attempted": True,
+        "success": success and not promotion_blocked,
+        "blocked": bool(promotion_blocked) or not bool(success),
+        "candidate_hash_verified": True,
+        "reasons": reasons,
+        "adequacy_metrics": adequacy_metrics,
+        "metrics": dict(cpu_result.get("metrics") or {}),
+        "summary_path": summary_path,
+        "curve_path": curve_path,
+    }
+
+
+def _update_final_candidate_manifest_for_holdout(
+    final_candidate_manifest: dict,
+    *,
+    cpu_audit_result: dict,
+    holdout_result: dict | None,
+) -> dict:
+    updated = dict(final_candidate_manifest)
+    updated["cpu_audit_outcome"] = cpu_audit_result["cpu_audit_outcome"]
+    updated["cpu_audit_reasons"] = list(cpu_audit_result.get("reasons") or [])
+    updated["cpu_audit_metrics"] = dict(cpu_audit_result.get("metrics") or {})
+
+    readiness_reasons = []
+    if not bool(updated.get("champion_hard_gate_pass")):
+        readiness_reasons.append("no_candidate_passed_hard_gate")
+    if updated["cpu_audit_outcome"] != "pass":
+        readiness_reasons.extend(updated["cpu_audit_reasons"] or ["final_candidate_cpu_audit_not_pass"])
+
+    if holdout_result is None:
+        updated["holdout_execution_status"] = "not_requested"
+        updated["holdout_execution_reasons"] = []
+        updated["holdout_attempted"] = False
+        updated["holdout_success"] = False
+        updated["holdout_blocked"] = False
+    elif holdout_result.get("success"):
+        updated["holdout_execution_status"] = "executed"
+        updated["holdout_execution_reasons"] = []
+        updated["holdout_summary_path"] = holdout_result.get("summary_path")
+        updated["holdout_curve_path"] = holdout_result.get("curve_path")
+    else:
+        updated["holdout_execution_status"] = (
+            "blocked" if holdout_result.get("blocked") else "failed"
+        )
+        updated["holdout_execution_reasons"] = list(holdout_result.get("reasons") or [])
+        updated["holdout_summary_path"] = holdout_result.get("summary_path")
+        updated["holdout_curve_path"] = holdout_result.get("curve_path")
+    if holdout_result is not None:
+        updated["holdout_attempted"] = bool(holdout_result.get("attempted"))
+        updated["holdout_success"] = bool(holdout_result.get("success"))
+        updated["holdout_blocked"] = bool(holdout_result.get("blocked"))
+
+    updated["holdout_ready"] = not readiness_reasons
+    updated["holdout_readiness_reasons"] = readiness_reasons
+    return updated
+
+
+def _build_final_candidate_gate_reasons(final_candidate_manifest: dict | None) -> list[str]:
+    if final_candidate_manifest is None:
+        return []
+    reasons = []
+    if not bool(final_candidate_manifest.get("champion_hard_gate_pass")):
+        reasons.append("final_candidate_no_hard_gate_pass")
+    cpu_audit_required = bool(final_candidate_manifest.get("cpu_audit_required"))
+    cpu_audit_outcome = str(final_candidate_manifest.get("cpu_audit_outcome") or "unknown")
+    if cpu_audit_required and cpu_audit_outcome != "pass":
+        reasons.append(f"final_candidate_cpu_audit_outcome={cpu_audit_outcome}")
+    holdout_status = str(final_candidate_manifest.get("holdout_execution_status") or "unknown")
+    if holdout_status in {"blocked", "failed"}:
+        reasons.append(f"final_candidate_holdout_execution_status={holdout_status}")
+    return reasons
 
 
 def _build_metric_distribution_summary(metrics_df, metric_columns: tuple[str, ...]) -> dict:
@@ -1579,7 +1955,9 @@ def _run_research_start_date_robustness(
             wfo_end=pd.to_datetime(backtest_settings["end_date"]).date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_metrics={},
-            holdout_backtest_executed=False,
+            holdout_backtest_attempted=False,
+            holdout_backtest_success=False,
+            holdout_backtest_blocked=False,
         )
     else:
         holdout_manifest = _build_unconfigured_holdout_manifest(
@@ -1938,6 +2316,8 @@ def run_walk_forward_analysis():
    
     print(f"\n✅ Robust parameters for each fold saved to: {params_filepath}")
 
+    final_candidate_manifest = None
+    final_candidate_manifest_path = None
     if lane_type == "promotion_evaluation" and promotion_candidate_fold_frames:
         promotion_candidate_fold_df = pd.concat(
             promotion_candidate_fold_frames,
@@ -1974,31 +2354,118 @@ def run_walk_forward_analysis():
             or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
             cpu_audit_required=True,
         )
-        final_candidate_manifest_path = _write_json_artifact(
-            os.path.join(results_dir, "final_candidate_manifest.json"),
-            final_candidate_manifest,
-        )
         print(
             f"✅ Promotion candidate fold metrics saved to: {promotion_candidate_fold_path}"
         )
         print(
             f"✅ Promotion candidate summary saved to: {promotion_candidate_summary_path}"
         )
+
+    holdout_start = holdout_settings["holdout_start"]
+    holdout_end = holdout_settings["holdout_end"]
+    holdout_execution = None
+    final_candidate_cpu_audit = None
+    if final_candidate_manifest is not None:
+        if holdout_settings.get("auto_execute", False):
+            auto_execute_block_reasons = _build_holdout_auto_execute_block_reasons(
+                final_candidate_manifest,
+                holdout_start=holdout_start,
+                holdout_end=holdout_end,
+            )
+            if auto_execute_block_reasons:
+                final_candidate_cpu_audit = {
+                    "executed": False,
+                    "cpu_audit_outcome": "blocked_preconditions",
+                    "promotion_blocked": True,
+                    "reasons": auto_execute_block_reasons,
+                    "metrics": {},
+                }
+                holdout_execution = {
+                    "attempted": False,
+                    "success": False,
+                    "blocked": True,
+                    "candidate_hash_verified": None,
+                    "reasons": auto_execute_block_reasons,
+                    "adequacy_metrics": {},
+                    "metrics": {},
+                    "summary_path": None,
+                    "curve_path": None,
+                }
+            else:
+                final_candidate_cpu_audit = _run_final_candidate_cpu_audit(
+                    config,
+                    final_candidate_manifest,
+                    start_date=total_start_date.date().isoformat(),
+                    end_date=total_end_date.date().isoformat(),
+                    initial_cash=initial_cash,
+                )
+                if final_candidate_cpu_audit["cpu_audit_outcome"] == "pass":
+                    holdout_execution = _run_holdout_from_final_candidate_manifest(
+                        config,
+                        final_candidate_manifest,
+                        holdout_start=str(holdout_start),
+                        holdout_end=str(holdout_end),
+                        initial_cash=initial_cash,
+                        results_dir=results_dir,
+                    )
+                else:
+                    holdout_execution = {
+                        "attempted": False,
+                        "success": False,
+                        "blocked": True,
+                        "candidate_hash_verified": True,
+                        "reasons": ["final_candidate_cpu_audit_not_pass"],
+                        "adequacy_metrics": {},
+                        "metrics": {},
+                        "summary_path": None,
+                        "curve_path": None,
+                    }
+            final_candidate_manifest = _update_final_candidate_manifest_for_holdout(
+                final_candidate_manifest,
+                cpu_audit_result=final_candidate_cpu_audit,
+                holdout_result=holdout_execution,
+            )
+        final_candidate_manifest_path = _write_json_artifact(
+            os.path.join(results_dir, "final_candidate_manifest.json"),
+            final_candidate_manifest,
+        )
         print(
             f"✅ Final candidate manifest saved to: {final_candidate_manifest_path}"
         )
 
-    holdout_start = holdout_settings["holdout_start"]
-    holdout_end = holdout_settings["holdout_end"]
     if holdout_start and holdout_end:
+        holdout_adequacy_metrics = (
+            dict(holdout_execution.get("adequacy_metrics") or {})
+            if holdout_execution is not None
+            else {}
+        )
         holdout_manifest = build_holdout_manifest(
             holdout_start=holdout_start,
             holdout_end=holdout_end,
             wfo_end=total_end_date.date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
-            adequacy_metrics={},
-            holdout_backtest_executed=False,
+            adequacy_metrics=holdout_adequacy_metrics,
+            holdout_backtest_attempted=bool(holdout_execution and holdout_execution.get("attempted")),
+            holdout_backtest_success=bool(holdout_execution and holdout_execution.get("success")),
+            holdout_backtest_blocked=bool(holdout_execution and holdout_execution.get("blocked")),
         )
+        if final_candidate_manifest is not None:
+            holdout_manifest.update(
+                {
+                    "holdout_auto_execute": bool(holdout_settings.get("auto_execute", False)),
+                    "holdout_candidate_id": final_candidate_manifest["champion_candidate_id"],
+                    "holdout_candidate_hash": final_candidate_manifest["final_candidate_hash"],
+                    "holdout_candidate_hash_verified": (
+                        None
+                        if holdout_execution is None
+                        else holdout_execution.get("candidate_hash_verified")
+                    ),
+                    "final_candidate_manifest_path": final_candidate_manifest_path,
+                    "holdout_summary_path": None if holdout_execution is None else holdout_execution.get("summary_path"),
+                    "holdout_curve_path": None if holdout_execution is None else holdout_execution.get("curve_path"),
+                    "holdout_metrics": {} if holdout_execution is None else dict(holdout_execution.get("metrics") or {}),
+                }
+            )
     else:
         holdout_manifest = _build_unconfigured_holdout_manifest(
             wfo_end=total_end_date.date().isoformat(),
@@ -2012,6 +2479,7 @@ def run_walk_forward_analysis():
         overlap_days=overlap_days,
         cpu_audit_outcome=cpu_audit_outcome,
     )
+    lane_reasons.extend(_build_final_candidate_gate_reasons(final_candidate_manifest))
     lane_approval_eligible = bool(holdout_manifest.get("approval_eligible")) and not lane_reasons
     lane_manifest = build_lane_manifest(
         lane_type=lane_type,
