@@ -147,9 +147,28 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
 
         self.assertEqual(lane_type, "promotion_evaluation")
 
-    def test_research_lane_is_rejected_until_frozen_shortlist_path_lands(self):
-        with self.assertRaisesRegex(ValueError, "frozen shortlist multi-anchor evaluation"):
-            wfo._resolve_lane_type({"lane_type": "research_start_date_robustness"})
+    def test_resolve_lane_type_accepts_research_start_date_robustness(self):
+        lane_type = wfo._resolve_lane_type({"lane_type": "research_start_date_robustness"})
+
+        self.assertEqual(lane_type, "research_start_date_robustness")
+
+    def test_research_lane_requires_frozen_shortlist_path_and_anchor_dates(self):
+        with self.assertRaisesRegex(ValueError, "research_shortlist_path"):
+            wfo._resolve_research_runtime_settings({"research_mode": "frozen_shortlist_multi_anchor_eval"})
+
+    def test_build_anchor_manifest_records_anchor_contract(self):
+        manifest = wfo.build_anchor_manifest(
+            anchor_set_id="anchor_set_v1",
+            anchor_dates=["2014-01-01", "2015-01-01"],
+            anchor_spacing_rule="manual_explicit",
+            minimum_is_length_days=1826,
+            minimum_oos_length_days=365,
+            coverage_normalized=True,
+        )
+
+        self.assertEqual(manifest["anchor_set_id"], "anchor_set_v1")
+        self.assertEqual(manifest["anchor_dates"], ["2014-01-01", "2015-01-01"])
+        self.assertEqual(manifest["shortlist_freeze_mode"], "frozen_shortlist_multi_anchor_eval")
 
     def test_build_promotion_fold_periods_creates_single_anchor_non_overlap_schedule(self):
         fold_periods, overlap_days = wfo._build_promotion_fold_periods(
