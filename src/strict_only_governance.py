@@ -188,7 +188,10 @@ def _lane_manifest_reasons(index: int, manifest: Mapping[str, object]) -> list[s
     evidence_tier = str(manifest.get("evidence_tier") or "").strip().lower()
     if evidence_tier and evidence_tier != "approval_grade":
         reasons.append(f"{prefix}.evidence_tier={evidence_tier}")
+    lane_type = str(manifest.get("lane_type") or "").strip().lower()
     cpu_audit_outcome = str(manifest.get("cpu_audit_outcome") or "").strip().lower()
+    if lane_type == "promotion_evaluation" and cpu_audit_outcome != "pass":
+        reasons.append(f"{prefix}.cpu_audit_required_for_promotion={cpu_audit_outcome or 'missing'}")
     if cpu_audit_outcome and cpu_audit_outcome not in {"disabled", "pass"}:
         reasons.append(f"{prefix}.cpu_audit_outcome={cpu_audit_outcome}")
     for reason in manifest.get("reasons") or []:
@@ -291,6 +294,10 @@ def summarize_issue97_observation(
             "matched_parity_windows="
             f"{len(matched_parity_window_keys)}<{MIN_MATCHED_PARITY_WINDOWS}"
         )
+    if len(lane_docs) < 1:
+        reasons.append("lane_manifest_count=0<1")
+    if len(holdout_docs) < 1:
+        reasons.append("holdout_manifest_count=0<1")
     if non_strict_runs > 0:
         reasons.append(f"non_strict_run_count={non_strict_runs}")
     if failed_runs > 0:

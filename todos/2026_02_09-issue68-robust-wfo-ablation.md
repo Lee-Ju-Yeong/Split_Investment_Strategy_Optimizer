@@ -18,8 +18,9 @@
   - 현재 WFO run은 결과 폴더에 manifest를 남기지만, 아직 `legacy_wfo/internal_provisional` 상태를 정직하게 기록하는 단계다.
   - 추가로 `holdout_backtest_executed`, `promotion_WFO_end < holdout_start` 같은 현재 상태 라벨도 더 정직하게 남기도록 강화 중이다.
   - CPU 단계는 `GPU-selected finalist -> CPU pass/fail audit` 쪽으로 1차 정리됐다.
-  - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 사유에 반영할 수 있게 됐다.
-  - `promotion_evaluation`은 single-anchor non-overlap anchored WFO 의미를 타기 시작했다.
+  - `strict_only_governance` observation gate는 `lane_manifest.json`, `holdout_manifest.json`이 없으면 clean pass가 되지 않도록 막기 시작했다.
+  - `promotion_evaluation`은 `promotion_shortlist_path`를 받아 frozen shortlist 기반 single-anchor non-overlap anchored WFO를 실행할 수 있다.
+  - promotion lane은 CPU audit이 `pass`가 아니면 clean approval lane으로 읽지 않도록 reason을 남긴다.
   - `research_start_date_robustness`는 `research_shortlist_path + research_anchor_start_dates`가 주어지면 frozen shortlist multi-anchor evaluation을 실행할 수 있다.
   - research lane은 `anchor_manifest.json`, `research_anchor_fold_metrics.csv`, `research_metric_distribution_summary.json`을 남기고 단일 합성 curve는 만들지 않는다.
   - 하지만 `hard gate`, `robust score`, `lane_mode`, `holdout 경계`, `artifact guardrail`은 아직 공식 구현 전이다.
@@ -108,6 +109,7 @@
   - 더 엄격한 시간 전이 검증
   - CPU `audit`은 `pass/fail`
   - final holdout 전에는 여기서 shortlist를 다시 흔들지 않음
+  - `promotion_shortlist_path` 없이 새 후보를 다시 찾지 않음
 
 ### 4-4. canonical holdout 경계
 - current repository status:
@@ -157,6 +159,12 @@
 - [ ] shortlist freeze contract 구현
   - `research_data_cutoff <= 2024-12-31`
   - holdout 시작 후 후보 수정 금지
+- [ ] final candidate selection contract 구현
+  - `promotion_candidate_fold_metrics.csv`
+  - `promotion_candidate_summary.csv`
+  - `final_candidate_manifest.json`
+  - `single champion + pre-locked reserve succession`
+  - holdout은 manifest에 봉인된 champion만 입력으로 받음
 - [ ] 행동지표 feature 실험
   - `trade_count`
   - `closed_trade_count`
@@ -182,6 +190,9 @@
     - 현재 상태:
       - WFO 결과 폴더에 저장 시작
       - 아직 holdout 백테스트 자동 실행은 연결 전
+  - `final_candidate_manifest.json`
+    - 현재 상태:
+      - promotion lane에서 champion/reserve 봉인 artifact로 추가 진행 중
   - `anchor_manifest.json`
   - research lane의 `anchor/fold metric distribution summary`
 

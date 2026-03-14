@@ -147,6 +147,39 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
 
         self.assertEqual(lane_type, "promotion_evaluation")
 
+    def test_promotion_lane_requires_frozen_shortlist_path(self):
+        with self.assertRaisesRegex(ValueError, "promotion_shortlist_path"):
+            wfo._resolve_promotion_runtime_settings({})
+
+    def test_resolve_promotion_runtime_settings_uses_explicit_shortlist_and_metric(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            shortlist_path.write_text(
+                "max_stocks,order_investment_ratio,additional_buy_drop_rate,sell_profit_rate,"
+                "additional_buy_priority,stop_loss_rate,max_splits_limit,max_inactivity_period\n"
+                "20,0.02,0.04,0.05,0,-0.15,10,90\n",
+                encoding="utf-8",
+            )
+
+            settings = wfo._resolve_promotion_runtime_settings(
+                {
+                    "promotion_mode": "frozen_shortlist_single_anchor_eval",
+                    "promotion_shortlist_path": shortlist_path.as_posix(),
+                    "promotion_selection_metric": "cagr",
+                }
+            )
+
+        self.assertEqual(
+            settings["promotion_shortlist_path"],
+            shortlist_path.as_posix(),
+        )
+        self.assertEqual(settings["promotion_selection_metric"], "cagr")
+        self.assertEqual(
+            settings["promotion_mode"],
+            "frozen_shortlist_single_anchor_eval",
+        )
+        self.assertTrue(settings["shortlist_hash"])
+
     def test_resolve_lane_type_accepts_research_start_date_robustness(self):
         lane_type = wfo._resolve_lane_type({"lane_type": "research_start_date_robustness"})
 
@@ -225,6 +258,16 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         )
 
         self.assertEqual(reasons, [])
+
+    def test_build_current_lane_reasons_requires_cpu_audit_for_promotion_lane(self):
+        reasons = wfo._build_current_lane_reasons(
+            lane_type="promotion_evaluation",
+            total_folds=4,
+            overlap_days=0,
+            cpu_audit_outcome="disabled",
+        )
+
+        self.assertIn("cpu_audit_required_for_promotion", reasons)
 
     def test_write_wfo_manifests_persists_lane_and_holdout_json(self):
         lane_manifest = wfo.build_lane_manifest(
