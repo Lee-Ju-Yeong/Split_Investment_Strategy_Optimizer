@@ -127,13 +127,24 @@ walk_forward_settings:
   period_length_days: 365
   # Optional manifest metadata for WFO artifacts.
   # - `legacy_wfo`: 기존 overlap/mean aggregation 경로를 그대로 사용하며 provisional로 기록합니다.
-  # - `promotion_evaluation`: single-anchor non-overlap anchored WFO를 사용합니다.
+  # - `promotion_evaluation`: frozen shortlist 기반 single-anchor non-overlap anchored WFO를 사용합니다.
   # - `research_start_date_robustness`: frozen shortlist multi-anchor evaluation을 사용합니다.
   lane_type: "legacy_wfo"
   decision_date: "2026-03-14"
   research_data_cutoff: "2021-12-31"
   promotion_data_cutoff: "2021-12-31"
   shortlist_hash: null
+  promotion_mode: "frozen_shortlist_single_anchor_eval"
+  promotion_selection_metric: "calmar_ratio"
+  promotion_shortlist_path: null
+  selection_contract:
+    version: "promotion_holdout_selector_v1"
+    hard_gate_version: "promotion_hard_gate_v1"
+    min_promotion_fold_pass_rate: 0.70
+    min_oos_is_calmar_ratio_median: 0.60
+    max_oos_mdd_depth_p95: 0.25
+    per_fold_min_oos_calmar_ratio: 0.0
+    reserve_count: 2
   research_mode: "frozen_shortlist_multi_anchor_eval"
   research_selection_metric: "calmar_ratio"
   research_shortlist_path: null

@@ -65,12 +65,15 @@
   - holdout adequacy 지표 자동 기록
 - 현재 반영된 것:
   - CPU 단계는 GPU가 고른 후보를 `pass/fail`로 검산하는 쪽으로 1차 정리됐다.
-  - `promotion_evaluation`은 single-anchor non-overlap anchored WFO로 실제 실행 의미가 분리되기 시작했다.
+  - `promotion_evaluation`은 `promotion_shortlist_path`를 받아 frozen shortlist 기반 single-anchor non-overlap anchored WFO를 실행한다.
   - `research_start_date_robustness`는 `research_shortlist_path + research_anchor_start_dates`가 주어지면 frozen shortlist multi-anchor evaluation을 실행할 수 있다.
-  - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 이유로 반영할 수 있다.
+  - `strict_only_governance` observation gate는 `lane_manifest.json`, `holdout_manifest.json`이 없으면 clean pass가 되지 않도록 막는다.
 - 아직 남은 것:
   - WFO 실행 경로가 governance gate 입력을 자동으로 남기도록 end-to-end 연결
 - 현재 guardrail:
+  - promotion lane은 `promotion_mode=frozen_shortlist_single_anchor_eval`만 허용한다.
+  - promotion lane은 `promotion_shortlist_path`가 없으면 실행되지 않는다.
+  - promotion lane은 CPU audit이 `pass`가 아니면 clean approval lane으로 읽지 않는다.
   - research lane은 `research_mode=frozen_shortlist_multi_anchor_eval`만 허용한다.
   - research lane은 `research_shortlist_path`, `research_anchor_start_dates`가 없으면 실행되지 않는다.
 
@@ -87,7 +90,7 @@ git status --short --branch
 ```
 - WFO 관련 설정과 holdout 메타데이터 확인:
 ```bash
-rg -n "walk_forward_settings|holdout_start|holdout_end|lane_type" config/config.yaml
+rg -n "walk_forward_settings|lane_type|promotion_shortlist_path|research_shortlist_path|holdout_start|holdout_end" config/config.yaml
 ```
 - GPU 파라미터 simulation 실행:
 ```bash
@@ -190,9 +193,15 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `single-anchor non-overlap Anchored WFO`
 - 해석:
   - 이 단계는 `재탐색`이 아니라 `승인 심사`다.
+- 실행 전제:
+  - `promotion_shortlist_path`로 freeze된 후보 CSV/JSON을 넘긴다.
+  - promotion lane은 이 shortlist 밖의 새 후보를 다시 찾지 않는다.
 - 산출물:
   - fold별 결과
   - 선택/탈락 근거
+  - `promotion_candidate_fold_metrics.csv`
+  - `promotion_candidate_summary.csv`
+  - `final_candidate_manifest.json`
 - 여기서 할 수 있는 말:
   - `고정 출발점 기준 시간 전이 검증을 통과했다`
 
@@ -202,6 +211,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - 중요한 점:
   - audit은 `다시 최적화`가 아니다.
   - `pass/fail`에 가깝다.
+  - `final_candidate_manifest.json`의 champion/reserve 순서를 바꾸는 용도로 쓰면 안 된다.
 - 여기서 하면 안 되는 것:
   - CPU 결과를 보고 사실상 새 후보를 다시 뽑기
 
@@ -209,11 +219,12 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - 목적:
   - 마지막으로 따로 남겨 둔 시험지에서 확인한다.
 - 현재 정책:
-  - `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
+- `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
 - 현재 구현 상태:
   - `holdout_start`, `holdout_end`를 config에 넣으면 `holdout_manifest.json`이 함께 저장된다.
   - 아직 holdout 백테스트 자체가 자동 실행되는 것은 아니므로, manifest에 `holdout_backtest_not_executed`가 남고 `approval_eligible=false`로 유지된다.
   - `promotion_WFO_end < holdout_start` 여부도 manifest에 함께 남긴다.
+  - `final_candidate_manifest.json`은 holdout 직전 champion/reserve 봉인용이고, 아직 final candidate CPU audit/holdout 실행이 안 끝났으면 `holdout_ready=false`로 남는다.
 - 현재 저장소 상태:
   - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`
 - 아주 쉽게 말하면:
@@ -254,6 +265,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - research lane 결과를 `release-grade evidence`라고 부르기
 - freeze 이후 후보를 슬쩍 수정하기
 - holdout 날짜를 research나 promotion WFO에 다시 쓰기
+- `final_candidate_manifest.json`을 만든 뒤 champion/reserve 순서를 손으로 다시 바꾸기
 - parity/release-readiness에 쓴 구간을 untouched holdout이라고 부르기
 - 짧은 holdout을 waiver 없이 `approval-grade final proof`처럼 말하기
 
@@ -262,6 +274,8 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - `holdout date reuse detected`
 - `decision_date 이후 shortlist 변경`
 - `approval-grade claim with holdout < 24 months and no adequacy waiver`
+- `final_candidate_hash mismatch`
+- `holdout after candidate reselection`
 
 초심자 버전으로 말하면:
 - 계산이 안 맞거나
@@ -286,6 +300,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - selection audit
 - lane manifest
 - holdout manifest
+- final candidate manifest
 - research 분포 요약
 - promotion fold 결과
 

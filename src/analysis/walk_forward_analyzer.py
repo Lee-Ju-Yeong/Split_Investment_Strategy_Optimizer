@@ -51,6 +51,8 @@ _SUPPORTED_WFO_LANE_TYPES = (
     "research_start_date_robustness",
 )
 _RESEARCH_WFO_MODE = "frozen_shortlist_multi_anchor_eval"
+_PROMOTION_WFO_MODE = "frozen_shortlist_single_anchor_eval"
+_SELECTION_CONTRACT_VERSION = "promotion_holdout_selector_v1"
 
 
 def _coerce_date(value):
@@ -332,6 +334,16 @@ def _hash_file_sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def _hash_json_sha256(payload) -> str:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=_json_default,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _resolve_lane_type(wfo_settings: dict) -> str:
     lane_type = str(wfo_settings.get("lane_type") or "legacy_wfo").strip() or "legacy_wfo"
     if lane_type not in _SUPPORTED_WFO_LANE_TYPES:
@@ -342,12 +354,17 @@ def _resolve_lane_type(wfo_settings: dict) -> str:
     return lane_type
 
 
-def _load_frozen_shortlist(shortlist_path: str):
+def _load_frozen_shortlist(
+    shortlist_path: str,
+    *,
+    setting_name: str,
+    context_label: str,
+):
     import pandas as pd
 
     path = Path(shortlist_path)
     if not path.exists():
-        raise ValueError(f"research_shortlist_path does not exist: {path}")
+        raise ValueError(f"{setting_name} does not exist: {path}")
     suffix = path.suffix.lower()
     if suffix == ".csv":
         shortlist_df = pd.read_csv(path)
@@ -356,18 +373,79 @@ def _load_frozen_shortlist(shortlist_path: str):
         rows = payload.get("rows") if isinstance(payload, dict) else payload
         shortlist_df = pd.DataFrame(rows)
     else:
-        raise ValueError("research_shortlist_path must be .csv or .json")
+        raise ValueError(f"{setting_name} must be .csv or .json")
     if shortlist_df.empty:
-        raise ValueError("research shortlist is empty.")
+        raise ValueError(f"{context_label} is empty.")
     missing_columns = [key for key in _CPU_CERT_PARAM_KEYS if key not in shortlist_df.columns]
     if missing_columns:
         raise ValueError(
-            "research shortlist is missing required parameter columns: "
+            f"{context_label} is missing required parameter columns: "
             + ",".join(missing_columns)
         )
     shortlist_df = shortlist_df.reset_index(drop=True).copy()
     shortlist_df["shortlist_candidate_id"] = shortlist_df.index + 1
     return shortlist_df
+
+
+def _resolve_promotion_runtime_settings(wfo_settings: dict) -> dict:
+    promotion_mode = str(
+        wfo_settings.get("promotion_mode") or _PROMOTION_WFO_MODE
+    ).strip() or _PROMOTION_WFO_MODE
+    if promotion_mode != _PROMOTION_WFO_MODE:
+        raise ValueError(
+            "promotion_evaluation only supports "
+            f"promotion_mode={_PROMOTION_WFO_MODE}."
+        )
+    shortlist_path = str(wfo_settings.get("promotion_shortlist_path") or "").strip()
+    if not shortlist_path:
+        raise ValueError(
+            "promotion_evaluation requires walk_forward_settings.promotion_shortlist_path."
+        )
+    selection_metric = str(
+        wfo_settings.get("promotion_selection_metric")
+        or wfo_settings.get("cpu_certification_metric")
+        or "calmar_ratio"
+    ).strip() or "calmar_ratio"
+    shortlist_hash = str(wfo_settings.get("shortlist_hash") or "").strip()
+    return {
+        "promotion_mode": promotion_mode,
+        "promotion_shortlist_path": shortlist_path,
+        "promotion_selection_metric": selection_metric,
+        "shortlist_hash": shortlist_hash or _hash_file_sha256(shortlist_path),
+    }
+
+
+def _resolve_selection_contract_settings(wfo_settings: dict) -> dict:
+    settings = dict(wfo_settings.get("selection_contract") or {})
+    return {
+        "selection_contract_version": str(
+            settings.get("version") or _SELECTION_CONTRACT_VERSION
+        ).strip() or _SELECTION_CONTRACT_VERSION,
+        "hard_gate_version": str(
+            settings.get("hard_gate_version") or "promotion_hard_gate_v1"
+        ).strip() or "promotion_hard_gate_v1",
+        "min_promotion_fold_pass_rate": float(
+            settings.get("min_promotion_fold_pass_rate", 0.70)
+        ),
+        "min_oos_is_calmar_ratio_median": float(
+            settings.get("min_oos_is_calmar_ratio_median", 0.60)
+        ),
+        "max_oos_mdd_depth_p95": float(
+            settings.get("max_oos_mdd_depth_p95", 0.25)
+        ),
+        "per_fold_min_oos_calmar_ratio": float(
+            settings.get("per_fold_min_oos_calmar_ratio", 0.0)
+        ),
+        "reserve_count": max(int(settings.get("reserve_count", 2) or 2), 0),
+        "tie_break_rule": [
+            "hard_gate_pass desc",
+            "promotion_fold_pass_rate desc",
+            "promotion_oos_calmar_median desc",
+            "promotion_oos_mdd_depth_worst asc",
+            "promotion_oos_cagr_median desc",
+            "candidate_signature asc",
+        ],
+    }
 
 
 def _resolve_research_runtime_settings(wfo_settings: dict) -> dict:
@@ -416,6 +494,8 @@ def _build_current_lane_reasons(
             reasons.append("composite_curve_mean_aggregation_enabled")
     if int(overlap_days) > 0:
         reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
+    if lane_type == "promotion_evaluation" and cpu_audit_outcome != "pass":
+        reasons.append("cpu_audit_required_for_promotion")
     if cpu_audit_outcome not in ("disabled", "pass"):
         reasons.append("cpu_audit_contract_not_met")
     return reasons
@@ -639,7 +719,7 @@ def _analyze_equity_curve(curve, analyzer_cls):
     return dict(analyzer.get_metrics(formatted=False))
 
 
-def _evaluate_research_shortlist_candidates(
+def _evaluate_shortlist_candidates(
     shortlist_df,
     *,
     start_date: str,
@@ -668,6 +748,246 @@ def _evaluate_research_shortlist_candidates(
         rows.append(record)
     evaluated_df = pd.DataFrame(rows)
     return _sort_candidate_frame(evaluated_df, metric).reset_index(drop=True)
+
+
+def _candidate_signature(candidate_row: dict) -> str:
+    signature = []
+    for key in _CPU_CERT_PARAM_KEYS:
+        value = candidate_row.get(key)
+        if key == "additional_buy_priority":
+            value = _normalize_priority_for_cpu(value)
+        signature.append(f"{key}={value}")
+    return "|".join(signature)
+
+
+def _safe_positive_ratio(numerator, denominator):
+    try:
+        resolved_numerator = float(numerator)
+        resolved_denominator = float(denominator)
+    except (TypeError, ValueError):
+        return None
+    if resolved_denominator <= 0.0:
+        return None
+    return resolved_numerator / resolved_denominator
+
+
+def _build_metric_snapshot(evaluated_df, *, prefix: str):
+    columns = ["shortlist_candidate_id", "cagr", "mdd", "calmar_ratio"]
+    snapshot = evaluated_df[columns].copy()
+    snapshot = snapshot.rename(
+        columns={
+            "cagr": f"{prefix}_cagr",
+            "mdd": f"{prefix}_mdd",
+            "calmar_ratio": f"{prefix}_calmar_ratio",
+        }
+    )
+    return snapshot
+
+
+def _build_promotion_candidate_fold_metrics(
+    shortlist_df,
+    *,
+    fold_num: int,
+    is_start: str,
+    is_end: str,
+    oos_start: str,
+    oos_end: str,
+    initial_cash: float,
+    base_strategy_params: dict,
+    backtest_runner,
+    analyzer_cls,
+    metric: str,
+    selection_settings: dict,
+    is_evaluated_df=None,
+):
+    is_df = is_evaluated_df
+    if is_df is None:
+        is_df = _evaluate_shortlist_candidates(
+            shortlist_df,
+            start_date=is_start,
+            end_date=is_end,
+            initial_cash=initial_cash,
+            base_strategy_params=base_strategy_params,
+            backtest_runner=backtest_runner,
+            analyzer_cls=analyzer_cls,
+            metric=metric,
+        )
+    oos_df = _evaluate_shortlist_candidates(
+        shortlist_df,
+        start_date=oos_start,
+        end_date=oos_end,
+        initial_cash=initial_cash,
+        base_strategy_params=base_strategy_params,
+        backtest_runner=backtest_runner,
+        analyzer_cls=analyzer_cls,
+        metric=metric,
+    )
+    merged = shortlist_df.copy()
+    merged = merged.merge(
+        _build_metric_snapshot(is_df, prefix="is"),
+        on="shortlist_candidate_id",
+        how="left",
+    )
+    merged = merged.merge(
+        _build_metric_snapshot(oos_df, prefix="oos"),
+        on="shortlist_candidate_id",
+        how="left",
+    )
+    merged["fold"] = int(fold_num)
+    merged["IS_Start"] = str(is_start)
+    merged["IS_End"] = str(is_end)
+    merged["OOS_Start"] = str(oos_start)
+    merged["OOS_End"] = str(oos_end)
+    merged["candidate_signature"] = [
+        _candidate_signature(row)
+        for row in merged.to_dict("records")
+    ]
+    merged["oos_is_calmar_ratio"] = [
+        _safe_positive_ratio(row.get("oos_calmar_ratio"), row.get("is_calmar_ratio"))
+        for row in merged.to_dict("records")
+    ]
+    merged["oos_mdd_depth"] = merged["oos_mdd"].abs()
+    merged["fold_gate_pass"] = (
+        (merged["oos_calmar_ratio"].fillna(float("-inf")) >= selection_settings["per_fold_min_oos_calmar_ratio"])
+        & (merged["oos_mdd_depth"].fillna(float("inf")) <= selection_settings["max_oos_mdd_depth_p95"])
+    )
+    return merged
+
+
+def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
+    import pandas as pd
+
+    rows = []
+    for _, group in fold_metrics_df.groupby("shortlist_candidate_id", sort=True):
+        first_row = group.iloc[0].to_dict()
+        ratio_series = pd.to_numeric(group["oos_is_calmar_ratio"], errors="coerce").dropna()
+        oos_calmar_series = pd.to_numeric(group["oos_calmar_ratio"], errors="coerce").dropna()
+        oos_cagr_series = pd.to_numeric(group["oos_cagr"], errors="coerce").dropna()
+        oos_mdd_depth_series = pd.to_numeric(group["oos_mdd_depth"], errors="coerce").dropna()
+        fold_pass_rate = float(pd.Series(group["fold_gate_pass"]).mean())
+        ratio_median = float(ratio_series.median()) if not ratio_series.empty else None
+        oos_mdd_depth_p95 = (
+            float(oos_mdd_depth_series.quantile(0.95))
+            if not oos_mdd_depth_series.empty
+            else None
+        )
+        oos_mdd_depth_worst = (
+            float(oos_mdd_depth_series.max())
+            if not oos_mdd_depth_series.empty
+            else None
+        )
+        hard_gate_pass = (
+            ratio_median is not None
+            and ratio_median >= selection_settings["min_oos_is_calmar_ratio_median"]
+            and fold_pass_rate >= selection_settings["min_promotion_fold_pass_rate"]
+            and oos_mdd_depth_p95 is not None
+            and oos_mdd_depth_p95 <= selection_settings["max_oos_mdd_depth_p95"]
+        )
+        rows.append(
+            {
+                "shortlist_candidate_id": int(first_row["shortlist_candidate_id"]),
+                "candidate_signature": first_row["candidate_signature"],
+                "promotion_fold_count": int(len(group)),
+                "promotion_fold_pass_count": int(group["fold_gate_pass"].sum()),
+                "promotion_fold_pass_rate": fold_pass_rate,
+                "promotion_oos_calmar_median": float(oos_calmar_series.median()),
+                "promotion_oos_cagr_median": float(oos_cagr_series.median()),
+                "promotion_oos_mdd_depth_p95": oos_mdd_depth_p95,
+                "promotion_oos_mdd_depth_worst": oos_mdd_depth_worst,
+                "promotion_oos_is_calmar_ratio_median": ratio_median,
+                "hard_gate_pass": bool(hard_gate_pass),
+                **{key: first_row.get(key) for key in _CPU_CERT_PARAM_KEYS},
+            }
+        )
+    summary_df = pd.DataFrame(rows)
+    if summary_df.empty:
+        return summary_df
+    summary_df = summary_df.sort_values(
+        [
+            "hard_gate_pass",
+            "promotion_fold_pass_rate",
+            "promotion_oos_calmar_median",
+            "promotion_oos_mdd_depth_worst",
+            "promotion_oos_cagr_median",
+            "candidate_signature",
+        ],
+        ascending=[False, False, False, True, False, True],
+        kind="stable",
+    ).reset_index(drop=True)
+    summary_df["selection_rank"] = summary_df.index + 1
+    return summary_df
+
+
+def _build_final_candidate_manifest(
+    candidate_summary_df,
+    *,
+    selection_settings: dict,
+    shortlist_hash: str | None,
+    decision_date,
+    research_data_cutoff,
+    promotion_data_cutoff,
+    holdout_settings: dict,
+    engine_version_hash: str | None,
+    cpu_audit_required: bool,
+):
+    if candidate_summary_df.empty:
+        raise ValueError("Promotion candidate summary is empty.")
+    champion = candidate_summary_df.iloc[0].to_dict()
+    reserve_count = selection_settings["reserve_count"]
+    reserve_candidate_ids = [
+        int(item)
+        for item in candidate_summary_df["shortlist_candidate_id"].iloc[1 : 1 + reserve_count].tolist()
+    ]
+    ranking_records = candidate_summary_df[
+        [
+            "selection_rank",
+            "shortlist_candidate_id",
+            "candidate_signature",
+            "hard_gate_pass",
+            "promotion_fold_pass_rate",
+            "promotion_oos_calmar_median",
+            "promotion_oos_mdd_depth_worst",
+            "promotion_oos_cagr_median",
+        ]
+    ].to_dict("records")
+    champion_payload = {
+        "shortlist_candidate_id": int(champion["shortlist_candidate_id"]),
+        "candidate_signature": champion["candidate_signature"],
+        **{key: champion.get(key) for key in _CPU_CERT_PARAM_KEYS},
+    }
+    readiness_reasons = []
+    if not bool(champion.get("hard_gate_pass")):
+        readiness_reasons.append("no_candidate_passed_hard_gate")
+    if cpu_audit_required:
+        readiness_reasons.append("final_candidate_cpu_audit_not_executed")
+    return {
+        "selection_contract_version": selection_settings["selection_contract_version"],
+        "hard_gate_version": selection_settings["hard_gate_version"],
+        "hard_gate_thresholds": {
+            "min_promotion_fold_pass_rate": selection_settings["min_promotion_fold_pass_rate"],
+            "min_oos_is_calmar_ratio_median": selection_settings["min_oos_is_calmar_ratio_median"],
+            "max_oos_mdd_depth_p95": selection_settings["max_oos_mdd_depth_p95"],
+            "per_fold_min_oos_calmar_ratio": selection_settings["per_fold_min_oos_calmar_ratio"],
+        },
+        "tie_break_rule": list(selection_settings["tie_break_rule"]),
+        "decision_date": _coerce_date(decision_date or datetime.now()).isoformat(),
+        "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
+        "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
+        "holdout_start": holdout_settings.get("holdout_start"),
+        "holdout_end": holdout_settings.get("holdout_end"),
+        "promotion_shortlist_hash": shortlist_hash,
+        "candidate_ranking_hash": _hash_json_sha256(ranking_records),
+        "final_candidate_hash": _hash_json_sha256(champion_payload),
+        "champion_candidate_id": int(champion["shortlist_candidate_id"]),
+        "champion_candidate_signature": champion["candidate_signature"],
+        "reserve_candidate_ids": reserve_candidate_ids,
+        "champion_hard_gate_pass": bool(champion.get("hard_gate_pass")),
+        "cpu_audit_required": bool(cpu_audit_required),
+        "cpu_audit_outcome": "pending_final_candidate_audit" if cpu_audit_required else "disabled",
+        "holdout_ready": not readiness_reasons,
+        "holdout_readiness_reasons": readiness_reasons,
+        "engine_version_hash": engine_version_hash or "unknown",
+    }
 
 
 def _build_metric_distribution_summary(metrics_df, metric_columns: tuple[str, ...]) -> dict:
@@ -1132,7 +1452,11 @@ def _run_research_start_date_robustness(
     import pandas as pd
 
     research_settings = _resolve_research_runtime_settings(wfo_settings)
-    shortlist_df = _load_frozen_shortlist(research_settings["research_shortlist_path"])
+    shortlist_df = _load_frozen_shortlist(
+        research_settings["research_shortlist_path"],
+        setting_name="research_shortlist_path",
+        context_label="research shortlist",
+    )
     shortlist_hash = (
         str(wfo_settings.get("shortlist_hash") or "").strip()
         or _hash_file_sha256(research_settings["research_shortlist_path"])
@@ -1159,7 +1483,7 @@ def _run_research_start_date_robustness(
             oos_start = period["OOS_Start"].isoformat()
             oos_end = period["OOS_End"].isoformat()
 
-            evaluated_df = _evaluate_research_shortlist_candidates(
+            evaluated_df = _evaluate_shortlist_candidates(
                 shortlist_df,
                 start_date=is_start,
                 end_date=is_end,
@@ -1352,6 +1676,20 @@ def run_walk_forward_analysis():
             analyzer_cls=PerformanceAnalyzer,
         )
 
+    promotion_settings = None
+    selection_contract_settings = None
+    promotion_shortlist_df = None
+    lane_shortlist_hash = str(wfo_settings.get("shortlist_hash") or "").strip() or None
+    if lane_type == "promotion_evaluation":
+        promotion_settings = _resolve_promotion_runtime_settings(wfo_settings)
+        selection_contract_settings = _resolve_selection_contract_settings(wfo_settings)
+        promotion_shortlist_df = _load_frozen_shortlist(
+            promotion_settings["promotion_shortlist_path"],
+            setting_name="promotion_shortlist_path",
+            context_label="promotion shortlist",
+        )
+        lane_shortlist_hash = promotion_settings["shortlist_hash"]
+
     lane_contract = _build_lane_execution_contract(
         lane_type,
         start_date=total_start_date,
@@ -1377,43 +1715,101 @@ def run_walk_forward_analysis():
     
     #  새로운 롤링 윈도우 루프
     all_oos_curves, all_optimal_params, all_selection_audits = [], [], []
+    promotion_candidate_fold_frames = []
     
     pbar = tqdm(fold_periods, desc="WFO Progress")
     for period in pbar:
         fold_num, is_start, is_end, oos_start, oos_end = period.values()
         pbar.set_description(f"WFO Fold {fold_num}/{total_folds}")
+        selection_audit = None
 
         print(f"\n--- Fold {fold_num} IS Period: {is_start} ~ {is_end} ---")
-        
-        # [MODIFIED] 1. IS 기간의 "전체" 시뮬레이션 결과 확보
-        _, is_simulation_results_df = find_optimal_parameters(
-             start_date=is_start.strftime('%Y-%m-%d'),
-             end_date=is_end.strftime('%Y-%m-%d'),
-             initial_cash=initial_cash
-         )
-        print(f"  - IS simulation complete. Analyzing {len(is_simulation_results_df)} combinations.")
-        
-        # [NEW] 2. 클러스터링으로 강건 파라미터 탐색
-        robust_params_dict, clustered_df = find_robust_parameters(
-            simulation_results_df=is_simulation_results_df,
-            param_cols=['additional_buy_drop_rate', 'sell_profit_rate', 'stop_loss_rate', 'max_inactivity_period'],
-            metric_cols=['cagr', 'mdd', 'calmar_ratio'],
-            k_range=(2, 8),
-            min_cluster_size_ratio=0.05
-        )
-        
-        # 디버깅을 위해 각 폴드의 클러스터링 결과 저장
-        if clustered_df is not None:
-            fold_cluster_path = os.path.join(results_dir, f"fold_{fold_num}_clustered_results.csv")
-            clustered_df.to_csv(fold_cluster_path, index=False)
-            print(f"  - Fold {fold_num} clustered analysis saved.")
 
-        selected_params_dict = dict(robust_params_dict)
+        if lane_type == "promotion_evaluation":
+            evaluated_df = _evaluate_shortlist_candidates(
+                promotion_shortlist_df,
+                start_date=is_start.strftime('%Y-%m-%d'),
+                end_date=is_end.strftime('%Y-%m-%d'),
+                initial_cash=initial_cash,
+                base_strategy_params=config["strategy_params"],
+                backtest_runner=run_single_backtest,
+                analyzer_cls=PerformanceAnalyzer,
+                metric=promotion_settings["promotion_selection_metric"],
+            )
+            evaluation_path = os.path.join(
+                results_dir,
+                f"fold_{fold_num}_promotion_shortlist_evaluation.csv",
+            )
+            evaluated_df.to_csv(evaluation_path, index=False)
+            print(
+                "  - Promotion shortlist evaluation complete. "
+                f"Analyzed {len(evaluated_df)} frozen candidates."
+            )
+            print(f"  - Fold {fold_num} shortlist evaluation saved.")
+            promotion_candidate_fold_frames.append(
+                _build_promotion_candidate_fold_metrics(
+                    promotion_shortlist_df,
+                    fold_num=fold_num,
+                    is_start=is_start.strftime('%Y-%m-%d'),
+                    is_end=is_end.strftime('%Y-%m-%d'),
+                    oos_start=oos_start.strftime('%Y-%m-%d'),
+                    oos_end=oos_end.strftime('%Y-%m-%d'),
+                    initial_cash=initial_cash,
+                    base_strategy_params=config["strategy_params"],
+                    backtest_runner=run_single_backtest,
+                    analyzer_cls=PerformanceAnalyzer,
+                    metric=promotion_settings["promotion_selection_metric"],
+                    selection_settings=selection_contract_settings,
+                    is_evaluated_df=evaluated_df,
+                )
+            )
+
+            selected_row = evaluated_df.iloc[0].to_dict()
+            selected_params_dict = _extract_strategy_params(selected_row, config["strategy_params"])
+            selection_audit = {
+                "fold": fold_num,
+                "selection_source": "promotion_frozen_shortlist_is_eval",
+                "selection_metric": promotion_settings["promotion_selection_metric"],
+                "selected_shortlist_candidate_id": selected_row.get("shortlist_candidate_id"),
+                "shortlist_size": int(len(evaluated_df)),
+                "IS_Start": is_start.strftime('%Y-%m-%d'),
+                "IS_End": is_end.strftime('%Y-%m-%d'),
+                "selected_is_calmar_ratio": selected_row.get("calmar_ratio"),
+                "selected_is_cagr": selected_row.get("cagr"),
+                "selected_is_mdd": selected_row.get("mdd"),
+            }
+            gpu_shortlist_source_df = evaluated_df
+        else:
+            # [MODIFIED] 1. IS 기간의 "전체" 시뮬레이션 결과 확보
+            _, is_simulation_results_df = find_optimal_parameters(
+                 start_date=is_start.strftime('%Y-%m-%d'),
+                 end_date=is_end.strftime('%Y-%m-%d'),
+                 initial_cash=initial_cash
+             )
+            print(f"  - IS simulation complete. Analyzing {len(is_simulation_results_df)} combinations.")
+
+            # [NEW] 2. 클러스터링으로 강건 파라미터 탐색
+            robust_params_dict, clustered_df = find_robust_parameters(
+                simulation_results_df=is_simulation_results_df,
+                param_cols=['additional_buy_drop_rate', 'sell_profit_rate', 'stop_loss_rate', 'max_inactivity_period'],
+                metric_cols=['cagr', 'mdd', 'calmar_ratio'],
+                k_range=(2, 8),
+                min_cluster_size_ratio=0.05
+            )
+
+            # 디버깅을 위해 각 폴드의 클러스터링 결과 저장
+            if clustered_df is not None:
+                fold_cluster_path = os.path.join(results_dir, f"fold_{fold_num}_clustered_results.csv")
+                clustered_df.to_csv(fold_cluster_path, index=False)
+                print(f"  - Fold {fold_num} clustered analysis saved.")
+
+            selected_params_dict = dict(robust_params_dict)
+            gpu_shortlist_source_df = is_simulation_results_df
 
         if cpu_cert_settings["enabled"]:
             gpu_shortlist_df = build_gpu_finalist_shortlist(
-                is_simulation_results_df,
-                robust_params_dict,
+                gpu_shortlist_source_df,
+                selected_params_dict,
                 top_n=cpu_cert_settings["top_n"],
                 metric=cpu_cert_settings["metric"],
             )
@@ -1440,18 +1836,28 @@ def run_walk_forward_analysis():
                 f"  - CPU certification for Fold {fold_num} saved "
                 f"({len(cpu_certification_df)} rows)."
             )
-            selection_audit = {
-                "fold": fold_num,
-                "selection_source": selected_params_dict.get("selection_source", "gpu_selected_finalist_cpu_audited"),
-                "cpu_certification_metric": selected_params_dict.get("cpu_certification_metric"),
-                "cpu_certification_top_n": selected_params_dict.get("cpu_certification_top_n"),
-                "cpu_certification_shortlist_size": selected_params_dict.get("cpu_certification_shortlist_size"),
-                "cpu_certification_gpu_rank": selected_params_dict.get("cpu_certification_gpu_rank"),
-                "cpu_audit_outcome": selected_params_dict.get("cpu_audit_outcome"),
-                "cpu_calmar_ratio": selected_params_dict.get("cpu_calmar_ratio"),
-                "cpu_cagr": selected_params_dict.get("cpu_cagr"),
-                "cpu_mdd": selected_params_dict.get("cpu_mdd"),
-            }
+            if selection_audit is None:
+                selection_audit = {"fold": fold_num}
+            selection_audit.update(
+                {
+                    "selection_source": selected_params_dict.get(
+                        "selection_source",
+                        "gpu_selected_finalist_cpu_audited",
+                    ),
+                    "cpu_certification_metric": selected_params_dict.get("cpu_certification_metric"),
+                    "cpu_certification_top_n": selected_params_dict.get("cpu_certification_top_n"),
+                    "cpu_certification_shortlist_size": selected_params_dict.get("cpu_certification_shortlist_size"),
+                    "cpu_certification_gpu_rank": selected_params_dict.get("cpu_certification_gpu_rank"),
+                    "cpu_audit_outcome": selected_params_dict.get("cpu_audit_outcome"),
+                    "cpu_calmar_ratio": selected_params_dict.get("cpu_calmar_ratio"),
+                    "cpu_cagr": selected_params_dict.get("cpu_cagr"),
+                    "cpu_mdd": selected_params_dict.get("cpu_mdd"),
+                }
+            )
+
+        if selection_audit is not None:
+            if not cpu_cert_settings["enabled"]:
+                selection_audit["cpu_audit_outcome"] = "disabled"
             all_selection_audits.append(selection_audit)
 
         reported_params_dict = _extract_strategy_params(selected_params_dict, config["strategy_params"])
@@ -1532,6 +1938,56 @@ def run_walk_forward_analysis():
    
     print(f"\n✅ Robust parameters for each fold saved to: {params_filepath}")
 
+    if lane_type == "promotion_evaluation" and promotion_candidate_fold_frames:
+        promotion_candidate_fold_df = pd.concat(
+            promotion_candidate_fold_frames,
+            ignore_index=True,
+        )
+        promotion_candidate_fold_path = os.path.join(
+            results_dir,
+            "promotion_candidate_fold_metrics.csv",
+        )
+        promotion_candidate_fold_df.to_csv(promotion_candidate_fold_path, index=False)
+        promotion_candidate_summary_df = _summarize_promotion_candidates(
+            promotion_candidate_fold_df,
+            selection_contract_settings,
+        )
+        promotion_candidate_summary_path = os.path.join(
+            results_dir,
+            "promotion_candidate_summary.csv",
+        )
+        promotion_candidate_summary_df.to_csv(
+            promotion_candidate_summary_path,
+            index=False,
+        )
+        final_candidate_manifest = _build_final_candidate_manifest(
+            promotion_candidate_summary_df,
+            selection_settings=selection_contract_settings,
+            shortlist_hash=lane_shortlist_hash,
+            decision_date=wfo_settings.get("decision_date"),
+            research_data_cutoff=wfo_settings.get("research_data_cutoff")
+            or total_end_date.date().isoformat(),
+            promotion_data_cutoff=wfo_settings.get("promotion_data_cutoff")
+            or total_end_date.date().isoformat(),
+            holdout_settings=holdout_settings,
+            engine_version_hash=wfo_settings.get("engine_version_hash")
+            or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
+            cpu_audit_required=True,
+        )
+        final_candidate_manifest_path = _write_json_artifact(
+            os.path.join(results_dir, "final_candidate_manifest.json"),
+            final_candidate_manifest,
+        )
+        print(
+            f"✅ Promotion candidate fold metrics saved to: {promotion_candidate_fold_path}"
+        )
+        print(
+            f"✅ Promotion candidate summary saved to: {promotion_candidate_summary_path}"
+        )
+        print(
+            f"✅ Final candidate manifest saved to: {final_candidate_manifest_path}"
+        )
+
     holdout_start = holdout_settings["holdout_start"]
     holdout_end = holdout_settings["holdout_end"]
     if holdout_start and holdout_end:
@@ -1563,7 +2019,7 @@ def run_walk_forward_analysis():
         decision_date=wfo_settings.get("decision_date"),
         research_data_cutoff=wfo_settings.get("research_data_cutoff") or total_end_date.date().isoformat(),
         promotion_data_cutoff=wfo_settings.get("promotion_data_cutoff") or total_end_date.date().isoformat(),
-        shortlist_hash=wfo_settings.get("shortlist_hash"),
+        shortlist_hash=lane_shortlist_hash,
         publication_lag_policy=wfo_settings.get("publication_lag_policy"),
         ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
         engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
