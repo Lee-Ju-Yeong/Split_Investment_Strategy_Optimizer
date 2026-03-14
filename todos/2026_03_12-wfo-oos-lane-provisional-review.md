@@ -388,8 +388,8 @@
     - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:662)
   - 중복 OOS 날짜 평균 합성 curve
     - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:691)
-  - CPU certification 일부 rerank 성격
-    - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:620)
+  - CPU audit 결과가 downstream governance gate까지 아직 닫히지 않음
+    - `pass/fail` 성격은 1차 반영됐지만, release gate 연결은 남아 있음
 - 따라서 이 문서는 `즉시 운영 승인`이 아니라 `공식 구현 전에 맞춰 둘 설계 메모`다.
 
 ## 10. 다음 공식화 후보
@@ -399,7 +399,7 @@
 4. research lane에서 `단일 합성 equity curve`를 코드로 차단한다.
 5. `approval-grade holdout >= 24개월` 기본 정책과 `internal provisional holdout` 예외 표기를 문서와 코드에서 같이 고정한다.
 6. `hard gate`와 `robust score tie-break` 역할을 코드와 문서에서 하나로 맞춘다.
-7. `CPU certification`을 rerank가 아니라 `audit/pass-fail`로 고정한다.
+7. `CPU certification`을 `audit/pass-fail`로 고정하고 governance gate까지 연결한다.
 8. `lane_manifest.json`, `holdout_manifest.json`, `anchor_manifest.json` 포맷을 구현에 연결한다.
 
 ## 11. 참고 문서
