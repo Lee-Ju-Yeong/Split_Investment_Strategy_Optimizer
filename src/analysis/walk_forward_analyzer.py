@@ -284,8 +284,11 @@ def write_wfo_manifests(
 def _resolve_cpu_audit_outcome(cpu_cert_settings: dict, selection_audits: list[dict]) -> str:
     if not cpu_cert_settings.get("enabled"):
         return "disabled"
-    if selection_audits:
-        return "cpu_selection_rerank_active"
+    if selection_audits and all(
+        str(item.get("cpu_audit_outcome") or "").strip().lower() == "pass"
+        for item in selection_audits
+    ):
+        return "pass"
     return "enabled_but_no_selection_audit"
 
 
@@ -326,9 +329,17 @@ def _build_current_lane_reasons(
         reasons.append("composite_curve_mean_aggregation_enabled")
     if int(overlap_days) > 0:
         reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
-    if cpu_audit_outcome == "cpu_selection_rerank_active":
+    if cpu_audit_outcome not in ("disabled", "pass"):
         reasons.append("cpu_audit_contract_not_met")
     return reasons
+
+
+def _find_selected_finalist_index(finalists_df: "pd.DataFrame", selected_params_dict: dict) -> int:
+    selected_signature = _normalize_param_signature(selected_params_dict)
+    for idx, signature in enumerate(_build_param_signatures(finalists_df)):
+        if signature == selected_signature:
+            return int(idx)
+    raise ValueError("GPU-selected finalist is missing from CPU audit shortlist.")
 
 
 def _normalize_priority_for_cpu(value) -> str:
@@ -529,6 +540,7 @@ def certify_gpu_finalists_with_cpu(
     base_config: dict,
     finalists_df: "pd.DataFrame",
     *,
+    selected_params_dict: dict,
     start_date: str,
     end_date: str,
     initial_cash: float,
@@ -539,10 +551,11 @@ def certify_gpu_finalists_with_cpu(
 
     if finalists_df.empty:
         raise ValueError("CPU certification finalists are empty.")
+    selected_idx = _find_selected_finalist_index(finalists_df, selected_params_dict)
     cpu_metric_col = f"cpu_{metric}"
     records = []
 
-    for _, finalist in finalists_df.iterrows():
+    for idx, finalist in finalists_df.iterrows():
         finalist_row = finalist.to_dict()
         strategy_params = _extract_strategy_params(finalist_row, base_config["strategy_params"])
         cpu_curve = pd.Series(dtype=float)
@@ -563,6 +576,7 @@ def certify_gpu_finalists_with_cpu(
             "gpu_rank": finalist_row.get("gpu_rank"),
             "gpu_result_index": finalist_row.get("gpu_result_index"),
             "selection_reason": finalist_row.get("selection_reason", "gpu_top_n"),
+            "is_gpu_selected_candidate": bool(int(idx) == selected_idx),
             "cpu_success": bool(cpu_result.get("success", False)),
             "cpu_degraded_run": bool(cpu_result.get("degraded_run", False)),
             "cpu_promotion_blocked": bool(cpu_result.get("promotion_blocked", False)),
@@ -588,32 +602,32 @@ def certify_gpu_finalists_with_cpu(
         raise RuntimeError(
             f"CPU certification encountered {len(failed_df)} failed finalists."
         )
-    certified_df = certification_df[certification_df["cpu_certified"]].copy()
-    if certified_df.empty:
+    if not certification_df["cpu_certified"].any():
         raise RuntimeError("CPU certification rejected every GPU finalist.")
-    if cpu_metric_col not in certified_df.columns:
+    if cpu_metric_col not in certification_df.columns:
         raise ValueError(f"CPU certification metric '{metric}' was not produced by CPU backtest.")
+    selected_rows = certification_df[certification_df["is_gpu_selected_candidate"]].copy()
+    if selected_rows.empty:
+        raise RuntimeError("CPU certification lost the GPU-selected finalist during audit.")
+    selected_row = selected_rows.iloc[0].to_dict()
+    if not bool(selected_row.get("cpu_certified")):
+        raise RuntimeError("GPU-selected finalist failed CPU audit.")
 
-    certified_df = certified_df.sort_values(
-        [cpu_metric_col, "cpu_cagr", "cpu_mdd", "gpu_rank"],
-        ascending=[False, False, False, True],
-        kind="stable",
-    )
-    winner = certified_df.iloc[0].to_dict()
-    winner_params = _extract_strategy_params(winner, base_config["strategy_params"])
-    winner_params.update(
+    audited_params = _extract_strategy_params(selected_params_dict, base_config["strategy_params"])
+    audited_params.update(
         {
-            "selection_source": "cpu_certified_finalist",
+            "selection_source": "gpu_selected_finalist_cpu_audited",
             "cpu_certification_metric": metric,
             "cpu_certification_top_n": int(top_n_requested or len(finalists_df)),
             "cpu_certification_shortlist_size": int(len(finalists_df)),
-            "cpu_certification_gpu_rank": winner.get("gpu_rank"),
-            cpu_metric_col: winner.get(cpu_metric_col),
-            "cpu_cagr": winner.get("cpu_cagr"),
-            "cpu_mdd": winner.get("cpu_mdd"),
+            "cpu_certification_gpu_rank": selected_row.get("gpu_rank"),
+            "cpu_audit_outcome": "pass",
+            cpu_metric_col: selected_row.get(cpu_metric_col),
+            "cpu_cagr": selected_row.get("cpu_cagr"),
+            "cpu_mdd": selected_row.get("cpu_mdd"),
         }
     )
-    return winner_params, certification_df
+    return audited_params, certification_df
 
 # --- Clustering Helper Function ---
 def find_robust_parameters(
@@ -919,6 +933,7 @@ def run_walk_forward_analysis():
             selected_params_dict, cpu_certification_df = certify_gpu_finalists_with_cpu(
                 config,
                 gpu_shortlist_df,
+                selected_params_dict=selected_params_dict,
                 start_date=is_start.strftime('%Y-%m-%d'),
                 end_date=is_end.strftime('%Y-%m-%d'),
                 initial_cash=initial_cash,
@@ -933,11 +948,12 @@ def run_walk_forward_analysis():
             )
             selection_audit = {
                 "fold": fold_num,
-                "selection_source": selected_params_dict.get("selection_source", "cpu_certified_finalist"),
+                "selection_source": selected_params_dict.get("selection_source", "gpu_selected_finalist_cpu_audited"),
                 "cpu_certification_metric": selected_params_dict.get("cpu_certification_metric"),
                 "cpu_certification_top_n": selected_params_dict.get("cpu_certification_top_n"),
                 "cpu_certification_shortlist_size": selected_params_dict.get("cpu_certification_shortlist_size"),
                 "cpu_certification_gpu_rank": selected_params_dict.get("cpu_certification_gpu_rank"),
+                "cpu_audit_outcome": selected_params_dict.get("cpu_audit_outcome"),
                 "cpu_calmar_ratio": selected_params_dict.get("cpu_calmar_ratio"),
                 "cpu_cagr": selected_params_dict.get("cpu_cagr"),
                 "cpu_mdd": selected_params_dict.get("cpu_mdd"),

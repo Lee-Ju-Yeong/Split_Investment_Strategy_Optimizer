@@ -16,7 +16,9 @@
   - import-safe 기반 정리는 끝났다.
   - `lane_manifest.json`, `holdout_manifest.json` helper와 JSON 저장 연결은 시작됐다.
   - 현재 WFO run은 결과 폴더에 manifest를 남기지만, 아직 `legacy_wfo/internal_provisional` 상태를 정직하게 기록하는 단계다.
-  - 추가로 `holdout_backtest_executed`, `promotion_WFO_end < holdout_start`, `cpu_selection_rerank_active` 같은 현재 상태 라벨도 더 정직하게 남기도록 강화 중이다.
+  - 추가로 `holdout_backtest_executed`, `promotion_WFO_end < holdout_start` 같은 현재 상태 라벨도 더 정직하게 남기도록 강화 중이다.
+  - CPU 단계는 `GPU-selected finalist -> CPU pass/fail audit` 쪽으로 1차 정리됐다.
+  - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 사유에 반영할 수 있게 됐다.
   - lane 분리가 끝나기 전까지는 `walk_forward_settings.lane_type=legacy_wfo`만 허용하도록 guardrail을 두는 쪽으로 진행 중이다.
   - 하지만 `hard gate`, `robust score`, `lane_mode`, `holdout 경계`, `artifact guardrail`은 아직 공식 구현 전이다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
@@ -257,7 +259,7 @@
 - 특히 아래가 구현에서 가장 먼저 막혀야 한다.
   - research lane에서 carry-over가 가능한 상태
   - research lane에서 composite curve가 생성될 수 있는 상태
-  - CPU certification이 일부 rerank처럼 읽힐 수 있는 상태
+  - CPU audit 결과가 downstream governance gate와 아직 연결되지 않은 상태
   - 짧은 holdout이 `approval-grade final proof`처럼 과장되어 읽히는 상태
 - 따라서 코드를 먼저 guardrail 중심으로 나누고, 그다음 점수식과 리포트 템플릿을 고정하는 순서가 안전하다.
 

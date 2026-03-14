@@ -106,6 +106,31 @@ def _run_manifest(
     return manifest
 
 
+def _lane_manifest(*, approval_eligible: bool = True, cpu_audit_outcome: str = "pass") -> dict:
+    return {
+        "lane_type": "legacy_wfo",
+        "evidence_tier": "approval_grade" if approval_eligible else "internal_provisional",
+        "approval_eligible": approval_eligible,
+        "cpu_audit_outcome": cpu_audit_outcome,
+        "reasons": [] if approval_eligible and cpu_audit_outcome == "pass" else ["lane_mode_not_separated"],
+    }
+
+
+def _holdout_manifest(
+    *,
+    approval_eligible: bool = True,
+    holdout_backtest_executed: bool = True,
+    promotion_wfo_end_before_holdout: bool = True,
+) -> dict:
+    return {
+        "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
+        "approval_eligible": approval_eligible,
+        "holdout_backtest_executed": holdout_backtest_executed,
+        "promotion_wfo_end_before_holdout": promotion_wfo_end_before_holdout,
+        "reasons": [] if approval_eligible and holdout_backtest_executed and promotion_wfo_end_before_holdout else ["holdout_backtest_not_executed"],
+    }
+
+
 class TestStrictOnlyGovernance(unittest.TestCase):
     def test_evaluate_issue97_gate_c_requires_record_and_replay(self):
         result = evaluate_issue97_gate_c(
@@ -224,6 +249,35 @@ class TestStrictOnlyGovernance(unittest.TestCase):
         self.assertIn("metrics_cast_error_count=1", summary["reasons"])
         self.assertIn("pit_failure_days=1", summary["reasons"])
         self.assertIn("parity_mismatch_runs=1", summary["reasons"])
+
+    def test_summarize_issue97_observation_flags_provisional_wfo_manifests(self):
+        manifests = [
+            _run_manifest(
+                created_at="2026-03-07T00:00:00Z",
+                start_date=f"2025-{month:02d}-01",
+                end_date=f"2025-{month:02d}-28",
+            )
+            for month in range(1, 11)
+        ]
+
+        summary = summarize_issue97_observation(
+            manifests,
+            parity_artifacts=[
+                _parity_artifact(
+                    "record_strict",
+                    start_date="2025-01-01",
+                    end_date="2025-01-28",
+                )
+            ],
+            lane_manifests=[_lane_manifest(approval_eligible=False, cpu_audit_outcome="enabled_but_no_selection_audit")],
+            holdout_manifests=[_holdout_manifest(approval_eligible=False, holdout_backtest_executed=False)],
+        )
+
+        self.assertFalse(summary["approved"])
+        self.assertEqual(summary["lane_manifest_count"], 1)
+        self.assertEqual(summary["holdout_manifest_count"], 1)
+        self.assertIn("lane_manifest[0].approval_ineligible", summary["reasons"])
+        self.assertIn("holdout_manifest[0].holdout_backtest_not_executed", summary["reasons"])
 
     def test_write_run_manifest_records_use_weekly_alpha_gate(self):
         with tempfile.TemporaryDirectory() as tmpdir:

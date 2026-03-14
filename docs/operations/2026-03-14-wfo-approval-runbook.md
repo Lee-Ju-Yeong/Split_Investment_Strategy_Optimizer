@@ -64,7 +64,11 @@
   - research lane의 composite curve 차단
   - shortlist freeze와 manifest 자동 연결
   - holdout adequacy 지표 자동 기록
-  - CPU 단계의 `rerank` 성격 제거 후 진짜 `audit pass/fail`로 분리
+- 현재 반영된 것:
+  - CPU 단계는 GPU가 고른 후보를 `pass/fail`로 검산하는 쪽으로 1차 정리됐다.
+  - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 이유로 반영할 수 있다.
+- 아직 남은 것:
+  - WFO 실행 경로가 governance gate 입력을 자동으로 남기도록 end-to-end 연결
 - 현재 guardrail:
   - lane 분리가 끝나기 전까지 `walk_forward_settings.lane_type`은 `legacy_wfo`만 허용한다.
 
@@ -102,6 +106,16 @@ ls -td results/wfo_run_* | head -n 1
 LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
 sed -n '1,220p' "$LATEST_DIR/lane_manifest.json"
 sed -n '1,220p' "$LATEST_DIR/holdout_manifest.json"
+```
+- strict-only governance에 WFO manifest를 같이 넣어 보기:
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m src.strict_only_governance \
+  --mode observation \
+  --run-manifest-glob "results/run_*/run_manifest.json" \
+  --lane-manifest-json "$LATEST_DIR/lane_manifest.json" \
+  --holdout-manifest-json "$LATEST_DIR/holdout_manifest.json"
 ```
 - WFO 관련 빠른 회귀 테스트:
 ```bash

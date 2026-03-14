@@ -128,19 +128,19 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(manifest["cpu_audit_outcome"], "disabled")
         self.assertEqual(manifest["reasons"], ["lane_mode_not_separated"])
 
-    def test_build_lane_manifest_can_record_legacy_cpu_rerank_truthfully(self):
+    def test_build_lane_manifest_can_record_cpu_audit_pass(self):
         manifest = wfo.build_lane_manifest(
             lane_type="legacy_wfo",
             approval_eligible=False,
             decision_date="2026-03-14",
             promotion_data_cutoff="2021-12-31",
             composite_curve_allowed=True,
-            cpu_audit_outcome="cpu_selection_rerank_active",
-            reasons=["cpu_audit_contract_not_met"],
+            cpu_audit_outcome="pass",
+            reasons=["lane_mode_not_separated"],
         )
 
-        self.assertEqual(manifest["cpu_audit_outcome"], "cpu_selection_rerank_active")
-        self.assertIn("cpu_audit_contract_not_met", manifest["reasons"])
+        self.assertEqual(manifest["cpu_audit_outcome"], "pass")
+        self.assertIn("lane_mode_not_separated", manifest["reasons"])
 
     def test_non_legacy_lane_type_is_rejected_until_lane_split_lands(self):
         with self.assertRaisesRegex(ValueError, "lane_type=legacy_wfo"):
