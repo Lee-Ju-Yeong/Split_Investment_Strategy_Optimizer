@@ -308,6 +308,10 @@
   - `distinct_entry_months`
   - `peak_slot_utilization`
   - `realized_split_depth`
+- 그리고 이 전략에서는 `끝날 때 얼마나 안 팔렸는가` 하나보다 `기간 동안 자본이 얼마나 실제로 배치되었는가`를 더 중요하게 본다.
+- 그래서 보조 관찰용으로는 아래가 더 자연스럽다.
+  - `avg_invested_capital_ratio`
+  - `cash_drag_ratio`
 
 ## 8. 구현용 메모
 ### 8-1. hard gate 초안
@@ -361,10 +365,11 @@
     - 예:
       - `approval_grade`
       - `internal_provisional`
-  - `unclosed_capital_ratio`
   - `trade_count`
   - `closed_trade_count`
   - `distinct_entry_months`
+  - `avg_invested_capital_ratio`
+  - `cash_drag_ratio`
 - `anchor_manifest.json`
   - `anchor_set_id`
   - `anchor_dates`

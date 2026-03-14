@@ -20,12 +20,16 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     __package__ = file_path.parent.name  # "src"
 
 from .analysis.walk_forward_analyzer import (  # noqa: E402
+    build_holdout_manifest,
+    evaluate_holdout_policy,
     find_robust_parameters,
     plot_wfo_results,
     run_walk_forward_analysis,
 )
 
 __all__ = [
+    "build_holdout_manifest",
+    "evaluate_holdout_policy",
     "find_robust_parameters",
     "plot_wfo_results",
     "run_walk_forward_analysis",
@@ -34,4 +38,3 @@ __all__ = [
 
 if __name__ == "__main__":
     run_walk_forward_analysis()
-

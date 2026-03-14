@@ -156,7 +156,8 @@
   - `distinct_entry_months`
   - `peak_slot_utilization`
   - `realized_split_depth`
-  - `unclosed_capital_ratio`
+  - `avg_invested_capital_ratio`
+  - `cash_drag_ratio`
 - [ ] ablation 4축 비교 고정
   - `Legacy-Calmar`
   - `Robust-Score`
@@ -220,7 +221,7 @@
 - approval-grade run이라면 `promotion_WFO_end < approval_grade_holdout_start`가 문서와 manifest에서 동시에 증명된다.
 - approval-grade run이라면 `holdout_length_days >= 730` 또는 명시적 waiver 사유가 남는다.
 - approval-grade run이라면 holdout adequacy 필드가 함께 남는다.
-- `unclosed_capital_ratio`는 secondary guardrail로만 해석되고, 단독 승인 기준으로 오용되지 않는다.
+- holdout adequacy는 `미청산 비율`보다 `자본 배치 적정성` 중심으로 해석된다.
 - `lane_manifest.json`에 아래 필드가 남는다.
   - `evidence_tier`
   - `approval_eligible`
@@ -238,7 +239,8 @@
   - `closed_trade_count`
   - `avg_hold_days`
   - `distinct_entry_months`
-  - `unclosed_capital_ratio`
+  - `avg_invested_capital_ratio`
+  - `cash_drag_ratio`
 
 ## 9. 남아 있는 구현 리스크
 - 문서와 현재 코드가 아직 다르다.
@@ -261,4 +263,4 @@
   - `multi-anchor Anchored WFO`는 `시작 시점 민감도` 관찰용이다.
   - `approval-grade holdout`은 기본적으로 `24개월 이상`을 목표로 둔다.
   - 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급한다.
-  - `Unclosed Capital Ratio`는 유용하지만, `trade_count`나 `closed_trade_count`를 대체하는 주 기준이 아니라 보조 기준이다.
+  - holdout 적정성은 `미청산 비율` 하나보다 `자본 배치 적정성`과 `실제 회전/청산 커버리지`를 같이 보는 쪽이 맞다.
