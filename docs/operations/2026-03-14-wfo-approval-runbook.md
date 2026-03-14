@@ -71,6 +71,45 @@
 에 가깝다.
 
 ## 5. 단계별 실행 순서
+### 5-0. 자주 쓰는 명령어
+- 작업 시작 전 상태 확인:
+```bash
+git status --short --branch
+```
+- WFO 관련 설정과 holdout 메타데이터 확인:
+```bash
+rg -n "walk_forward_settings|holdout_start|holdout_end|lane_type" config/config.yaml
+```
+- GPU 파라미터 simulation 실행:
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m src.parameter_simulation_gpu
+```
+- WFO 실행:
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m src.walk_forward_analyzer
+```
+- 가장 최근 WFO 결과 폴더 확인:
+```bash
+ls -td results/wfo_run_* | head -n 1
+```
+- 최근 WFO run의 manifest 확인:
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+sed -n '1,220p' "$LATEST_DIR/lane_manifest.json"
+sed -n '1,220p' "$LATEST_DIR/holdout_manifest.json"
+```
+- WFO 관련 빠른 회귀 테스트:
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -m unittest \
+  tests.test_wfo_holdout_policy \
+  tests.test_wfo_cpu_certification \
+  tests.test_issue68_wfo_import_side_effects \
+  tests.test_issue69_entrypoint_compat
+```
+
 ### 5-1. Step 0. 준비
 - 목적:
   - 데이터와 기본 설정이 승인 경로에 맞는지 먼저 확인한다.
@@ -78,6 +117,7 @@
   - `strict_pit`
   - `candidate_source_mode=tier`
   - parity 관련 기존 가드가 깨져 있지 않은지
+  - `walk_forward_settings.holdout_start`, `walk_forward_settings.holdout_end`를 실제로 넣었는지
 - 지금 단계에서 하면 안 되는 것:
   - research용 설정을 promotion 경로에 섞기
   - 이미 오염된 구간을 holdout이라고 부르기
@@ -151,6 +191,9 @@
   - 마지막으로 따로 남겨 둔 시험지에서 확인한다.
 - 현재 정책:
   - `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
+- 현재 구현 상태:
+  - `holdout_start`, `holdout_end`를 config에 넣으면 `holdout_manifest.json`이 함께 저장된다.
+  - 아직 holdout 백테스트 자체가 자동 실행되는 것은 아니므로, manifest에 `holdout_backtest_not_executed`가 남을 수 있다.
 - 현재 저장소 상태:
   - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`
 - 아주 쉽게 말하면:

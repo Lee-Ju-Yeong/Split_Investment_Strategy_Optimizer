@@ -125,6 +125,23 @@ parameter_space:
 walk_forward_settings:
   total_folds: 6
   period_length_days: 365
+  # Optional manifest metadata for WFO artifacts.
+  # - `lane_type` is currently recorded as metadata only.
+  # - Use `legacy_wfo` until the new lane-mode split is fully implemented.
+  lane_type: "legacy_wfo"
+  decision_date: "2026-03-14"
+  research_data_cutoff: "2021-12-31"
+  promotion_data_cutoff: "2021-12-31"
+  shortlist_hash: null
+  publication_lag_policy: "unspecified"
+  ticker_universe_snapshot_id: null
+  engine_version_hash: null
+  # Optional holdout window for `holdout_manifest.json`.
+  holdout_start: "2025-01-01"
+  holdout_end: "2025-11-30"
+  holdout_contaminated_ranges:
+    - start: "2025-12-01"
+      end: "2026-01-31"
   # Hybrid lane:
   # GPU가 상위 후보를 제안한 뒤 CPU가 shortlist를 재실행해 최종 채택합니다.
   # 이 설정이 켜져 있어도 release/promotion은 별도 gate(`strict_pit`, parity, future reference=0)를 닫아야 합니다.

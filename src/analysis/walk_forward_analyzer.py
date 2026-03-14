@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..config_loader import load_config
@@ -38,6 +40,9 @@ _HOLDOUT_ADEQUACY_FIELDS = (
     "closed_trade_count",
     "avg_hold_days",
     "distinct_entry_months",
+)
+_DEFAULT_PARITY_CANARY_EXCLUDED_RANGES = (
+    ("2025-12-01", "2026-01-31"),
 )
 
 
@@ -156,6 +161,136 @@ def build_holdout_manifest(
         "cash_drag_ratio": adequacy.get("cash_drag_ratio"),
         "reasons": policy["reasons"],
     }
+
+
+def build_lane_manifest(
+    *,
+    lane_type: str,
+    approval_eligible: bool,
+    decision_date=None,
+    research_data_cutoff=None,
+    promotion_data_cutoff=None,
+    shortlist_hash=None,
+    publication_lag_policy=None,
+    ticker_universe_snapshot_id=None,
+    engine_version_hash=None,
+    composite_curve_allowed: bool,
+    cpu_audit_outcome: str,
+    reasons=None,
+) -> dict:
+    decision = _coerce_date(decision_date or datetime.now()).isoformat()
+    evidence_tier = "approval_grade" if approval_eligible else "internal_provisional"
+    return {
+        "lane_type": str(lane_type),
+        "evidence_tier": evidence_tier,
+        "approval_eligible": bool(approval_eligible),
+        "decision_date": decision,
+        "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
+        "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
+        "shortlist_hash": shortlist_hash,
+        "publication_lag_policy": publication_lag_policy or "unspecified",
+        "ticker_universe_snapshot_id": ticker_universe_snapshot_id,
+        "engine_version_hash": engine_version_hash or "unknown",
+        "composite_curve_allowed": bool(composite_curve_allowed),
+        "cpu_audit_outcome": str(cpu_audit_outcome),
+        "reasons": list(reasons or []),
+    }
+
+
+def _build_unconfigured_holdout_manifest(
+    *,
+    wfo_end,
+    contaminated_ranges=None,
+) -> dict:
+    return {
+        "holdout_start": None,
+        "holdout_end": None,
+        "wfo_end": _coerce_date(wfo_end).isoformat(),
+        "holdout_date_reuse_forbidden": True,
+        "parity_canary_excluded_ranges": _normalize_contaminated_ranges(contaminated_ranges),
+        "holdout_class": "unconfigured",
+        "holdout_length_days": None,
+        "approval_eligible": False,
+        "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
+        "missing_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
+        "trade_count": None,
+        "closed_trade_count": None,
+        "avg_hold_days": None,
+        "distinct_entry_months": None,
+        "peak_slot_utilization": None,
+        "realized_split_depth": None,
+        "avg_invested_capital_ratio": None,
+        "cash_drag_ratio": None,
+        "reasons": ["holdout_window_missing", "holdout_backtest_not_executed"],
+    }
+
+
+def _json_default(value):
+    item = getattr(value, "item", None)
+    if callable(item):
+        return item()
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _write_json_artifact(path: str, payload: dict) -> str:
+    artifact_path = Path(path)
+    artifact_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+    return artifact_path.as_posix()
+
+
+def write_wfo_manifests(
+    *,
+    results_dir: str,
+    lane_manifest: dict,
+    holdout_manifest: dict,
+) -> dict:
+    return {
+        "lane_manifest_path": _write_json_artifact(
+            os.path.join(results_dir, "lane_manifest.json"),
+            lane_manifest,
+        ),
+        "holdout_manifest_path": _write_json_artifact(
+            os.path.join(results_dir, "holdout_manifest.json"),
+            holdout_manifest,
+        ),
+    }
+
+
+def _resolve_cpu_audit_outcome(cpu_cert_settings: dict, selection_audits: list[dict]) -> str:
+    if not cpu_cert_settings.get("enabled"):
+        return "disabled"
+    return "pass" if selection_audits else "enabled_but_no_selection_audit"
+
+
+def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
+    contaminated_ranges = (
+        wfo_settings.get("holdout_contaminated_ranges")
+        or wfo_settings.get("parity_canary_excluded_ranges")
+        or list(_DEFAULT_PARITY_CANARY_EXCLUDED_RANGES)
+    )
+    return {
+        "holdout_start": wfo_settings.get("holdout_start")
+        or wfo_settings.get("internal_provisional_holdout_start"),
+        "holdout_end": wfo_settings.get("holdout_end")
+        or wfo_settings.get("internal_provisional_holdout_end"),
+        "contaminated_ranges": contaminated_ranges,
+    }
+
+
+def _build_current_lane_reasons(*, total_folds: int, overlap_days: int) -> list[str]:
+    reasons = ["lane_mode_not_separated"]
+    if int(total_folds) > 1:
+        reasons.append("oos_initial_cash_carry_over_enabled")
+        reasons.append("composite_curve_mean_aggregation_enabled")
+    if int(overlap_days) > 0:
+        reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
+    return reasons
 
 
 def _normalize_priority_for_cpu(value) -> str:
@@ -611,6 +746,7 @@ def run_walk_forward_analysis():
     total_end_date = pd.to_datetime(backtest_settings['end_date'])
     total_folds = wfo_settings['total_folds']
     period_length_days = wfo_settings['period_length_days']
+    holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
         
     # --- 확정 WFO 기간 생성 (no-overlap 우선, 불가 시 최소 겹침 + 균등분포) ---
     S = pd.to_datetime(backtest_settings['start_date']).normalize()
@@ -845,3 +981,49 @@ def run_walk_forward_analysis():
     params_df.to_csv(params_filepath, index=False)
    
     print(f"\n✅ Robust parameters for each fold saved to: {params_filepath}")
+
+    holdout_start = holdout_settings["holdout_start"]
+    holdout_end = holdout_settings["holdout_end"]
+    if holdout_start and holdout_end:
+        holdout_manifest = build_holdout_manifest(
+            holdout_start=holdout_start,
+            holdout_end=holdout_end,
+            wfo_end=total_end_date.date().isoformat(),
+            contaminated_ranges=holdout_settings["contaminated_ranges"],
+            adequacy_metrics={},
+        )
+        holdout_manifest["reasons"] = list(holdout_manifest.get("reasons", [])) + [
+            "holdout_backtest_not_executed",
+        ]
+    else:
+        holdout_manifest = _build_unconfigured_holdout_manifest(
+            wfo_end=total_end_date.date().isoformat(),
+            contaminated_ranges=holdout_settings["contaminated_ranges"],
+        )
+
+    lane_reasons = _build_current_lane_reasons(
+        total_folds=total_folds,
+        overlap_days=overlap_days,
+    )
+    lane_approval_eligible = bool(holdout_manifest.get("approval_eligible")) and not lane_reasons
+    lane_manifest = build_lane_manifest(
+        lane_type=str(wfo_settings.get("lane_type") or "legacy_wfo"),
+        approval_eligible=lane_approval_eligible,
+        decision_date=wfo_settings.get("decision_date"),
+        research_data_cutoff=wfo_settings.get("research_data_cutoff") or total_end_date.date().isoformat(),
+        promotion_data_cutoff=wfo_settings.get("promotion_data_cutoff") or total_end_date.date().isoformat(),
+        shortlist_hash=wfo_settings.get("shortlist_hash"),
+        publication_lag_policy=wfo_settings.get("publication_lag_policy"),
+        ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
+        engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
+        composite_curve_allowed=bool(total_folds > 1),
+        cpu_audit_outcome=_resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits),
+        reasons=lane_reasons,
+    )
+    manifest_paths = write_wfo_manifests(
+        results_dir=results_dir,
+        lane_manifest=lane_manifest,
+        holdout_manifest=holdout_manifest,
+    )
+    print(f"✅ Lane manifest saved to: {manifest_paths['lane_manifest_path']}")
+    print(f"✅ Holdout manifest saved to: {manifest_paths['holdout_manifest_path']}")
