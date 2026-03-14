@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.analysis import walk_forward_analyzer as wfo
 
@@ -95,7 +97,9 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                 "avg_invested_capital_ratio": 0.78,
                 "cash_drag_ratio": 0.22,
             },
-            holdout_backtest_executed=True,
+            holdout_backtest_attempted=True,
+            holdout_backtest_success=True,
+            holdout_backtest_blocked=False,
         )
 
         self.assertEqual(manifest["holdout_class"], "approval_grade")
@@ -103,11 +107,42 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(manifest["holdout_length_days"], 730)
         self.assertEqual(manifest["wfo_end"], "2021-12-31")
         self.assertTrue(manifest["holdout_backtest_executed"])
+        self.assertTrue(manifest["holdout_backtest_attempted"])
+        self.assertTrue(manifest["holdout_backtest_success"])
+        self.assertFalse(manifest["holdout_backtest_blocked"])
         self.assertTrue(manifest["promotion_wfo_end_before_holdout"])
         self.assertEqual(manifest["trade_count"], 220)
         self.assertEqual(manifest["avg_invested_capital_ratio"], 0.78)
         self.assertEqual(manifest["cash_drag_ratio"], 0.22)
         self.assertTrue(manifest["holdout_date_reuse_forbidden"])
+
+    def test_build_holdout_manifest_distinguishes_attempted_from_success(self):
+        manifest = wfo.build_holdout_manifest(
+            holdout_start="2022-01-01",
+            holdout_end="2023-12-31",
+            wfo_end="2021-12-31",
+            adequacy_metrics={
+                "trade_count": 220,
+                "closed_trade_count": 170,
+                "avg_hold_days": 48.0,
+                "distinct_entry_months": 22,
+                "peak_slot_utilization": 0.9,
+                "realized_split_depth": 4.0,
+                "avg_invested_capital_ratio": 0.78,
+                "cash_drag_ratio": 0.22,
+            },
+            holdout_backtest_attempted=True,
+            holdout_backtest_success=False,
+            holdout_backtest_blocked=True,
+        )
+
+        self.assertTrue(manifest["holdout_backtest_executed"])
+        self.assertTrue(manifest["holdout_backtest_attempted"])
+        self.assertFalse(manifest["holdout_backtest_success"])
+        self.assertTrue(manifest["holdout_backtest_blocked"])
+        self.assertFalse(manifest["approval_eligible"])
+        self.assertIn("holdout_backtest_not_successful", manifest["reasons"])
+        self.assertIn("holdout_backtest_blocked", manifest["reasons"])
 
     def test_build_lane_manifest_defaults_to_internal_provisional_when_not_eligible(self):
         manifest = wfo.build_lane_manifest(
@@ -258,6 +293,133 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         )
 
         self.assertEqual(reasons, [])
+
+    def test_final_candidate_manifest_uses_single_champion_and_gate_passing_reserves_only(self):
+        summary_df = pd.DataFrame(
+            [
+                {
+                    "selection_rank": 1,
+                    "shortlist_candidate_id": 2,
+                    "candidate_signature": "max_stocks=30",
+                    "hard_gate_pass": True,
+                    "hard_gate_fail_reasons": "",
+                    "promotion_fold_pass_rate": 1.0,
+                    "promotion_oos_calmar_median": 0.20,
+                    "promotion_oos_mdd_depth_worst": 0.00,
+                    "promotion_oos_cagr_median": 0.20,
+                    "max_stocks": 30,
+                    "order_investment_ratio": 0.03,
+                    "additional_buy_drop_rate": 0.05,
+                    "sell_profit_rate": 0.06,
+                    "additional_buy_priority": "highest_drop",
+                    "stop_loss_rate": -0.10,
+                    "max_splits_limit": 15,
+                    "max_inactivity_period": 60,
+                },
+                {
+                    "selection_rank": 2,
+                    "shortlist_candidate_id": 3,
+                    "candidate_signature": "max_stocks=25",
+                    "hard_gate_pass": True,
+                    "hard_gate_fail_reasons": "",
+                    "promotion_fold_pass_rate": 0.8,
+                    "promotion_oos_calmar_median": 0.18,
+                    "promotion_oos_mdd_depth_worst": 0.05,
+                    "promotion_oos_cagr_median": 0.18,
+                    "max_stocks": 25,
+                    "order_investment_ratio": 0.025,
+                    "additional_buy_drop_rate": 0.05,
+                    "sell_profit_rate": 0.055,
+                    "additional_buy_priority": "highest_drop",
+                    "stop_loss_rate": -0.10,
+                    "max_splits_limit": 12,
+                    "max_inactivity_period": 70,
+                },
+                {
+                    "selection_rank": 3,
+                    "shortlist_candidate_id": 1,
+                    "candidate_signature": "max_stocks=20",
+                    "hard_gate_pass": False,
+                    "hard_gate_fail_reasons": "promotion_fold_pass_rate_below_min",
+                    "promotion_fold_pass_rate": 0.5,
+                    "promotion_oos_calmar_median": 0.10,
+                    "promotion_oos_mdd_depth_worst": 0.03,
+                    "promotion_oos_cagr_median": 0.10,
+                    "max_stocks": 20,
+                    "order_investment_ratio": 0.02,
+                    "additional_buy_drop_rate": 0.04,
+                    "sell_profit_rate": 0.05,
+                    "additional_buy_priority": "lowest_order",
+                    "stop_loss_rate": -0.15,
+                    "max_splits_limit": 10,
+                    "max_inactivity_period": 90,
+                },
+            ]
+        )
+
+        manifest = wfo._build_final_candidate_manifest(
+            summary_df,
+            selection_settings=wfo._resolve_selection_contract_settings(
+                {"selection_contract": {"reserve_count": 2}}
+            ),
+            shortlist_hash="abc123",
+            decision_date="2026-03-14",
+            research_data_cutoff="2024-12-31",
+            promotion_data_cutoff="2024-12-31",
+            holdout_settings={"holdout_start": "2025-01-01", "holdout_end": "2025-11-30"},
+            engine_version_hash="engine123",
+            cpu_audit_required=True,
+        )
+
+        self.assertEqual(manifest["selection_mode"], "single_champion_only")
+        self.assertEqual(manifest["champion_candidate_id"], 2)
+        self.assertEqual(manifest["reserve_candidate_ids"], [3])
+        self.assertEqual(manifest["champion_params"]["max_stocks"], 30)
+        self.assertEqual(manifest["reserve_candidates"][0]["candidate_id"], 3)
+        self.assertTrue(manifest["holdout_candidate_pack_forbidden"])
+        self.assertEqual(
+            manifest["reserve_succession_rule"],
+            "prelocked_non_performance_only",
+        )
+        self.assertEqual(len(manifest["hard_gate_results_by_candidate"]), 3)
+
+    def test_compute_holdout_adequacy_metrics_uses_daily_snapshots_and_trade_history(self):
+        cpu_result = {
+            "daily_snapshots": [
+                {"date": "2025-01-02", "total_value": 100.0, "cash": 40.0, "stock_count": 1},
+                {"date": "2025-01-03", "total_value": 120.0, "cash": 20.0, "stock_count": 2},
+            ],
+            "trade_history": [
+                {"date": "2025-01-02", "code": "005930", "trade_type": "BUY", "order": 1},
+                {"date": "2025-01-15", "code": "005930", "trade_type": "SELL", "order": 1},
+                {"date": "2025-02-01", "code": "000660", "trade_type": "BUY", "order": 2},
+            ],
+        }
+
+        metrics = wfo._compute_holdout_adequacy_metrics(cpu_result, max_stocks=4)
+
+        self.assertEqual(metrics["trade_count"], 3)
+        self.assertEqual(metrics["closed_trade_count"], 1)
+        self.assertEqual(metrics["distinct_entry_months"], 2)
+        self.assertEqual(metrics["realized_split_depth"], 2.0)
+        self.assertAlmostEqual(metrics["avg_hold_days"], 13.0)
+        self.assertAlmostEqual(metrics["peak_slot_utilization"], 0.5)
+        self.assertAlmostEqual(metrics["avg_invested_capital_ratio"], ((0.6 + (100.0 / 120.0)) / 2.0))
+        self.assertAlmostEqual(metrics["cash_drag_ratio"], ((0.4 + (20.0 / 120.0)) / 2.0))
+
+    def test_holdout_auto_execute_block_reasons_require_dates_and_hard_gate_pass(self):
+        reasons = wfo._build_holdout_auto_execute_block_reasons(
+            {
+                "champion_hard_gate_pass": False,
+                "champion_params": {},
+            },
+            holdout_start=None,
+            holdout_end="2025-11-30",
+        )
+
+        self.assertIn("holdout_window_missing_for_auto_execute", reasons)
+        self.assertIn("no_candidate_passed_hard_gate", reasons)
+        self.assertIn("champion_params_missing", reasons)
 
     def test_build_current_lane_reasons_requires_cpu_audit_for_promotion_lane(self):
         reasons = wfo._build_current_lane_reasons(
