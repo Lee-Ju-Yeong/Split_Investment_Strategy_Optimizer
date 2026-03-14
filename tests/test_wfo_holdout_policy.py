@@ -43,10 +43,29 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertTrue(policy["contaminated_overlap"])
         self.assertIn("holdout_range_contaminated", policy["reasons"])
 
+    def test_holdout_is_internal_provisional_when_it_starts_before_wfo_end(self):
+        policy = wfo.evaluate_holdout_policy(
+            holdout_start="2021-12-31",
+            holdout_end="2023-12-31",
+            wfo_end="2021-12-31",
+            adequacy_metrics={
+                "trade_count": 220,
+                "closed_trade_count": 170,
+                "avg_hold_days": 48.0,
+                "distinct_entry_months": 22,
+            },
+        )
+
+        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertFalse(policy["approval_eligible"])
+        self.assertFalse(policy["promotion_wfo_end_before_holdout"])
+        self.assertIn("holdout_starts_on_or_before_wfo_end", policy["reasons"])
+
     def test_long_clean_holdout_with_required_adequacy_fields_is_approval_grade(self):
         policy = wfo.evaluate_holdout_policy(
             holdout_start="2022-01-01",
             holdout_end="2023-12-31",
+            wfo_end="2021-12-31",
             adequacy_metrics={
                 "trade_count": 220,
                 "closed_trade_count": 170,
@@ -76,12 +95,15 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                 "avg_invested_capital_ratio": 0.78,
                 "cash_drag_ratio": 0.22,
             },
+            holdout_backtest_executed=True,
         )
 
         self.assertEqual(manifest["holdout_class"], "approval_grade")
         self.assertTrue(manifest["approval_eligible"])
         self.assertEqual(manifest["holdout_length_days"], 730)
         self.assertEqual(manifest["wfo_end"], "2021-12-31")
+        self.assertTrue(manifest["holdout_backtest_executed"])
+        self.assertTrue(manifest["promotion_wfo_end_before_holdout"])
         self.assertEqual(manifest["trade_count"], 220)
         self.assertEqual(manifest["avg_invested_capital_ratio"], 0.78)
         self.assertEqual(manifest["cash_drag_ratio"], 0.22)
@@ -105,6 +127,24 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertTrue(manifest["composite_curve_allowed"])
         self.assertEqual(manifest["cpu_audit_outcome"], "disabled")
         self.assertEqual(manifest["reasons"], ["lane_mode_not_separated"])
+
+    def test_build_lane_manifest_can_record_legacy_cpu_rerank_truthfully(self):
+        manifest = wfo.build_lane_manifest(
+            lane_type="legacy_wfo",
+            approval_eligible=False,
+            decision_date="2026-03-14",
+            promotion_data_cutoff="2021-12-31",
+            composite_curve_allowed=True,
+            cpu_audit_outcome="cpu_selection_rerank_active",
+            reasons=["cpu_audit_contract_not_met"],
+        )
+
+        self.assertEqual(manifest["cpu_audit_outcome"], "cpu_selection_rerank_active")
+        self.assertIn("cpu_audit_contract_not_met", manifest["reasons"])
+
+    def test_non_legacy_lane_type_is_rejected_until_lane_split_lands(self):
+        with self.assertRaisesRegex(ValueError, "lane_type=legacy_wfo"):
+            wfo._resolve_legacy_lane_type({"lane_type": "promotion_evaluation"})
 
     def test_write_wfo_manifests_persists_lane_and_holdout_json(self):
         lane_manifest = wfo.build_lane_manifest(
@@ -137,6 +177,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertIn('"cpu_audit_outcome": "disabled"', lane_payload)
         self.assertIn('"holdout_start": "2025-01-01"', holdout_payload)
         self.assertIn('"holdout_class": "internal_provisional"', holdout_payload)
+        self.assertIn('"holdout_backtest_executed": false', holdout_payload)
 
 
 if __name__ == "__main__":

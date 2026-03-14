@@ -64,6 +64,9 @@
   - research lane의 composite curve 차단
   - shortlist freeze와 manifest 자동 연결
   - holdout adequacy 지표 자동 기록
+  - CPU 단계의 `rerank` 성격 제거 후 진짜 `audit pass/fail`로 분리
+- 현재 guardrail:
+  - lane 분리가 끝나기 전까지 `walk_forward_settings.lane_type`은 `legacy_wfo`만 허용한다.
 
 ### 4-3. 그래서 이 runbook의 성격
 - 지금은 `완전 자동 운영 매뉴얼`이라기보다
@@ -193,7 +196,8 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
 - 현재 구현 상태:
   - `holdout_start`, `holdout_end`를 config에 넣으면 `holdout_manifest.json`이 함께 저장된다.
-  - 아직 holdout 백테스트 자체가 자동 실행되는 것은 아니므로, manifest에 `holdout_backtest_not_executed`가 남을 수 있다.
+  - 아직 holdout 백테스트 자체가 자동 실행되는 것은 아니므로, manifest에 `holdout_backtest_not_executed`가 남고 `approval_eligible=false`로 유지된다.
+  - `promotion_WFO_end < holdout_start` 여부도 manifest에 함께 남긴다.
 - 현재 저장소 상태:
   - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`
 - 아주 쉽게 말하면:

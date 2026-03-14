@@ -87,12 +87,14 @@ def evaluate_holdout_policy(
     *,
     holdout_start,
     holdout_end,
+    wfo_end=None,
     contaminated_ranges=None,
     adequacy_metrics=None,
     min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
 ) -> dict:
     start = _coerce_date(holdout_start)
     end = _coerce_date(holdout_end)
+    resolved_wfo_end = _coerce_date(wfo_end) if wfo_end is not None else None
     length_days = _inclusive_day_count(start, end)
     normalized_ranges = _normalize_contaminated_ranges(contaminated_ranges)
     overlap = any(
@@ -104,6 +106,8 @@ def evaluate_holdout_policy(
     reasons = []
     if length_days < int(min_length_days):
         reasons.append(f"holdout_too_short={length_days}<{int(min_length_days)}")
+    if resolved_wfo_end is not None and start <= resolved_wfo_end:
+        reasons.append("holdout_starts_on_or_before_wfo_end")
     if overlap:
         reasons.append("holdout_range_contaminated")
     if missing_fields:
@@ -112,9 +116,13 @@ def evaluate_holdout_policy(
     return {
         "holdout_start": start.isoformat(),
         "holdout_end": end.isoformat(),
+        "wfo_end": resolved_wfo_end.isoformat() if resolved_wfo_end is not None else None,
         "holdout_length_days": int(length_days),
         "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
         "approval_eligible": bool(approval_eligible),
+        "promotion_wfo_end_before_holdout": bool(
+            resolved_wfo_end is None or resolved_wfo_end < start
+        ),
         "contaminated_ranges": normalized_ranges,
         "contaminated_overlap": bool(overlap),
         "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
@@ -130,25 +138,34 @@ def build_holdout_manifest(
     wfo_end,
     contaminated_ranges=None,
     adequacy_metrics=None,
+    holdout_backtest_executed: bool = False,
     min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
 ) -> dict:
     policy = evaluate_holdout_policy(
         holdout_start=holdout_start,
         holdout_end=holdout_end,
+        wfo_end=wfo_end,
         contaminated_ranges=contaminated_ranges,
         adequacy_metrics=adequacy_metrics,
         min_length_days=min_length_days,
     )
     adequacy = dict(adequacy_metrics or {})
+    reasons = list(policy["reasons"])
+    if not holdout_backtest_executed:
+        reasons.append("holdout_backtest_not_executed")
+    approval_eligible = bool(policy["approval_eligible"]) and bool(holdout_backtest_executed)
+    holdout_class = "approval_grade" if approval_eligible else "internal_provisional"
     return {
         "holdout_start": policy["holdout_start"],
         "holdout_end": policy["holdout_end"],
-        "wfo_end": _coerce_date(wfo_end).isoformat(),
+        "wfo_end": policy["wfo_end"],
         "holdout_date_reuse_forbidden": True,
+        "holdout_backtest_executed": bool(holdout_backtest_executed),
         "parity_canary_excluded_ranges": policy["contaminated_ranges"],
-        "holdout_class": policy["holdout_class"],
+        "holdout_class": holdout_class,
         "holdout_length_days": policy["holdout_length_days"],
-        "approval_eligible": policy["approval_eligible"],
+        "approval_eligible": approval_eligible,
+        "promotion_wfo_end_before_holdout": policy["promotion_wfo_end_before_holdout"],
         "required_adequacy_fields": policy["required_adequacy_fields"],
         "missing_adequacy_fields": policy["missing_adequacy_fields"],
         "trade_count": adequacy.get("trade_count"),
@@ -159,7 +176,7 @@ def build_holdout_manifest(
         "realized_split_depth": adequacy.get("realized_split_depth"),
         "avg_invested_capital_ratio": adequacy.get("avg_invested_capital_ratio"),
         "cash_drag_ratio": adequacy.get("cash_drag_ratio"),
-        "reasons": policy["reasons"],
+        "reasons": reasons,
     }
 
 
@@ -207,10 +224,12 @@ def _build_unconfigured_holdout_manifest(
         "holdout_end": None,
         "wfo_end": _coerce_date(wfo_end).isoformat(),
         "holdout_date_reuse_forbidden": True,
+        "holdout_backtest_executed": False,
         "parity_canary_excluded_ranges": _normalize_contaminated_ranges(contaminated_ranges),
         "holdout_class": "unconfigured",
         "holdout_length_days": None,
         "approval_eligible": False,
+        "promotion_wfo_end_before_holdout": None,
         "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
         "missing_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
         "trade_count": None,
@@ -265,7 +284,9 @@ def write_wfo_manifests(
 def _resolve_cpu_audit_outcome(cpu_cert_settings: dict, selection_audits: list[dict]) -> str:
     if not cpu_cert_settings.get("enabled"):
         return "disabled"
-    return "pass" if selection_audits else "enabled_but_no_selection_audit"
+    if selection_audits:
+        return "cpu_selection_rerank_active"
+    return "enabled_but_no_selection_audit"
 
 
 def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
@@ -283,13 +304,30 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
     }
 
 
-def _build_current_lane_reasons(*, total_folds: int, overlap_days: int) -> list[str]:
+def _resolve_legacy_lane_type(wfo_settings: dict) -> str:
+    lane_type = str(wfo_settings.get("lane_type") or "legacy_wfo").strip() or "legacy_wfo"
+    if lane_type != "legacy_wfo":
+        raise ValueError(
+            "walk_forward_analyzer does not implement separated lane semantics yet; "
+            "set walk_forward_settings.lane_type=legacy_wfo until lane_mode split lands."
+        )
+    return lane_type
+
+
+def _build_current_lane_reasons(
+    *,
+    total_folds: int,
+    overlap_days: int,
+    cpu_audit_outcome: str,
+) -> list[str]:
     reasons = ["lane_mode_not_separated"]
     if int(total_folds) > 1:
         reasons.append("oos_initial_cash_carry_over_enabled")
         reasons.append("composite_curve_mean_aggregation_enabled")
     if int(overlap_days) > 0:
         reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
+    if cpu_audit_outcome == "cpu_selection_rerank_active":
+        reasons.append("cpu_audit_contract_not_met")
     return reasons
 
 
@@ -746,6 +784,7 @@ def run_walk_forward_analysis():
     total_end_date = pd.to_datetime(backtest_settings['end_date'])
     total_folds = wfo_settings['total_folds']
     period_length_days = wfo_settings['period_length_days']
+    lane_type = _resolve_legacy_lane_type(wfo_settings)
     holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
         
     # --- 확정 WFO 기간 생성 (no-overlap 우선, 불가 시 최소 겹침 + 균등분포) ---
@@ -991,23 +1030,23 @@ def run_walk_forward_analysis():
             wfo_end=total_end_date.date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_metrics={},
+            holdout_backtest_executed=False,
         )
-        holdout_manifest["reasons"] = list(holdout_manifest.get("reasons", [])) + [
-            "holdout_backtest_not_executed",
-        ]
     else:
         holdout_manifest = _build_unconfigured_holdout_manifest(
             wfo_end=total_end_date.date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
         )
 
+    cpu_audit_outcome = _resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits)
     lane_reasons = _build_current_lane_reasons(
         total_folds=total_folds,
         overlap_days=overlap_days,
+        cpu_audit_outcome=cpu_audit_outcome,
     )
     lane_approval_eligible = bool(holdout_manifest.get("approval_eligible")) and not lane_reasons
     lane_manifest = build_lane_manifest(
-        lane_type=str(wfo_settings.get("lane_type") or "legacy_wfo"),
+        lane_type=lane_type,
         approval_eligible=lane_approval_eligible,
         decision_date=wfo_settings.get("decision_date"),
         research_data_cutoff=wfo_settings.get("research_data_cutoff") or total_end_date.date().isoformat(),
@@ -1017,7 +1056,7 @@ def run_walk_forward_analysis():
         ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
         engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
         composite_curve_allowed=bool(total_folds > 1),
-        cpu_audit_outcome=_resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits),
+        cpu_audit_outcome=cpu_audit_outcome,
         reasons=lane_reasons,
     )
     manifest_paths = write_wfo_manifests(
