@@ -1,0 +1,237 @@
+# WFO Approval Workflow Runbook
+
+> 작성일: 2026-03-14
+> 상태: Draft
+> 범위: Magic Split 전략의 `parameter simulation -> research WFO -> shortlist freeze -> promotion WFO -> CPU audit -> holdout` 운영 순서
+> 목적: 초심자도 `무엇을 먼저 하고`, `어디서 멈추고`, `어떤 말까지 할 수 있는지` 헷갈리지 않게 만드는 운영용 안내서
+
+## 1. 한 줄 결론
+- 이 전략은 `후보 찾기`와 `최종 승인`을 분리해서 봐야 한다.
+- 즉, `simulation`으로 후보를 찾고, `research lane`으로 흔들림을 보고, `promotion lane`으로 더 엄격하게 다시 보고, 마지막에 `holdout`으로 최종 확인한다.
+
+## 2. 이 문서가 필요한 이유
+- 설계 문서는 `왜 이렇게 하는가`를 설명한다.
+- 하지만 실제 운영에서는 아래가 더 중요하다.
+  - 지금 무엇을 돌려야 하나
+  - 어떤 결과는 연구용인가
+  - 어떤 결과부터 승인 근거가 되나
+  - 어디서 `stop-the-line` 해야 하나
+- 이 runbook은 그 질문에 답하는 문서다.
+
+## 3. 먼저 큰 그림
+### 3-1. 단계만 아주 간단히
+1. `Parameter simulation`
+   - 후보를 넓게 찾는다.
+2. `Research lane`
+   - 시작 시점이 달라도 결과가 너무 흔들리지 않는지 본다.
+3. `Shortlist freeze`
+   - 후보를 좁히고 고정한다.
+4. `Promotion evaluation lane`
+   - 더 엄격한 시간 전이 검증을 한다.
+5. `CPU audit`
+   - GPU/선정 결과가 CPU 기준에서도 맞는지 검산한다.
+6. `Holdout`
+   - 마지막으로 따로 남겨 둔 구간에서 최종 확인한다.
+
+### 3-2. 가장 쉬운 비유
+- `simulation`은 문제집을 많이 푸는 단계다.
+- `research lane`은 여러 날짜에 본 모의고사다.
+- `promotion lane`은 공식 모의평가다.
+- `holdout`은 끝까지 안 풀고 남겨 둔 진짜 마지막 시험지다.
+
+## 4. 현재 상태를 먼저 알고 시작하기
+### 4-1. 이미 합의된 것
+- `research lane`과 `promotion lane`은 역할이 다르다.
+- `research lane`
+  - 목적:
+    - 시작 시점 민감도 관찰
+  - 권장 구조:
+    - `multi-anchor Anchored WFO`
+- `promotion lane`
+  - 목적:
+    - 시간 전이 검증
+  - 권장 구조:
+    - `single-anchor non-overlap Anchored WFO`
+- `approval-grade holdout`
+  - 기본 목표:
+    - `24개월 이상 untouched 구간`
+
+### 4-2. 아직 구현이 다 안 된 것
+- 현재 `walk_forward_analyzer.py`는 이 새 구조를 100% 자동으로 강제하지 않는다.
+- 특히 아래는 아직 후속 구현이 더 필요하다.
+  - research lane / promotion lane 실행 경로 분리
+  - research lane의 carry-over 차단
+  - research lane의 composite curve 차단
+  - shortlist freeze와 manifest 자동 연결
+  - holdout adequacy 지표 자동 기록
+
+### 4-3. 그래서 이 runbook의 성격
+- 지금은 `완전 자동 운영 매뉴얼`이라기보다
+- `사람이 실수하지 않도록 순서와 의미를 고정하는 운영 계약서`
+에 가깝다.
+
+## 5. 단계별 실행 순서
+### 5-1. Step 0. 준비
+- 목적:
+  - 데이터와 기본 설정이 승인 경로에 맞는지 먼저 확인한다.
+- 확인할 것:
+  - `strict_pit`
+  - `candidate_source_mode=tier`
+  - parity 관련 기존 가드가 깨져 있지 않은지
+- 지금 단계에서 하면 안 되는 것:
+  - research용 설정을 promotion 경로에 섞기
+  - 이미 오염된 구간을 holdout이라고 부르기
+
+### 5-2. Step 1. Parameter simulation
+- 목적:
+  - 좋은 후보를 넓게 찾는다.
+- 해석:
+  - 여기서 중요한 것은 `무조건 1등 하나`가 아니라 `후보군(shortlist)` 또는 `plateau`다.
+- 산출물:
+  - GPU simulation 결과
+  - 후보군
+- 여기서 할 수 있는 말:
+  - `이 구간에서 후보군이 이렇게 보인다`
+- 여기서 하면 안 되는 말:
+  - `이 결과만으로 승인 가능하다`
+
+### 5-3. Step 2. Research lane
+- 목적:
+  - 시작 시점이 바뀌어도 결과가 너무 흔들리지 않는지 본다.
+- 권장 구조:
+  - `multi-anchor Anchored WFO`
+- 중요한 규칙:
+  - 각 fold는 같은 `initial_cash`로 시작
+  - carry-over 금지
+  - 단일 합성 equity curve 금지
+- 산출물:
+  - `anchor별/fold별 metric 분포`
+  - summary
+- 여기서 할 수 있는 말:
+  - `시작 시점 민감도가 상대적으로 낮았다`
+- 여기서 하면 안 되는 말:
+  - `release-grade final proof다`
+
+### 5-4. Step 3. Shortlist freeze
+- 목적:
+  - research 단계에서 후보를 좁힌 뒤 고정한다.
+- 아주 쉽게 말하면:
+  - 이제부터는 답안지를 더 고치지 않는 단계다.
+- 남겨야 할 것:
+  - 어떤 후보를 freeze 했는지
+  - 언제 freeze 했는지
+  - 어떤 데이터 cutoff까지 보고 freeze 했는지
+- 여기서 하면 안 되는 것:
+  - freeze 이후 holdout을 보고 후보를 다시 수정하기
+
+### 5-5. Step 4. Promotion evaluation lane
+- 목적:
+  - shortlist가 시간 전이 검증을 통과하는지 본다.
+- 권장 구조:
+  - `single-anchor non-overlap Anchored WFO`
+- 해석:
+  - 이 단계는 `재탐색`이 아니라 `승인 심사`다.
+- 산출물:
+  - fold별 결과
+  - 선택/탈락 근거
+- 여기서 할 수 있는 말:
+  - `고정 출발점 기준 시간 전이 검증을 통과했다`
+
+### 5-6. Step 5. CPU audit
+- 목적:
+  - 이미 고른 후보가 CPU 기준에서도 맞는지 검산한다.
+- 중요한 점:
+  - audit은 `다시 최적화`가 아니다.
+  - `pass/fail`에 가깝다.
+- 여기서 하면 안 되는 것:
+  - CPU 결과를 보고 사실상 새 후보를 다시 뽑기
+
+### 5-7. Step 6. Holdout
+- 목적:
+  - 마지막으로 따로 남겨 둔 시험지에서 확인한다.
+- 현재 정책:
+  - `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`
+- 현재 저장소 상태:
+  - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`
+- 아주 쉽게 말하면:
+  - 지금 남겨 둔 최신 구간은 있긴 하지만, 너무 짧아서 최종 승인용으로는 약하다.
+- 그래서 현재 가능한 표현:
+  - `internal provisional check`
+- 현재 하면 안 되는 말:
+  - `2025-01-01 ~ 2025-11-30`는 이미 충분한 release-grade final proof다
+
+## 6. Holdout은 어떻게 읽어야 하나
+### 6-1. 왜 이 전략은 holdout이 길어야 하나
+- 이 전략은 한 번에 풀인하지 않는다.
+- 조금 사고, 더 떨어지면 추가매수하고, 시간이 걸린 뒤에야 빠져나올 수 있다.
+- 그래서 너무 짧은 holdout은:
+  - 아직 포트폴리오가 충분히 차기 전에 끝날 수 있고
+  - 매수만 많이 하고 청산은 덜 본 채 끝날 수 있다
+
+### 6-2. 그래서 무엇을 같이 보나
+- 기간만 길다고 자동으로 충분한 것은 아니다.
+- 아래도 같이 봐야 한다.
+  - `trade_count`
+  - `closed_trade_count`
+  - `avg_hold_days`
+  - `distinct_entry_months`
+  - `peak_slot_utilization`
+  - `realized_split_depth`
+  - `avg_invested_capital_ratio`
+  - `cash_drag_ratio`
+
+### 6-3. 해석의 중심
+- 이 전략에서는
+  - `안 판 주식이 많냐`
+보다
+  - `돈이 실제로 얼마나 적절히 배치되고 회전했느냐`
+를 더 중요하게 본다.
+
+## 7. 금지 사항
+- research lane 결과를 `release-grade evidence`라고 부르기
+- freeze 이후 후보를 슬쩍 수정하기
+- holdout 날짜를 research나 promotion WFO에 다시 쓰기
+- parity/release-readiness에 쓴 구간을 untouched holdout이라고 부르기
+- 짧은 holdout을 waiver 없이 `approval-grade final proof`처럼 말하기
+
+## 8. Stop-the-line
+- `parity mismatch > 0`
+- `holdout date reuse detected`
+- `decision_date 이후 shortlist 변경`
+- `approval-grade claim with holdout < 24 months and no adequacy waiver`
+
+초심자 버전으로 말하면:
+- 계산이 안 맞거나
+- 최종 시험지를 미리 봤거나
+- 답안지를 몰래 다시 고쳤으면
+- 그 run은 승인 근거로 쓰지 않는다.
+
+## 9. 현재 기준으로 할 수 있는 주장과 하면 안 되는 주장
+### 9-1. 할 수 있는 주장
+- `research lane에서 시작 시점 민감도를 관찰했다`
+- `promotion lane에서 시간 전이 검증을 수행했다`
+- `현재 2025 구간은 internal provisional holdout이다`
+
+### 9-2. 하면 안 되는 주장
+- `research lane 성과가 곧 최종 승인 성과다`
+- `2024-01-01 ~ 2025-12-31는 지금 기준으로 untouched holdout이다`
+- `2025-01-01 ~ 2025-11-30는 이미 충분한 release-grade final proof다`
+
+## 10. 현재 산출물 체크리스트
+- simulation 결과
+- shortlist
+- selection audit
+- lane manifest
+- holdout manifest
+- research 분포 요약
+- promotion fold 결과
+
+## 11. 현재 저장소 문맥에서 기억할 것 3가지
+1. `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`이다.
+2. `approval-grade holdout`의 기본 목표는 `24개월 이상 untouched 구간`이다.
+3. 이 전략에서는 `미청산 비율` 하나보다 `자본 배치 적정성`과 `실제 회전/청산 커버리지`가 더 중요하다.
+
+## 12. 관련 문서
+- [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+- [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
+- [Hybrid Release Gate Board](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-06-hybrid-release-gate-board.md)

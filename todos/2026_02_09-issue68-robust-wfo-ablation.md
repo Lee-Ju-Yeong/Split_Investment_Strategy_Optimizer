@@ -256,6 +256,8 @@
 - `#68`은 현재 공식 경로 위에서 `robust score`와 verification layer를 강화하는 문서다.
 - 초심자용 설계 메모:
   - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+- 운영용 단계별 안내:
+  - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
 - 현재 세션에서 잠긴 핵심:
   - research lane 데이터는 `후보 발굴/필터링`에는 쓸 수 있지만 `final untouched OOS`라고 부를 수는 없다.
   - CPU certification의 목표는 `rerank`보다 `audit/pass-fail`에 가깝게 잠근다.
