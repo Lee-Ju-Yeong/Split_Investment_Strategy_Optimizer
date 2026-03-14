@@ -32,6 +32,130 @@ _CPU_CERT_INT_KEYS = {
     "max_inactivity_period",
 }
 _CPU_CERT_SORT_COLUMNS = ("calmar_ratio", "cagr", "mdd")
+_APPROVAL_GRADE_HOLDOUT_MIN_DAYS = 730
+_HOLDOUT_ADEQUACY_FIELDS = (
+    "trade_count",
+    "closed_trade_count",
+    "avg_hold_days",
+    "distinct_entry_months",
+)
+
+
+def _coerce_date(value):
+    if hasattr(value, "date") and callable(getattr(value, "date")):
+        try:
+            return value.date()
+        except TypeError:
+            pass
+    return datetime.fromisoformat(str(value)).date()
+
+
+def _inclusive_day_count(start_date, end_date) -> int:
+    start = _coerce_date(start_date)
+    end = _coerce_date(end_date)
+    if end < start:
+        raise ValueError("holdout_end must be on or after holdout_start")
+    return int((end - start).days + 1)
+
+
+def _normalize_contaminated_ranges(ranges) -> list[dict]:
+    normalized = []
+    for item in list(ranges or []):
+        if isinstance(item, dict):
+            raw_start = item.get("start")
+            raw_end = item.get("end")
+        else:
+            raw_start, raw_end = item
+        start = _coerce_date(raw_start)
+        end = _coerce_date(raw_end)
+        if end < start:
+            raise ValueError("contaminated range end must be on or after start")
+        normalized.append({"start": start.isoformat(), "end": end.isoformat()})
+    return normalized
+
+
+def _ranges_overlap(start_date, end_date, range_start, range_end) -> bool:
+    return not (end_date < range_start or range_end < start_date)
+
+
+def evaluate_holdout_policy(
+    *,
+    holdout_start,
+    holdout_end,
+    contaminated_ranges=None,
+    adequacy_metrics=None,
+    min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
+) -> dict:
+    start = _coerce_date(holdout_start)
+    end = _coerce_date(holdout_end)
+    length_days = _inclusive_day_count(start, end)
+    normalized_ranges = _normalize_contaminated_ranges(contaminated_ranges)
+    overlap = any(
+        _ranges_overlap(start, end, _coerce_date(item["start"]), _coerce_date(item["end"]))
+        for item in normalized_ranges
+    )
+    adequacy = dict(adequacy_metrics or {})
+    missing_fields = [field for field in _HOLDOUT_ADEQUACY_FIELDS if field not in adequacy]
+    reasons = []
+    if length_days < int(min_length_days):
+        reasons.append(f"holdout_too_short={length_days}<{int(min_length_days)}")
+    if overlap:
+        reasons.append("holdout_range_contaminated")
+    if missing_fields:
+        reasons.append("missing_adequacy_fields=" + ",".join(missing_fields))
+    approval_eligible = not reasons
+    return {
+        "holdout_start": start.isoformat(),
+        "holdout_end": end.isoformat(),
+        "holdout_length_days": int(length_days),
+        "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
+        "approval_eligible": bool(approval_eligible),
+        "contaminated_ranges": normalized_ranges,
+        "contaminated_overlap": bool(overlap),
+        "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
+        "missing_adequacy_fields": missing_fields,
+        "reasons": reasons,
+    }
+
+
+def build_holdout_manifest(
+    *,
+    holdout_start,
+    holdout_end,
+    wfo_end,
+    contaminated_ranges=None,
+    adequacy_metrics=None,
+    min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
+) -> dict:
+    policy = evaluate_holdout_policy(
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        contaminated_ranges=contaminated_ranges,
+        adequacy_metrics=adequacy_metrics,
+        min_length_days=min_length_days,
+    )
+    adequacy = dict(adequacy_metrics or {})
+    return {
+        "holdout_start": policy["holdout_start"],
+        "holdout_end": policy["holdout_end"],
+        "wfo_end": _coerce_date(wfo_end).isoformat(),
+        "holdout_date_reuse_forbidden": True,
+        "parity_canary_excluded_ranges": policy["contaminated_ranges"],
+        "holdout_class": policy["holdout_class"],
+        "holdout_length_days": policy["holdout_length_days"],
+        "approval_eligible": policy["approval_eligible"],
+        "required_adequacy_fields": policy["required_adequacy_fields"],
+        "missing_adequacy_fields": policy["missing_adequacy_fields"],
+        "trade_count": adequacy.get("trade_count"),
+        "closed_trade_count": adequacy.get("closed_trade_count"),
+        "avg_hold_days": adequacy.get("avg_hold_days"),
+        "distinct_entry_months": adequacy.get("distinct_entry_months"),
+        "peak_slot_utilization": adequacy.get("peak_slot_utilization"),
+        "realized_split_depth": adequacy.get("realized_split_depth"),
+        "avg_invested_capital_ratio": adequacy.get("avg_invested_capital_ratio"),
+        "cash_drag_ratio": adequacy.get("cash_drag_ratio"),
+        "reasons": policy["reasons"],
+    }
 
 
 def _normalize_priority_for_cpu(value) -> str:
