@@ -18,16 +18,22 @@ class _FakePerformanceAnalyzer:
         self.daily_values = history_df["total_value"]
 
     def get_metrics(self, formatted=False):
+        start_value = float(self.daily_values.iloc[0])
+        end_value = float(self.daily_values.iloc[-1])
+        min_value = float(self.daily_values.min())
+        cagr = (end_value / start_value) - 1.0 if start_value else 0.0
+        mdd = (min_value / start_value) - 1.0 if start_value else 0.0
+        calmar = cagr / abs(mdd) if mdd not in (0.0, -0.0) else cagr
         if formatted:
             return {
-                "CAGR": "10.00%",
-                "MDD": "-5.00%",
-                "Calmar": "2.00",
+                "CAGR": f"{cagr:.2%}",
+                "MDD": f"{mdd:.2%}",
+                "Calmar": f"{calmar:.2f}",
             }
         return {
-            "cagr": 0.10,
-            "mdd": -0.05,
-            "calmar_ratio": 2.0,
+            "cagr": cagr,
+            "mdd": mdd,
+            "calmar_ratio": calmar,
         }
 
 
@@ -181,6 +187,125 @@ class TestWfoLaneExecution(unittest.TestCase):
             "2023-01-01",
             "2023-12-31",
         ])
+
+    def test_research_lane_uses_frozen_shortlist_multi_anchor_without_composite_curve(self):
+        config = self._promotion_config()
+        config["backtest_settings"]["end_date"] = "2024-12-31"
+        config["walk_forward_settings"].update(
+            {
+                "lane_type": "research_start_date_robustness",
+                "research_mode": "frozen_shortlist_multi_anchor_eval",
+                "research_anchor_start_dates": ["2020-01-01", "2021-01-01"],
+                "anchor_set_id": "anchor_set_v1",
+                "anchor_spacing_rule": "manual_explicit",
+                "coverage_normalized": True,
+                "cpu_certification_enabled": False,
+            }
+        )
+        backtest_calls = []
+
+        def _fake_find_optimal_parameters(*args, **kwargs):
+            raise AssertionError("research lane should not call find_optimal_parameters")
+
+        def _fake_run_single_backtest(*, start_date, end_date, params_dict, initial_cash):
+            backtest_calls.append((start_date, end_date, int(params_dict["max_stocks"]), float(initial_cash)))
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            duration_days = int((end - start).days + 1)
+            if duration_days > 365:
+                if int(params_dict["max_stocks"]) == 30:
+                    return pd.Series(
+                        [initial_cash, initial_cash * 1.30],
+                        index=pd.to_datetime([start_date, end_date]),
+                    )
+                return pd.Series(
+                    [initial_cash, initial_cash * 1.10],
+                    index=pd.to_datetime([start_date, end_date]),
+                )
+            if int(params_dict["max_stocks"]) == 30:
+                return pd.Series(
+                    [initial_cash, initial_cash * 1.08],
+                    index=pd.to_datetime([start_date, end_date]),
+                )
+            return pd.Series(
+                [initial_cash, initial_cash * 1.02],
+                index=pd.to_datetime([start_date, end_date]),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "research_shortlist.csv")
+            pd.DataFrame(
+                [
+                    {
+                        "max_stocks": 20,
+                        "order_investment_ratio": 0.02,
+                        "additional_buy_drop_rate": 0.04,
+                        "sell_profit_rate": 0.05,
+                        "additional_buy_priority": 0.0,
+                        "stop_loss_rate": -0.15,
+                        "max_splits_limit": 10,
+                        "max_inactivity_period": 90,
+                    },
+                    {
+                        "max_stocks": 30,
+                        "order_investment_ratio": 0.03,
+                        "additional_buy_drop_rate": 0.05,
+                        "sell_profit_rate": 0.06,
+                        "additional_buy_priority": 1.0,
+                        "stop_loss_rate": -0.10,
+                        "max_splits_limit": 15,
+                        "max_inactivity_period": 60,
+                    },
+                ]
+            ).to_csv(shortlist_path, index=False)
+            config["walk_forward_settings"]["research_shortlist_path"] = shortlist_path.as_posix()
+
+            previous_cwd = os.getcwd()
+            os.chdir(tmp_dir)
+            try:
+                fake_sim_module = types.ModuleType("src.parameter_simulation_gpu")
+                fake_sim_module.find_optimal_parameters = _fake_find_optimal_parameters
+                fake_gpu_module = types.ModuleType("src.debug_gpu_single_run")
+                fake_gpu_module.run_single_backtest = _fake_run_single_backtest
+                fake_perf_module = types.ModuleType("src.performance_analyzer")
+                fake_perf_module.PerformanceAnalyzer = _FakePerformanceAnalyzer
+
+                with patch("src.analysis.walk_forward_analyzer.load_config", return_value=config), \
+                     patch("src.analysis.walk_forward_analyzer.plot_wfo_results", return_value=None), \
+                     patch.dict(
+                         sys.modules,
+                         {
+                             "src.parameter_simulation_gpu": fake_sim_module,
+                             "src.debug_gpu_single_run": fake_gpu_module,
+                             "src.performance_analyzer": fake_perf_module,
+                         },
+                     ):
+                    wfo.run_walk_forward_analysis()
+
+                result_dirs = sorted(glob.glob(os.path.join("results", "wfo_run_*")))
+                self.assertEqual(len(result_dirs), 1)
+                result_dir = result_dirs[0]
+                lane_manifest = json.loads(
+                    Path(result_dir, "lane_manifest.json").read_text(encoding="utf-8")
+                )
+                anchor_manifest = json.loads(
+                    Path(result_dir, "anchor_manifest.json").read_text(encoding="utf-8")
+                )
+                metrics_df = pd.read_csv(Path(result_dir, "research_anchor_fold_metrics.csv"))
+                equity_curve_exists = Path(result_dir, "wfo_equity_curve_data.csv").exists()
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertFalse(equity_curve_exists)
+        self.assertTrue(all(call[3] == 10_000_000.0 for call in backtest_calls))
+        self.assertEqual(lane_manifest["lane_type"], "research_start_date_robustness")
+        self.assertFalse(lane_manifest["approval_eligible"])
+        self.assertFalse(lane_manifest["composite_curve_allowed"])
+        self.assertIn("research_lane_distribution_only", lane_manifest["reasons"])
+        self.assertEqual(anchor_manifest["anchor_set_id"], "anchor_set_v1")
+        self.assertEqual(anchor_manifest["anchor_dates"], ["2020-01-01", "2021-01-01"])
+        self.assertEqual(len(metrics_df), 4)
+        self.assertEqual(sorted(metrics_df["selected_shortlist_candidate_id"].unique().tolist()), [2])
 
 
 if __name__ == "__main__":

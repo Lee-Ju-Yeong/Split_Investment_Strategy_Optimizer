@@ -66,11 +66,13 @@
 - 현재 반영된 것:
   - CPU 단계는 GPU가 고른 후보를 `pass/fail`로 검산하는 쪽으로 1차 정리됐다.
   - `promotion_evaluation`은 single-anchor non-overlap anchored WFO로 실제 실행 의미가 분리되기 시작했다.
+  - `research_start_date_robustness`는 `research_shortlist_path + research_anchor_start_dates`가 주어지면 frozen shortlist multi-anchor evaluation을 실행할 수 있다.
   - `strict_only_governance`는 선택적으로 `lane_manifest.json`, `holdout_manifest.json`을 읽어 provisional 상태를 승인 차단 이유로 반영할 수 있다.
 - 아직 남은 것:
   - WFO 실행 경로가 governance gate 입력을 자동으로 남기도록 end-to-end 연결
 - 현재 guardrail:
-  - `research_start_date_robustness`는 frozen shortlist multi-anchor 경로가 아직 없어서 현재는 거부된다.
+  - research lane은 `research_mode=frozen_shortlist_multi_anchor_eval`만 허용한다.
+  - research lane은 `research_shortlist_path`, `research_anchor_start_dates`가 없으면 실행되지 않는다.
 
 ### 4-3. 그래서 이 runbook의 성격
 - 지금은 `완전 자동 운영 매뉴얼`이라기보다

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -274,8 +275,9 @@ def write_wfo_manifests(
     results_dir: str,
     lane_manifest: dict,
     holdout_manifest: dict,
+    anchor_manifest: dict | None = None,
 ) -> dict:
-    return {
+    paths = {
         "lane_manifest_path": _write_json_artifact(
             os.path.join(results_dir, "lane_manifest.json"),
             lane_manifest,
@@ -285,6 +287,12 @@ def write_wfo_manifests(
             holdout_manifest,
         ),
     }
+    if anchor_manifest is not None:
+        paths["anchor_manifest_path"] = _write_json_artifact(
+            os.path.join(results_dir, "anchor_manifest.json"),
+            anchor_manifest,
+        )
+    return paths
 
 
 def _resolve_cpu_audit_outcome(cpu_cert_settings: dict, selection_audits: list[dict]) -> str:
@@ -313,6 +321,17 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
     }
 
 
+def _hash_file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _resolve_lane_type(wfo_settings: dict) -> str:
     lane_type = str(wfo_settings.get("lane_type") or "legacy_wfo").strip() or "legacy_wfo"
     if lane_type not in _SUPPORTED_WFO_LANE_TYPES:
@@ -320,20 +339,66 @@ def _resolve_lane_type(wfo_settings: dict) -> str:
             "Unsupported walk_forward_settings.lane_type. "
             f"Expected one of: {', '.join(_SUPPORTED_WFO_LANE_TYPES)}."
         )
-    if lane_type == "research_start_date_robustness":
-        research_mode = str(
-            wfo_settings.get("research_mode") or _RESEARCH_WFO_MODE
-        ).strip() or _RESEARCH_WFO_MODE
-        if research_mode != _RESEARCH_WFO_MODE:
-            raise ValueError(
-                "research_start_date_robustness only supports "
-                f"research_mode={_RESEARCH_WFO_MODE}."
-            )
-        raise ValueError(
-            "research_start_date_robustness requires frozen shortlist multi-anchor evaluation, "
-            "which is not wired into walk_forward_analyzer yet."
-        )
     return lane_type
+
+
+def _load_frozen_shortlist(shortlist_path: str):
+    import pandas as pd
+
+    path = Path(shortlist_path)
+    if not path.exists():
+        raise ValueError(f"research_shortlist_path does not exist: {path}")
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        shortlist_df = pd.read_csv(path)
+    elif suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload.get("rows") if isinstance(payload, dict) else payload
+        shortlist_df = pd.DataFrame(rows)
+    else:
+        raise ValueError("research_shortlist_path must be .csv or .json")
+    if shortlist_df.empty:
+        raise ValueError("research shortlist is empty.")
+    missing_columns = [key for key in _CPU_CERT_PARAM_KEYS if key not in shortlist_df.columns]
+    if missing_columns:
+        raise ValueError(
+            "research shortlist is missing required parameter columns: "
+            + ",".join(missing_columns)
+        )
+    shortlist_df = shortlist_df.reset_index(drop=True).copy()
+    shortlist_df["shortlist_candidate_id"] = shortlist_df.index + 1
+    return shortlist_df
+
+
+def _resolve_research_runtime_settings(wfo_settings: dict) -> dict:
+    research_mode = str(
+        wfo_settings.get("research_mode") or _RESEARCH_WFO_MODE
+    ).strip() or _RESEARCH_WFO_MODE
+    if research_mode != _RESEARCH_WFO_MODE:
+        raise ValueError(
+            "research_start_date_robustness only supports "
+            f"research_mode={_RESEARCH_WFO_MODE}."
+        )
+    shortlist_path = str(wfo_settings.get("research_shortlist_path") or "").strip()
+    if not shortlist_path:
+        raise ValueError(
+            "research_start_date_robustness requires walk_forward_settings.research_shortlist_path."
+        )
+    anchor_dates = list(wfo_settings.get("research_anchor_start_dates") or [])
+    if not anchor_dates:
+        raise ValueError(
+            "research_start_date_robustness requires walk_forward_settings.research_anchor_start_dates."
+        )
+    return {
+        "research_mode": research_mode,
+        "research_shortlist_path": shortlist_path,
+        "research_anchor_start_dates": [_coerce_date(item).isoformat() for item in anchor_dates],
+        "anchor_set_id": str(wfo_settings.get("anchor_set_id") or "manual_anchor_set").strip(),
+        "anchor_spacing_rule": str(
+            wfo_settings.get("anchor_spacing_rule") or "manual_explicit"
+        ).strip(),
+        "coverage_normalized": bool(wfo_settings.get("coverage_normalized", True)),
+    }
 
 
 def _build_current_lane_reasons(
@@ -354,6 +419,27 @@ def _build_current_lane_reasons(
     if cpu_audit_outcome not in ("disabled", "pass"):
         reasons.append("cpu_audit_contract_not_met")
     return reasons
+
+
+def build_anchor_manifest(
+    *,
+    anchor_set_id: str,
+    anchor_dates: list[str],
+    anchor_spacing_rule: str,
+    minimum_is_length_days: int,
+    minimum_oos_length_days: int,
+    coverage_normalized: bool,
+    shortlist_freeze_mode: str = _RESEARCH_WFO_MODE,
+) -> dict:
+    return {
+        "anchor_set_id": str(anchor_set_id),
+        "anchor_dates": [str(item) for item in anchor_dates],
+        "anchor_spacing_rule": str(anchor_spacing_rule),
+        "minimum_is_length_days": int(minimum_is_length_days),
+        "minimum_oos_length_days": int(minimum_oos_length_days),
+        "shortlist_freeze_mode": str(shortlist_freeze_mode),
+        "coverage_normalized": bool(coverage_normalized),
+    }
 
 
 def _build_legacy_fold_periods(start_date, end_date, total_folds: int, period_length_days: int) -> tuple[list[dict], int]:
@@ -489,6 +575,32 @@ def _build_lane_execution_contract(
     }
 
 
+def _build_research_anchor_contracts(
+    anchor_dates: list[str],
+    *,
+    end_date,
+    total_folds: int,
+    period_length_days: int,
+) -> list[dict]:
+    contracts = []
+    for anchor_index, anchor_date in enumerate(anchor_dates, start=1):
+        fold_periods, overlap_days = _build_promotion_fold_periods(
+            anchor_date,
+            end_date,
+            total_folds,
+            period_length_days,
+        )
+        contracts.append(
+            {
+                "anchor_id": f"A{anchor_index}",
+                "anchor_start_date": _coerce_date(anchor_date).isoformat(),
+                "fold_periods": fold_periods,
+                "overlap_days": overlap_days,
+            }
+        )
+    return contracts
+
+
 def _resolve_oos_initial_cash(
     all_oos_curves: list,
     *,
@@ -515,6 +627,68 @@ def _aggregate_oos_curves(all_oos_curves: list, *, mode: str):
             )
         return combined
     raise ValueError(f"Unsupported curve aggregation mode: {mode}")
+
+
+def _analyze_equity_curve(curve, analyzer_cls):
+    import pandas as pd
+
+    if curve is None or curve.empty:
+        raise ValueError("Equity curve is empty; cannot analyze candidate metrics.")
+    history_df = pd.DataFrame(curve, columns=["total_value"])
+    analyzer = analyzer_cls(history_df)
+    return dict(analyzer.get_metrics(formatted=False))
+
+
+def _evaluate_research_shortlist_candidates(
+    shortlist_df,
+    *,
+    start_date: str,
+    end_date: str,
+    initial_cash: float,
+    base_strategy_params: dict,
+    backtest_runner,
+    analyzer_cls,
+    metric: str,
+):
+    import pandas as pd
+
+    rows = []
+    for _, shortlist_row in shortlist_df.iterrows():
+        params_dict = _extract_strategy_params(shortlist_row.to_dict(), base_strategy_params)
+        equity_curve = backtest_runner(
+            start_date=start_date,
+            end_date=end_date,
+            params_dict=params_dict,
+            initial_cash=initial_cash,
+        )
+        metrics = _analyze_equity_curve(equity_curve, analyzer_cls)
+        record = dict(shortlist_row.to_dict())
+        record.update(params_dict)
+        record.update(metrics)
+        rows.append(record)
+    evaluated_df = pd.DataFrame(rows)
+    return _sort_candidate_frame(evaluated_df, metric).reset_index(drop=True)
+
+
+def _build_metric_distribution_summary(metrics_df, metric_columns: tuple[str, ...]) -> dict:
+    import pandas as pd
+
+    if metrics_df.empty:
+        return {"row_count": 0, "metrics": {}}
+    summary = {"row_count": int(len(metrics_df)), "metrics": {}}
+    for column in metric_columns:
+        if column not in metrics_df.columns:
+            continue
+        series = pd.to_numeric(metrics_df[column], errors="coerce").dropna()
+        if series.empty:
+            continue
+        summary["metrics"][column] = {
+            "min": float(series.min()),
+            "median": float(series.median()),
+            "mean": float(series.mean()),
+            "max": float(series.max()),
+        }
+    return summary
 
 
 def _find_selected_finalist_index(finalists_df: "pd.DataFrame", selected_params_dict: dict) -> int:
@@ -943,6 +1117,185 @@ def plot_wfo_results(final_curve: "pd.Series", params_df: "pd.DataFrame", result
         plt.savefig(param_dist_path, dpi=300); plt.close()
         print(f"✅ Parameter Distribution plot saved to: {param_dist_path}")
 
+
+def _run_research_start_date_robustness(
+    *,
+    config: dict,
+    wfo_settings: dict,
+    backtest_settings: dict,
+    initial_cash: float,
+    results_dir: str,
+    holdout_settings: dict,
+    backtest_runner,
+    analyzer_cls,
+):
+    import pandas as pd
+
+    research_settings = _resolve_research_runtime_settings(wfo_settings)
+    shortlist_df = _load_frozen_shortlist(research_settings["research_shortlist_path"])
+    shortlist_hash = (
+        str(wfo_settings.get("shortlist_hash") or "").strip()
+        or _hash_file_sha256(research_settings["research_shortlist_path"])
+    )
+    selection_metric = str(
+        wfo_settings.get("research_selection_metric")
+        or wfo_settings.get("cpu_certification_metric")
+        or "calmar_ratio"
+    ).strip() or "calmar_ratio"
+    anchor_contracts = _build_research_anchor_contracts(
+        research_settings["research_anchor_start_dates"],
+        end_date=pd.to_datetime(backtest_settings["end_date"]),
+        total_folds=int(wfo_settings["total_folds"]),
+        period_length_days=int(wfo_settings["period_length_days"]),
+    )
+
+    research_rows = []
+    selection_rows = []
+    for anchor_contract in anchor_contracts:
+        for period in anchor_contract["fold_periods"]:
+            fold_num = int(period["Fold"])
+            is_start = period["IS_Start"].isoformat()
+            is_end = period["IS_End"].isoformat()
+            oos_start = period["OOS_Start"].isoformat()
+            oos_end = period["OOS_End"].isoformat()
+
+            evaluated_df = _evaluate_research_shortlist_candidates(
+                shortlist_df,
+                start_date=is_start,
+                end_date=is_end,
+                initial_cash=initial_cash,
+                base_strategy_params=config["strategy_params"],
+                backtest_runner=backtest_runner,
+                analyzer_cls=analyzer_cls,
+                metric=selection_metric,
+            )
+            selected_row = evaluated_df.iloc[0].to_dict()
+            selected_params = _extract_strategy_params(selected_row, config["strategy_params"])
+            selection_rows.append(
+                {
+                    "anchor_id": anchor_contract["anchor_id"],
+                    "anchor_start_date": anchor_contract["anchor_start_date"],
+                    "fold": fold_num,
+                    "selection_metric": selection_metric,
+                    "selected_shortlist_candidate_id": selected_row.get("shortlist_candidate_id"),
+                    "shortlist_size": int(len(evaluated_df)),
+                    "IS_Start": is_start,
+                    "IS_End": is_end,
+                    "selected_is_calmar_ratio": selected_row.get("calmar_ratio"),
+                    "selected_is_cagr": selected_row.get("cagr"),
+                    "selected_is_mdd": selected_row.get("mdd"),
+                }
+            )
+
+            oos_curve = backtest_runner(
+                start_date=oos_start,
+                end_date=oos_end,
+                params_dict=selected_params,
+                initial_cash=initial_cash,
+            )
+            oos_metrics = _analyze_equity_curve(oos_curve, analyzer_cls)
+            research_rows.append(
+                {
+                    "anchor_id": anchor_contract["anchor_id"],
+                    "anchor_start_date": anchor_contract["anchor_start_date"],
+                    "fold": fold_num,
+                    "IS_Start": is_start,
+                    "IS_End": is_end,
+                    "OOS_Start": oos_start,
+                    "OOS_End": oos_end,
+                    "selection_metric": selection_metric,
+                    "selected_shortlist_candidate_id": selected_row.get("shortlist_candidate_id"),
+                    "shortlist_size": int(len(evaluated_df)),
+                    "is_calmar_ratio": selected_row.get("calmar_ratio"),
+                    "is_cagr": selected_row.get("cagr"),
+                    "is_mdd": selected_row.get("mdd"),
+                    "oos_calmar_ratio": oos_metrics.get("calmar_ratio"),
+                    "oos_cagr": oos_metrics.get("cagr"),
+                    "oos_mdd": oos_metrics.get("mdd"),
+                    **{key: selected_params.get(key) for key in _CPU_CERT_PARAM_KEYS},
+                }
+            )
+
+    metrics_df = pd.DataFrame(research_rows)
+    metrics_path = os.path.join(results_dir, "research_anchor_fold_metrics.csv")
+    metrics_df.to_csv(metrics_path, index=False)
+    selection_df = pd.DataFrame(selection_rows)
+    selection_path = os.path.join(results_dir, "research_selection_audit.csv")
+    selection_df.to_csv(selection_path, index=False)
+    summary_path = _write_json_artifact(
+        os.path.join(results_dir, "research_metric_distribution_summary.json"),
+        _build_metric_distribution_summary(
+            metrics_df,
+            ("oos_calmar_ratio", "oos_cagr", "oos_mdd", "is_calmar_ratio"),
+        ),
+    )
+
+    first_is_lengths = [
+        _inclusive_day_count(
+            contract["fold_periods"][0]["IS_Start"],
+            contract["fold_periods"][0]["IS_End"],
+        )
+        for contract in anchor_contracts
+    ]
+    anchor_manifest = build_anchor_manifest(
+        anchor_set_id=research_settings["anchor_set_id"],
+        anchor_dates=research_settings["research_anchor_start_dates"],
+        anchor_spacing_rule=research_settings["anchor_spacing_rule"],
+        minimum_is_length_days=min(first_is_lengths),
+        minimum_oos_length_days=int(wfo_settings["period_length_days"]),
+        coverage_normalized=research_settings["coverage_normalized"],
+    )
+
+    holdout_start = holdout_settings["holdout_start"]
+    holdout_end = holdout_settings["holdout_end"]
+    if holdout_start and holdout_end:
+        holdout_manifest = build_holdout_manifest(
+            holdout_start=holdout_start,
+            holdout_end=holdout_end,
+            wfo_end=pd.to_datetime(backtest_settings["end_date"]).date().isoformat(),
+            contaminated_ranges=holdout_settings["contaminated_ranges"],
+            adequacy_metrics={},
+            holdout_backtest_executed=False,
+        )
+    else:
+        holdout_manifest = _build_unconfigured_holdout_manifest(
+            wfo_end=pd.to_datetime(backtest_settings["end_date"]).date().isoformat(),
+            contaminated_ranges=holdout_settings["contaminated_ranges"],
+        )
+
+    lane_manifest = build_lane_manifest(
+        lane_type="research_start_date_robustness",
+        approval_eligible=False,
+        decision_date=wfo_settings.get("decision_date"),
+        research_data_cutoff=wfo_settings.get("research_data_cutoff")
+        or backtest_settings["end_date"],
+        promotion_data_cutoff=wfo_settings.get("promotion_data_cutoff")
+        or backtest_settings["end_date"],
+        shortlist_hash=shortlist_hash,
+        publication_lag_policy=wfo_settings.get("publication_lag_policy"),
+        ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
+        engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
+        composite_curve_allowed=False,
+        cpu_audit_outcome="not_applicable",
+        reasons=[
+            "research_lane_distribution_only",
+            "oos_initial_cash_reset_each_fold",
+            "single_composite_equity_curve_disabled",
+        ],
+    )
+    manifest_paths = write_wfo_manifests(
+        results_dir=results_dir,
+        lane_manifest=lane_manifest,
+        holdout_manifest=holdout_manifest,
+        anchor_manifest=anchor_manifest,
+    )
+    print(f"✅ Research metrics saved to: {metrics_path}")
+    print(f"✅ Research selection audit saved to: {selection_path}")
+    print(f"✅ Research metric summary saved to: {summary_path}")
+    print(f"✅ Lane manifest saved to: {manifest_paths['lane_manifest_path']}")
+    print(f"✅ Holdout manifest saved to: {manifest_paths['holdout_manifest_path']}")
+    print(f"✅ Anchor manifest saved to: {manifest_paths['anchor_manifest_path']}")
+
 # --- Orchestrator 메인 로직 ---
 
 def run_walk_forward_analysis():
@@ -983,6 +1336,22 @@ def run_walk_forward_analysis():
     period_length_days = int(wfo_settings['period_length_days'])
     lane_type = _resolve_lane_type(wfo_settings)
     holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    results_dir = os.path.join("results", f"wfo_run_{timestamp}")
+    os.makedirs(results_dir, exist_ok=True)
+
+    if lane_type == "research_start_date_robustness":
+        return _run_research_start_date_robustness(
+            config=config,
+            wfo_settings=wfo_settings,
+            backtest_settings=backtest_settings,
+            initial_cash=initial_cash,
+            results_dir=results_dir,
+            holdout_settings=holdout_settings,
+            backtest_runner=run_single_backtest,
+            analyzer_cls=PerformanceAnalyzer,
+        )
+
     lane_contract = _build_lane_execution_contract(
         lane_type,
         start_date=total_start_date,
@@ -1008,9 +1377,6 @@ def run_walk_forward_analysis():
     
     #  새로운 롤링 윈도우 루프
     all_oos_curves, all_optimal_params, all_selection_audits = [], [], []
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    results_dir = os.path.join("results", f"wfo_run_{timestamp}")
-    os.makedirs(results_dir, exist_ok=True)
     
     pbar = tqdm(fold_periods, desc="WFO Progress")
     for period in pbar:
