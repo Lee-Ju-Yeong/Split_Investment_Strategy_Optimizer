@@ -14,6 +14,8 @@
   - 지금 방식은 `calmar_ratio` 중심이라, 후보가 넓은 `plateau`에서 안정적인지 설명하기 어렵다.
 - Current status:
   - import-safe 기반 정리는 끝났다.
+  - `lane_manifest.json`, `holdout_manifest.json` helper와 JSON 저장 연결은 시작됐다.
+  - 현재 WFO run은 결과 폴더에 manifest를 남기지만, 아직 `legacy_wfo/internal_provisional` 상태를 정직하게 기록하는 단계다.
   - 하지만 `hard gate`, `robust score`, `lane_mode`, `holdout 경계`, `artifact guardrail`은 아직 공식 구현 전이다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
   - 추가 숙의 결과, 이 전략의 분할 진입 특성상 `1년 미만 holdout`은 최종 승인용으로 약하다는 쪽으로 기울었다.
@@ -167,7 +169,13 @@
   - `fold_gate_report`
   - 최종 robust parameter CSV
   - `lane_manifest.json`
+    - 현재 상태:
+      - WFO 결과 폴더에 저장 시작
+      - 아직 `legacy_wfo` 기준의 provisional evidence 기록
   - `holdout_manifest.json`
+    - 현재 상태:
+      - WFO 결과 폴더에 저장 시작
+      - 아직 holdout 백테스트 자동 실행은 연결 전
   - `anchor_manifest.json`
   - research lane의 `anchor/fold metric distribution summary`
 

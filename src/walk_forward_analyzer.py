@@ -20,19 +20,23 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     __package__ = file_path.parent.name  # "src"
 
 from .analysis.walk_forward_analyzer import (  # noqa: E402
+    build_lane_manifest,
     build_holdout_manifest,
     evaluate_holdout_policy,
     find_robust_parameters,
     plot_wfo_results,
     run_walk_forward_analysis,
+    write_wfo_manifests,
 )
 
 __all__ = [
+    "build_lane_manifest",
     "build_holdout_manifest",
     "evaluate_holdout_policy",
     "find_robust_parameters",
     "plot_wfo_results",
     "run_walk_forward_analysis",
+    "write_wfo_manifests",
 ]
 
 
