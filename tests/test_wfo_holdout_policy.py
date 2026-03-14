@@ -142,9 +142,70 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(manifest["cpu_audit_outcome"], "pass")
         self.assertIn("lane_mode_not_separated", manifest["reasons"])
 
-    def test_non_legacy_lane_type_is_rejected_until_lane_split_lands(self):
-        with self.assertRaisesRegex(ValueError, "lane_type=legacy_wfo"):
-            wfo._resolve_legacy_lane_type({"lane_type": "promotion_evaluation"})
+    def test_resolve_lane_type_accepts_promotion_evaluation(self):
+        lane_type = wfo._resolve_lane_type({"lane_type": "promotion_evaluation"})
+
+        self.assertEqual(lane_type, "promotion_evaluation")
+
+    def test_research_lane_is_rejected_until_frozen_shortlist_path_lands(self):
+        with self.assertRaisesRegex(ValueError, "frozen shortlist multi-anchor evaluation"):
+            wfo._resolve_lane_type({"lane_type": "research_start_date_robustness"})
+
+    def test_build_promotion_fold_periods_creates_single_anchor_non_overlap_schedule(self):
+        fold_periods, overlap_days = wfo._build_promotion_fold_periods(
+            "2020-01-01",
+            "2023-12-31",
+            total_folds=2,
+            period_length_days=365,
+        )
+
+        self.assertEqual(overlap_days, 0)
+        self.assertEqual(fold_periods[0]["IS_Start"].isoformat(), "2020-01-01")
+        self.assertEqual(fold_periods[1]["IS_Start"].isoformat(), "2020-01-01")
+        self.assertEqual(fold_periods[0]["OOS_Start"].isoformat(), "2022-01-01")
+        self.assertEqual(fold_periods[0]["OOS_End"].isoformat(), "2022-12-31")
+        self.assertEqual(fold_periods[1]["OOS_Start"].isoformat(), "2023-01-01")
+
+    def test_aggregate_oos_curves_stitches_non_overlap_promotion_curve(self):
+        import pandas as pd
+
+        first_curve = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        )
+        second_curve = pd.Series(
+            [102.0, 103.0],
+            index=pd.to_datetime(["2024-01-03", "2024-01-04"]),
+        )
+
+        aggregated = wfo._aggregate_oos_curves(
+            [first_curve, second_curve],
+            mode="stitch_non_overlap",
+        )
+
+        self.assertEqual(len(aggregated), 4)
+        self.assertEqual(float(aggregated.iloc[-1]), 103.0)
+
+    def test_aggregate_oos_curves_rejects_duplicate_dates_in_promotion_mode(self):
+        import pandas as pd
+
+        duplicated = [
+            pd.Series([100.0], index=pd.to_datetime(["2024-01-01"])),
+            pd.Series([101.0], index=pd.to_datetime(["2024-01-01"])),
+        ]
+
+        with self.assertRaisesRegex(ValueError, "duplicated OOS dates"):
+            wfo._aggregate_oos_curves(duplicated, mode="stitch_non_overlap")
+
+    def test_build_current_lane_reasons_is_empty_for_clean_promotion_lane(self):
+        reasons = wfo._build_current_lane_reasons(
+            lane_type="promotion_evaluation",
+            total_folds=4,
+            overlap_days=0,
+            cpu_audit_outcome="pass",
+        )
+
+        self.assertEqual(reasons, [])
 
     def test_write_wfo_manifests_persists_lane_and_holdout_json(self):
         lane_manifest = wfo.build_lane_manifest(

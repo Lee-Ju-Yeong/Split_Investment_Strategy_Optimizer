@@ -44,6 +44,12 @@ _HOLDOUT_ADEQUACY_FIELDS = (
 _DEFAULT_PARITY_CANARY_EXCLUDED_RANGES = (
     ("2025-12-01", "2026-01-31"),
 )
+_SUPPORTED_WFO_LANE_TYPES = (
+    "legacy_wfo",
+    "promotion_evaluation",
+    "research_start_date_robustness",
+)
+_RESEARCH_WFO_MODE = "frozen_shortlist_multi_anchor_eval"
 
 
 def _coerce_date(value):
@@ -307,31 +313,208 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
     }
 
 
-def _resolve_legacy_lane_type(wfo_settings: dict) -> str:
+def _resolve_lane_type(wfo_settings: dict) -> str:
     lane_type = str(wfo_settings.get("lane_type") or "legacy_wfo").strip() or "legacy_wfo"
-    if lane_type != "legacy_wfo":
+    if lane_type not in _SUPPORTED_WFO_LANE_TYPES:
         raise ValueError(
-            "walk_forward_analyzer does not implement separated lane semantics yet; "
-            "set walk_forward_settings.lane_type=legacy_wfo until lane_mode split lands."
+            "Unsupported walk_forward_settings.lane_type. "
+            f"Expected one of: {', '.join(_SUPPORTED_WFO_LANE_TYPES)}."
+        )
+    if lane_type == "research_start_date_robustness":
+        research_mode = str(
+            wfo_settings.get("research_mode") or _RESEARCH_WFO_MODE
+        ).strip() or _RESEARCH_WFO_MODE
+        if research_mode != _RESEARCH_WFO_MODE:
+            raise ValueError(
+                "research_start_date_robustness only supports "
+                f"research_mode={_RESEARCH_WFO_MODE}."
+            )
+        raise ValueError(
+            "research_start_date_robustness requires frozen shortlist multi-anchor evaluation, "
+            "which is not wired into walk_forward_analyzer yet."
         )
     return lane_type
 
 
 def _build_current_lane_reasons(
     *,
+    lane_type: str,
     total_folds: int,
     overlap_days: int,
     cpu_audit_outcome: str,
 ) -> list[str]:
-    reasons = ["lane_mode_not_separated"]
-    if int(total_folds) > 1:
-        reasons.append("oos_initial_cash_carry_over_enabled")
-        reasons.append("composite_curve_mean_aggregation_enabled")
+    reasons = []
+    if lane_type == "legacy_wfo":
+        reasons.append("lane_mode_not_separated")
+        if int(total_folds) > 1:
+            reasons.append("oos_initial_cash_carry_over_enabled")
+            reasons.append("composite_curve_mean_aggregation_enabled")
     if int(overlap_days) > 0:
         reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
     if cpu_audit_outcome not in ("disabled", "pass"):
         reasons.append("cpu_audit_contract_not_met")
     return reasons
+
+
+def _build_legacy_fold_periods(start_date, end_date, total_folds: int, period_length_days: int) -> tuple[list[dict], int]:
+    import pandas as pd
+
+    start = pd.to_datetime(start_date).normalize()
+    end = pd.to_datetime(end_date).normalize()
+    total = int(total_folds)
+    period_days = int(period_length_days)
+    length = pd.Timedelta(days=period_days)
+    if total <= 0 or period_days <= 0:
+        raise ValueError("total_folds and period_length_days must be positive.")
+
+    max_shift_days = (end - start).days - (period_days - 1)
+    if max_shift_days >= period_days:
+        shift_days = period_days
+    else:
+        shift_days = min(max_shift_days, (period_days + 1) // 2 + 1)
+        if shift_days < 1:
+            shift_days = 1
+    shift = pd.Timedelta(days=shift_days)
+    last_is_start = end - shift - (length - pd.Timedelta(days=1))
+    span_days = (last_is_start - start).days
+    if span_days <= 0:
+        raise ValueError(
+            "Configuration Error: Cannot fit legacy WFO folds within the requested window."
+        )
+
+    is_starts = [start]
+    if total > 1:
+        base_step = span_days // (total - 1)
+        remainder = span_days % (total - 1)
+        for index in range(1, total):
+            add_days = base_step + (1 if index <= remainder else 0)
+            is_starts.append(is_starts[-1] + pd.Timedelta(days=add_days))
+
+    fold_periods = []
+    for index, is_start in enumerate(is_starts, start=1):
+        is_end = is_start + length - pd.Timedelta(days=1)
+        oos_start = is_start + shift
+        oos_end = oos_start + length - pd.Timedelta(days=1)
+        if oos_start < is_start + pd.Timedelta(days=1):
+            raise ValueError("Causality violated: OOS must start after IS start.")
+        if oos_end > end or is_start < start or is_end > end:
+            raise ValueError("Legacy WFO fold is out of the configured date range.")
+        fold_periods.append(
+            {
+                "Fold": index,
+                "IS_Start": is_start.date(),
+                "IS_End": is_end.date(),
+                "OOS_Start": oos_start.date(),
+                "OOS_End": oos_end.date(),
+            }
+        )
+    return fold_periods, period_days - shift_days
+
+
+def _build_promotion_fold_periods(start_date, end_date, total_folds: int, period_length_days: int) -> tuple[list[dict], int]:
+    import pandas as pd
+
+    start = pd.to_datetime(start_date).normalize()
+    end = pd.to_datetime(end_date).normalize()
+    total = int(total_folds)
+    period_days = int(period_length_days)
+    length = pd.Timedelta(days=period_days)
+    if total <= 0 or period_days <= 0:
+        raise ValueError("total_folds and period_length_days must be positive.")
+
+    total_days = int((end - start).days + 1)
+    initial_is_days = total_days - (total * period_days)
+    if initial_is_days <= 0:
+        raise ValueError(
+            "promotion_evaluation requires a longer history window: "
+            "total window must be larger than total_folds * period_length_days."
+        )
+
+    fold_periods = []
+    initial_is_length = pd.Timedelta(days=initial_is_days)
+    for index in range(total):
+        is_start = start
+        is_end = start + initial_is_length + (index * length) - pd.Timedelta(days=1)
+        oos_start = is_end + pd.Timedelta(days=1)
+        oos_end = oos_start + length - pd.Timedelta(days=1)
+        if oos_end > end:
+            raise ValueError("promotion_evaluation OOS period exceeds configured end_date.")
+        fold_periods.append(
+            {
+                "Fold": index + 1,
+                "IS_Start": is_start.date(),
+                "IS_End": is_end.date(),
+                "OOS_Start": oos_start.date(),
+                "OOS_End": oos_end.date(),
+            }
+        )
+    return fold_periods, 0
+
+
+def _build_lane_execution_contract(
+    lane_type: str,
+    *,
+    start_date,
+    end_date,
+    total_folds: int,
+    period_length_days: int,
+) -> dict:
+    if lane_type == "promotion_evaluation":
+        fold_periods, overlap_days = _build_promotion_fold_periods(
+            start_date,
+            end_date,
+            total_folds,
+            period_length_days,
+        )
+        return {
+            "fold_periods": fold_periods,
+            "overlap_days": overlap_days,
+            "carry_over_oos_initial_cash": True,
+            "composite_curve_allowed": bool(int(total_folds) > 1),
+            "curve_aggregation_mode": "stitch_non_overlap",
+        }
+
+    fold_periods, overlap_days = _build_legacy_fold_periods(
+        start_date,
+        end_date,
+        total_folds,
+        period_length_days,
+    )
+    return {
+        "fold_periods": fold_periods,
+        "overlap_days": overlap_days,
+        "carry_over_oos_initial_cash": True,
+        "composite_curve_allowed": bool(int(total_folds) > 1),
+        "curve_aggregation_mode": "mean_overlap",
+    }
+
+
+def _resolve_oos_initial_cash(
+    all_oos_curves: list,
+    *,
+    initial_cash: float,
+    carry_over_enabled: bool,
+) -> float:
+    if not carry_over_enabled or not all_oos_curves:
+        return float(initial_cash)
+    return float(all_oos_curves[-1].iloc[-1])
+
+
+def _aggregate_oos_curves(all_oos_curves: list, *, mode: str):
+    import pandas as pd
+
+    if not all_oos_curves:
+        return pd.Series(dtype=float)
+    if mode == "mean_overlap":
+        return pd.concat(all_oos_curves).sort_index().groupby(level=0).mean()
+    if mode == "stitch_non_overlap":
+        combined = pd.concat(all_oos_curves).sort_index()
+        if combined.index.duplicated(keep=False).any():
+            raise ValueError(
+                "promotion_evaluation requires non-overlap OOS periods; duplicated OOS dates detected."
+            )
+        return combined
+    raise ValueError(f"Unsupported curve aggregation mode: {mode}")
 
 
 def _find_selected_finalist_index(finalists_df: "pd.DataFrame", selected_params_dict: dict) -> int:
@@ -796,85 +979,30 @@ def run_walk_forward_analysis():
     # 사용자 설정값 추출
     total_start_date = pd.to_datetime(backtest_settings['start_date'])
     total_end_date = pd.to_datetime(backtest_settings['end_date'])
-    total_folds = wfo_settings['total_folds']
-    period_length_days = wfo_settings['period_length_days']
-    lane_type = _resolve_legacy_lane_type(wfo_settings)
+    total_folds = int(wfo_settings['total_folds'])
+    period_length_days = int(wfo_settings['period_length_days'])
+    lane_type = _resolve_lane_type(wfo_settings)
     holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
-        
-    # --- 확정 WFO 기간 생성 (no-overlap 우선, 불가 시 최소 겹침 + 균등분포) ---
-    S = pd.to_datetime(backtest_settings['start_date']).normalize()
-    E = pd.to_datetime(backtest_settings['end_date']).normalize()
-    N = int(wfo_settings['total_folds'])
-    L_days = int(wfo_settings['period_length_days'])
-    L = pd.Timedelta(days=L_days)
-
-    if N <= 0 or L_days <= 0:
-        raise ValueError("total_folds and period_length_days must be positive.")
-
-    # 1) 무겹침 가능성 평가
-    #   d = OOS_Start - IS_Start, 겹침 = L - d
-    #   무겹침 필요조건: d >= L
-    #   경계조건: last_IS_start = E - d - (L-1) >= S  ->  d <= (E - S).days - (L-1)
-    Dmax_days = (E - S).days - (L_days - 1)   # d가 가질 수 있는 최대값(경계 위배 없이)
-    d_days = None
-
-    if Dmax_days >= L_days:
-        # 여유로움 → 무겹침 채택
-        d_days = L_days
-    else:
-        # 여유 부족 → 겹침 최소(= d 최대)와 균등성의 균형
-        # 기본값: 절반쯤 이동(균형) -> 이전에 합의한 d≈L/2 (+1 보정)
-        d_days = min(Dmax_days, (L_days + 1) // 2 + 1)
-        if d_days < 1:
-            d_days = 1  # 인과성 보장
-
-    # 2) 마지막 폴드가 E에 맞도록 IS 최종 시작점 역산
-    d = pd.Timedelta(days=d_days)
-    last_is_start = E - d - (L - pd.Timedelta(days=1))
-
-    # 3) IS 시작들의 균등 분포
-    #    span_days가 작아도 N개 균등 배치(정수 보정: 몫/나머지 방식)
-    span_days = (last_is_start - S).days
-    print("span_days:",span_days)
-    if span_days <= 0:
-        raise ValueError(f"Configuration Error: Cannot fit {N} folds. The total period is too short for the given period length ({L_days} days). Please reduce 'total_folds' or 'period_length_days'.")
-    if N == 1:
-        is_starts = [S]
-    else:
-        base_step = span_days // (N - 1)
-        remainder = span_days % (N - 1)
-        is_starts = [S]
-        for i in range(1, N):
-            add = base_step + (1 if i <= remainder else 0)
-            is_starts.append(is_starts[-1] + pd.Timedelta(days=add))
-
-    # 4) 폴드 구간 구성
-    fold_periods = []
-    for i, is_start in enumerate(is_starts):
-        is_end   = is_start + L - pd.Timedelta(days=1)
-        oos_start = is_start + d
-        oos_end   = oos_start + L - pd.Timedelta(days=1)
-
-        # 안전 체크
-        if oos_start < is_start + pd.Timedelta(days=1):
-            raise ValueError("Causality violated: OOS must start at least 1 day after IS start.")
-        if oos_end > E:
-            raise ValueError("Boundary violated: OOS end beyond end_date.")
-        if is_start < S or is_end > E:
-            raise ValueError("IS period out of bounds.")
-
-        fold_periods.append({
-            'Fold': i + 1,
-            'IS_Start': is_start.date(), 'IS_End': is_end.date(),
-            'OOS_Start': oos_start.date(), 'OOS_End': oos_end.date()
-        })
+    lane_contract = _build_lane_execution_contract(
+        lane_type,
+        start_date=total_start_date,
+        end_date=total_end_date,
+        total_folds=total_folds,
+        period_length_days=period_length_days,
+    )
+    fold_periods = lane_contract["fold_periods"]
+    overlap_days = int(lane_contract["overlap_days"])
 
     print("\n--- Calculated Walk-Forward Folds ---")
     print(pd.DataFrame(fold_periods).to_string(index=False))
 
-    # 참고 출력(선택): 실제 겹침일
-    overlap_days = L_days - d_days  # (0이면 무겹침)
-    print(f"\n[WFO] d = {d_days} days → overlap = {overlap_days} days (per fold)")
+    print(
+        "\n[WFO] "
+        f"lane_type={lane_type} "
+        f"overlap={overlap_days} days "
+        f"carry_over_oos_initial_cash={lane_contract['carry_over_oos_initial_cash']} "
+        f"curve_aggregation_mode={lane_contract['curve_aggregation_mode']}"
+    )
 
 
     
@@ -965,16 +1093,14 @@ def run_walk_forward_analysis():
         all_optimal_params.append(reported_params_dict)
         print(f"  - Final params for Fold {fold_num} selected.")
         
-        if total_folds == 1:
-            print("\n[INFO] Single fold run. OOS performance is same as IS robust parameter performance.")
-            # 단일 폴드에서는 OOS 커브가 의미 없으므로 IS 결과를 사용 (혹은 생략)
-            break
-
         print(f"--- Fold {fold_num} OOS Period: {oos_start} ~ {oos_end} ---")
         
         # 3. 찾은 파라미터로 OOS 기간 백테스트
-        # OOS 기간의 초기 자금은 이전 OOS 기간의 최종 자금으로 연결
-        oos_initial_cash = initial_cash if not all_oos_curves else all_oos_curves[-1].iloc[-1]
+        oos_initial_cash = _resolve_oos_initial_cash(
+            all_oos_curves,
+            initial_cash=initial_cash,
+            carry_over_enabled=lane_contract["carry_over_oos_initial_cash"],
+        )
         if cpu_cert_settings["enabled"]:
             oos_equity_curve, _ = run_cpu_single_backtest(
                 config,
@@ -1003,7 +1129,10 @@ def run_walk_forward_analysis():
         print("[ERROR] No Out-of-Sample results were generated.")
         # 단일 폴드 실행 시 여기로 올 수 있으므로, 파라미터 분석만 수행
     else:
-        final_wfo_curve = pd.concat(all_oos_curves).sort_index().groupby(level=0).mean()
+        final_wfo_curve = _aggregate_oos_curves(
+            all_oos_curves,
+            mode=lane_contract["curve_aggregation_mode"],
+        )
         wfo_analyzer = PerformanceAnalyzer(pd.DataFrame(final_wfo_curve, columns=['total_value']))
         
         print("\n--- Final WFO Performance Metrics ---")
@@ -1056,6 +1185,7 @@ def run_walk_forward_analysis():
 
     cpu_audit_outcome = _resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits)
     lane_reasons = _build_current_lane_reasons(
+        lane_type=lane_type,
         total_folds=total_folds,
         overlap_days=overlap_days,
         cpu_audit_outcome=cpu_audit_outcome,
@@ -1071,7 +1201,7 @@ def run_walk_forward_analysis():
         publication_lag_policy=wfo_settings.get("publication_lag_policy"),
         ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
         engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
-        composite_curve_allowed=bool(total_folds > 1),
+        composite_curve_allowed=lane_contract["composite_curve_allowed"],
         cpu_audit_outcome=cpu_audit_outcome,
         reasons=lane_reasons,
     )
