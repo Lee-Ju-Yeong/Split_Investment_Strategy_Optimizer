@@ -19,14 +19,23 @@
   - 추가로 `holdout_backtest_executed`, `promotion_WFO_end < holdout_start` 같은 현재 상태 라벨도 더 정직하게 남기도록 강화 중이다.
   - CPU 단계는 `GPU-selected finalist -> CPU pass/fail audit` 쪽으로 1차 정리됐다.
   - `strict_only_governance` observation gate는 `lane_manifest.json`, `holdout_manifest.json`이 없으면 clean pass가 되지 않도록 막기 시작했다.
+  - `strict_only_governance` observation gate는 이제 `final_candidate_manifest.json`도 함께 읽어서 champion hard gate, final candidate CPU audit, holdout execution 상태를 직접 이유(reason)로 반영할 수 있다.
   - `promotion_evaluation`은 `promotion_shortlist_path`를 받아 frozen shortlist 기반 single-anchor non-overlap anchored WFO를 실행할 수 있다.
+  - `promotion_evaluation`은 이제 `decision_date(후보 고정 기준일)`가 없으면 실행 자체를 시작하지 않는다.
   - promotion lane은 CPU audit이 `pass`가 아니면 clean approval lane으로 읽지 않도록 reason을 남긴다.
-  - `promotion_candidate_summary.csv`와 `final_candidate_manifest.json`이 추가되어, holdout 직전 `single champion + pre-locked reserve succession` 계약을 artifact로 남기기 시작했다.
+  - `promotion_candidate_summary.csv`와 `final_candidate_manifest.json`이 추가되어, holdout 직전 `single champion + reserve provenance` 계약을 artifact로 남기기 시작했다.
+  - `final_candidate_manifest.json`에는 이제 `freeze_contract_hash`, `promotion_shortlist_hash_verified`, `promotion_shortlist_modified_after_decision_date`, `canonical_holdout_contract_verified`가 함께 남아, 후보 고정과 holdout 경계가 실제 reject 규칙으로 연결되기 시작했다.
   - `holdout_auto_execute=true`일 때는 `final_candidate_manifest.json`의 champion만 CPU로 holdout을 실행하고, adequacy metric을 계산해 `holdout_manifest.json`에 기록할 수 있다.
   - 단, 이 자동 실행은 `holdout_start/end configured + champion_hard_gate_pass + final candidate CPU audit pass`일 때만 시도된다.
   - `research_start_date_robustness`는 `research_shortlist_path + research_anchor_start_dates`가 주어지면 frozen shortlist multi-anchor evaluation을 실행할 수 있다.
   - research lane은 `anchor_manifest.json`, `research_anchor_fold_metrics.csv`, `research_metric_distribution_summary.json`을 남기고 단일 합성 curve는 만들지 않는다.
-  - 하지만 `hard gate` 공식식, `robust score` 공식식, reserve 자동 승계, governance의 `final_candidate_manifest` 직접 소비는 아직 공식 구현 전이다.
+  - `hard gate` 공식식과 `robust score` 공식식은 promotion selection contract v1으로 코드와 문서에 고정됐다.
+  - holdout adequacy 기준은 이제 `holdout_adequacy_thresholds`와 `holdout_waiver_reason` 구조로 manifest에 연결된다.
+  - holdout과 lane에는 이제 `approval_eligible(내부 승인 가능)`와 `external_claim_eligible(대외 설명 가능)`가 분리되어 기록된다.
+    - waiver가 있는 approval-grade run은 내부적으로는 진행 가능할 수 있지만, `external_claim_eligible=false`로 남는다.
+    - `holdout_class`는 내부 분류용 라벨이고, 대외 설명 가능 여부의 최종 판단은 반드시 `external_claim_eligible`를 본다.
+  - reserve 자동 승계는 이번 `#68` 범위에서 보류(defer, 이번 작업 범위에서는 보류)하고, reserve는 provenance(후보 기록) 용도로만 남긴다.
+  - `promotion_ablation_summary.csv`는 현재 선택 로직을 다시 돌리는 파일이 아니라, “왜 이 champion이 뽑혔는지”를 설명하는 비교 리포트다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
   - 추가 숙의 결과, 이 전략의 분할 진입 특성상 `1년 미만 holdout`은 최종 승인용으로 약하다는 쪽으로 기울었다.
   - 따라서 구현 목표는 `approval-grade holdout >= 24개월`을 기본값으로 두고, 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급하는 것이다.
@@ -134,14 +143,17 @@
 
 ## 5. 구현 체크리스트
 - [x] 노트북/비GPU 환경에서도 `walk_forward_analyzer` import 가능하도록 기반 정리
-- [ ] `hard gate` 공식식 고정
-  - 임시 출발점:
-    - `median(OOS/IS) >= 0.60`
-    - `fold_pass_rate >= 70%`
-    - `OOS_MDD_p95 <= 25%`
-- [ ] `robust score` 공식식 고정
-  - 초안:
-    - `(mean - k*std) * log1p(cluster_size)`
+- [x] `hard gate` 공식식 고정
+  - official formula:
+    - `promotion_oos_is_calmar_ratio_median >= 0.60`
+    - `promotion_fold_pass_rate >= 70%`
+    - `promotion_oos_mdd_depth_p95 <= 25%`
+  - per-fold gate:
+    - `oos_calmar_ratio >= 0.0`
+    - `oos_mdd_depth <= 25%`
+- [x] `robust score` 공식식 고정
+  - official formula:
+    - `robust_score = (promotion_oos_calmar_mean - 0.50 * promotion_oos_calmar_std) * log1p(promotion_fold_count)`
   - 용도:
     - `hard gate` 통과 후보 안에서만 tie-break
 - [x] `lane_mode` 분기 구현
@@ -151,7 +163,7 @@
   - carry-over 금지
   - `single composite equity curve` 금지
   - `frozen_shortlist_multi_anchor_eval`만 공식 mode로 허용
-- [ ] canonical holdout partition 구현
+- [x] canonical holdout partition 구현
   - current provisional window:
     - `promotion_WFO_end = 2024-12-31`
     - `internal_provisional_holdout_start = 2025-01-01`
@@ -159,18 +171,22 @@
   - target policy:
     - `approval-grade final untouched holdout >= 24개월`
     - shorter window는 `internal_provisional` 또는 waiver case로만 표기
-- [ ] shortlist freeze contract 구현
+- [x] shortlist freeze contract 구현
   - `research_data_cutoff <= 2024-12-31`
   - holdout 시작 후 후보 수정 금지
+  - `promotion_shortlist_hash_verified`
+  - `promotion_shortlist_modified_after_decision_date`
+  - `freeze_contract_hash`
+  - `canonical_holdout_contract_verified`
 - [x] final candidate selection contract 구현
   - `promotion_candidate_fold_metrics.csv`
   - `promotion_candidate_summary.csv`
   - `final_candidate_manifest.json`
-  - `single champion + pre-locked reserve succession`
+  - `single champion + reserve provenance`
   - holdout은 manifest에 봉인된 champion만 입력으로 받음
   - current v1:
-    - `hard gate -> deterministic tie-break -> single champion`
-    - reserve는 holdout 비교 pack이 아니라 `non-performance failure` 발생 시에만 미리 고정된 순서대로 승계
+    - `hard gate -> robust score tie-break -> single champion`
+    - reserve는 holdout 비교 pack이 아니며, 이번 `#68`에서는 자동 승계를 구현하지 않고 provenance 용도로만 남김
     - `weighted super-score` selector는 아직 쓰지 않음
 - [ ] 행동지표 feature 실험
   - `trade_count`
@@ -181,12 +197,12 @@
   - `realized_split_depth`
   - `avg_invested_capital_ratio`
   - `cash_drag_ratio`
-- [ ] ablation 4축 비교 고정
+- [x] ablation 4축 비교 고정
   - `Legacy-Calmar`
   - `Robust-Score`
   - `Robust+Gate`
   - `Robust+Gate+Behavior`
-- [ ] 결과 저장 형식 고정
+- [x] 결과 저장 형식 고정
   - `fold_gate_report`
   - 최종 robust parameter CSV
   - `lane_manifest.json`
@@ -198,10 +214,20 @@
       - WFO 결과 폴더에 저장 시작
       - `holdout_auto_execute=true`일 때는 champion 기준 holdout 실행/adequacy 자동 기록 가능
       - holdout 상태는 `attempted / success / blocked`로 나눠 기록 시작
+      - `holdout_adequacy_thresholds`가 있으면 approval-grade 강등 규칙까지 같이 반영
+      - `holdout_waiver_reason`이 있으면 짧은 holdout/adequacy 미달을 `waived_reasons`로 남길 수 있음
   - `final_candidate_manifest.json`
     - 현재 상태:
-      - promotion lane에서 champion/reserve 봉인 artifact로 생성
+      - promotion lane에서 champion/reserve 기록 artifact로 생성
       - `champion_params`, `reserve_candidates`, `final_candidate_hash`를 함께 남겨 holdout 입력 계약으로 사용 가능
+      - `reserve_auto_succession_implemented=false`
+      - `reserve_auto_succession_deferred=true`
+  - `promotion_ablation_summary.csv`
+    - 현재 상태:
+      - `Legacy-Calmar`, `Robust-Score`, `Robust+Gate`, `Robust+Gate+Behavior` 4축 기준에서 어떤 후보가 선택되는지 요약
+  - `promotion_explanation_report.json`
+    - 현재 상태:
+      - champion, reserve 정책, behavior evidence, ablation 4축 비교를 한 파일에서 설명용으로 요약
   - `anchor_manifest.json`
   - research lane의 `anchor/fold metric distribution summary`
 
@@ -257,6 +283,7 @@
 - research lane 결과가 `release-grade evidence`로 오해되지 않도록 artifact/label guardrail이 남는다.
 - approval-grade run이라면 `promotion_WFO_end < approval_grade_holdout_start`가 문서와 manifest에서 동시에 증명된다.
 - approval-grade run이라면 `holdout_length_days >= 730` 또는 명시적 waiver 사유가 남는다.
+- 대외 설명 가능 run이라면 `external_claim_eligible=true`가 lane/holdout manifest 둘 다에서 확인된다.
 - approval-grade run이라면 holdout adequacy 필드가 함께 남는다.
 - holdout adequacy는 `미청산 비율`보다 `자본 배치 적정성` 중심으로 해석된다.
 - `lane_manifest.json`에 아래 필드가 남는다.
