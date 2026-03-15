@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
 from src.analysis import walk_forward_analyzer as wfo
@@ -793,6 +794,7 @@ class TestWfoLaneExecution(unittest.TestCase):
             }
         )
         backtest_calls = []
+        batch_calls = []
 
         def _fake_find_optimal_parameters(*args, **kwargs):
             raise AssertionError("research lane should not call find_optimal_parameters")
@@ -821,6 +823,47 @@ class TestWfoLaneExecution(unittest.TestCase):
                 [initial_cash, initial_cash * 1.02],
                 index=pd.to_datetime([start_date, end_date]),
             )
+
+        def _fake_evaluate_shortlist_candidates_gpu_batch(
+            *,
+            shortlist_df,
+            start_date,
+            end_date,
+            initial_cash,
+            base_strategy_params,
+            analyzer_cls,
+            config,
+        ):
+            batch_calls.append(
+                (
+                    start_date,
+                    end_date,
+                    int(len(shortlist_df)),
+                    float(initial_cash),
+                )
+            )
+            rows = []
+            for _, shortlist_row in shortlist_df.iterrows():
+                params_dict = wfo._extract_strategy_params(
+                    shortlist_row.to_dict(),
+                    base_strategy_params,
+                )
+                if int(params_dict["max_stocks"]) == 30:
+                    curve = pd.Series(
+                        [initial_cash, initial_cash * 1.30],
+                        index=pd.to_datetime([start_date, end_date]),
+                    )
+                else:
+                    curve = pd.Series(
+                        [initial_cash, initial_cash * 1.10],
+                        index=pd.to_datetime([start_date, end_date]),
+                    )
+                metrics = wfo._analyze_equity_curve(curve, analyzer_cls)
+                record = dict(shortlist_row.to_dict())
+                record.update(params_dict)
+                record.update(metrics)
+                rows.append(record)
+            return pd.DataFrame(rows)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             shortlist_path = Path(tmp_dir, "research_shortlist.csv")
@@ -859,6 +902,12 @@ class TestWfoLaneExecution(unittest.TestCase):
                 fake_gpu_module.run_single_backtest = _fake_run_single_backtest
                 fake_perf_module = types.ModuleType("src.performance_analyzer")
                 fake_perf_module.PerformanceAnalyzer = _FakePerformanceAnalyzer
+                fake_batch_module = types.ModuleType(
+                    "src.optimization.gpu.shortlist_batch_evaluator"
+                )
+                fake_batch_module.evaluate_shortlist_candidates_gpu_batch = (
+                    _fake_evaluate_shortlist_candidates_gpu_batch
+                )
 
                 with patch("src.analysis.walk_forward_analyzer.load_config", return_value=config), \
                      patch("src.analysis.walk_forward_analyzer.plot_wfo_results", return_value=None), \
@@ -868,6 +917,7 @@ class TestWfoLaneExecution(unittest.TestCase):
                              "src.parameter_simulation_gpu": fake_sim_module,
                              "src.debug_gpu_single_run": fake_gpu_module,
                              "src.performance_analyzer": fake_perf_module,
+                             "src.optimization.gpu.shortlist_batch_evaluator": fake_batch_module,
                          },
                      ):
                     wfo.run_walk_forward_analysis()
@@ -887,6 +937,10 @@ class TestWfoLaneExecution(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         self.assertFalse(equity_curve_exists)
+        self.assertEqual(len(batch_calls), 4)
+        self.assertEqual(len(backtest_calls), 4)
+        self.assertTrue(all(call[2] == 2 for call in batch_calls))
+        self.assertTrue(all(call[3] == 10_000_000.0 for call in batch_calls))
         self.assertTrue(all(call[3] == 10_000_000.0 for call in backtest_calls))
         self.assertEqual(lane_manifest["lane_type"], "research_start_date_robustness")
         self.assertFalse(lane_manifest["approval_eligible"])
@@ -896,6 +950,80 @@ class TestWfoLaneExecution(unittest.TestCase):
         self.assertEqual(anchor_manifest["anchor_dates"], ["2020-01-01", "2021-01-01"])
         self.assertEqual(len(metrics_df), 4)
         self.assertEqual(sorted(metrics_df["selected_shortlist_candidate_id"].unique().tolist()), [2])
+
+    def test_shortlist_batch_frame_builder_matches_legacy_candidate_metrics(self):
+        from src.optimization.gpu.shortlist_batch_evaluator import (
+            _build_evaluated_shortlist_frame,
+        )
+
+        shortlist_df = pd.DataFrame(
+            [
+                {
+                    "max_stocks": 20,
+                    "order_investment_ratio": 0.02,
+                    "additional_buy_drop_rate": 0.04,
+                    "sell_profit_rate": 0.05,
+                    "additional_buy_priority": 0.0,
+                    "stop_loss_rate": -0.15,
+                    "max_splits_limit": 10,
+                    "max_inactivity_period": 90,
+                },
+                {
+                    "max_stocks": 30,
+                    "order_investment_ratio": 0.03,
+                    "additional_buy_drop_rate": 0.05,
+                    "sell_profit_rate": 0.06,
+                    "additional_buy_priority": 1.0,
+                    "stop_loss_rate": -0.10,
+                    "max_splits_limit": 15,
+                    "max_inactivity_period": 60,
+                },
+            ]
+        )
+        shortlist_df["shortlist_candidate_id"] = shortlist_df.index + 1
+        base_strategy_params = dict(self._promotion_config()["strategy_params"])
+        trading_dates_pd = pd.to_datetime(["2020-01-01", "2020-12-31"])
+
+        curve_by_max_stocks = {
+            20: np.asarray([10_000_000.0, 11_000_000.0], dtype=np.float32),
+            30: np.asarray([10_000_000.0, 13_000_000.0], dtype=np.float32),
+        }
+
+        def _fake_run_single_backtest(*, start_date, end_date, params_dict, initial_cash):
+            daily_values = curve_by_max_stocks[int(params_dict["max_stocks"])]
+            return pd.Series(daily_values, index=trading_dates_pd)
+
+        legacy_df = wfo._evaluate_shortlist_candidates(
+            shortlist_df,
+            start_date="2020-01-01",
+            end_date="2020-12-31",
+            initial_cash=10_000_000.0,
+            base_strategy_params=base_strategy_params,
+            backtest_runner=_fake_run_single_backtest,
+            analyzer_cls=_FakePerformanceAnalyzer,
+            metric="calmar_ratio",
+        )
+
+        params_list = [
+            wfo._extract_strategy_params(row, base_strategy_params)
+            for row in shortlist_df.to_dict("records")
+        ]
+        batch_df = _build_evaluated_shortlist_frame(
+            shortlist_df,
+            params_list=params_list,
+            daily_values_result_cpu=np.asarray(
+                [
+                    curve_by_max_stocks[20],
+                    curve_by_max_stocks[30],
+                ],
+                dtype=np.float32,
+            ),
+            trading_dates_pd=trading_dates_pd,
+            analyzer_cls=_FakePerformanceAnalyzer,
+        )
+        batch_df = wfo._sort_candidate_frame(batch_df, "calmar_ratio").reset_index(drop=True)
+
+        pd.testing.assert_frame_equal(legacy_df, batch_df)
 
 
 if __name__ == "__main__":

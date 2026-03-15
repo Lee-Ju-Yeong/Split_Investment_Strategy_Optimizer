@@ -1066,8 +1066,20 @@ def _evaluate_shortlist_candidates(
     backtest_runner,
     analyzer_cls,
     metric: str,
+    batch_evaluator=None,
 ):
     import pandas as pd
+
+    if batch_evaluator is not None:
+        evaluated_df = batch_evaluator(
+            shortlist_df=shortlist_df,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            base_strategy_params=base_strategy_params,
+            analyzer_cls=analyzer_cls,
+        )
+        return _sort_candidate_frame(evaluated_df, metric).reset_index(drop=True)
 
     rows = []
     for _, shortlist_row in shortlist_df.iterrows():
@@ -2655,6 +2667,9 @@ def _run_research_start_date_robustness(
     analyzer_cls,
 ):
     import pandas as pd
+    from ..optimization.gpu.shortlist_batch_evaluator import (
+        evaluate_shortlist_candidates_gpu_batch,
+    )
 
     research_settings = _resolve_research_runtime_settings(wfo_settings)
     shortlist_df = _load_frozen_shortlist(
@@ -2678,6 +2693,12 @@ def _run_research_start_date_robustness(
         period_length_days=int(wfo_settings["period_length_days"]),
     )
 
+    def _research_is_batch_evaluator(**kwargs):
+        return evaluate_shortlist_candidates_gpu_batch(
+            config=config,
+            **kwargs,
+        )
+
     research_rows = []
     selection_rows = []
     for anchor_contract in anchor_contracts:
@@ -2697,6 +2718,7 @@ def _run_research_start_date_robustness(
                 backtest_runner=backtest_runner,
                 analyzer_cls=analyzer_cls,
                 metric=selection_metric,
+                batch_evaluator=_research_is_batch_evaluator,
             )
             selected_row = evaluated_df.iloc[0].to_dict()
             selected_params = _extract_strategy_params(selected_row, config["strategy_params"])
