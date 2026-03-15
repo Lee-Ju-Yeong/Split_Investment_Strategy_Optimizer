@@ -218,12 +218,15 @@ def evaluate_holdout_policy(
         external_claim_reasons.append("holdout_waiver_applied")
         external_claim_reasons.extend(waived_reasons)
     external_claim_eligible = not external_claim_reasons
+    internal_holdout_class = (
+        "internal_approval_ready" if approval_eligible else "internal_provisional"
+    )
     return {
         "holdout_start": start.isoformat(),
         "holdout_end": end.isoformat(),
         "wfo_end": resolved_wfo_end.isoformat() if resolved_wfo_end is not None else None,
         "holdout_length_days": int(length_days),
-        "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
+        "internal_holdout_class": internal_holdout_class,
         "approval_eligible": bool(approval_eligible),
         "external_claim_eligible": bool(external_claim_eligible),
         "promotion_wfo_end_before_holdout": bool(
@@ -296,7 +299,9 @@ def build_holdout_manifest(
     if blocked:
         external_claim_reasons.append("holdout_backtest_blocked")
     external_claim_eligible = bool(policy["external_claim_eligible"]) and bool(success)
-    holdout_class = "approval_grade" if approval_eligible else "internal_provisional"
+    internal_holdout_class = (
+        "internal_approval_ready" if approval_eligible else "internal_provisional"
+    )
     return {
         "holdout_start": policy["holdout_start"],
         "holdout_end": policy["holdout_end"],
@@ -307,7 +312,7 @@ def build_holdout_manifest(
         "holdout_backtest_success": success,
         "holdout_backtest_blocked": blocked,
         "parity_canary_excluded_ranges": policy["contaminated_ranges"],
-        "holdout_class": holdout_class,
+        "internal_holdout_class": internal_holdout_class,
         "holdout_length_days": policy["holdout_length_days"],
         "approval_eligible": approval_eligible,
         "external_claim_eligible": external_claim_eligible,
@@ -346,6 +351,7 @@ def build_lane_manifest(
     engine_version_hash=None,
     composite_curve_allowed: bool,
     cpu_audit_outcome: str,
+    selection_cpu_check_outcome: str = "not_applicable",
     reasons=None,
 ) -> dict:
     decision = _coerce_date(decision_date or datetime.now()).isoformat()
@@ -364,6 +370,7 @@ def build_lane_manifest(
         "engine_version_hash": engine_version_hash or "unknown",
         "composite_curve_allowed": bool(composite_curve_allowed),
         "cpu_audit_outcome": str(cpu_audit_outcome),
+        "selection_cpu_check_outcome": str(selection_cpu_check_outcome),
         "reasons": list(reasons or []),
     }
 
@@ -385,7 +392,7 @@ def _build_unconfigured_holdout_manifest(
         "holdout_backtest_success": False,
         "holdout_backtest_blocked": False,
         "parity_canary_excluded_ranges": _normalize_contaminated_ranges(contaminated_ranges),
-        "holdout_class": "unconfigured",
+        "internal_holdout_class": "unconfigured",
         "holdout_length_days": None,
         "approval_eligible": False,
         "external_claim_eligible": False,
@@ -828,10 +835,6 @@ def _build_current_lane_reasons(
             reasons.append("composite_curve_mean_aggregation_enabled")
     if int(overlap_days) > 0:
         reasons.append(f"oos_fold_overlap_days={int(overlap_days)}")
-    if lane_type == "promotion_evaluation" and cpu_audit_outcome != "pass":
-        reasons.append("cpu_audit_required_for_promotion")
-    if cpu_audit_outcome not in ("disabled", "pass"):
-        reasons.append("cpu_audit_contract_not_met")
     return reasons
 
 
@@ -1841,9 +1844,50 @@ def _resolve_behavior_evidence_status(holdout_manifest: dict) -> str:
 
 
 def _build_behavior_evidence_summary(holdout_manifest: dict) -> dict:
+    threshold_checks = []
+    thresholds = dict(holdout_manifest.get("adequacy_thresholds") or {})
+    metric_values = {
+        "trade_count": holdout_manifest.get("trade_count"),
+        "closed_trade_count": holdout_manifest.get("closed_trade_count"),
+        "distinct_entry_months": holdout_manifest.get("distinct_entry_months"),
+        "avg_invested_capital_ratio": holdout_manifest.get("avg_invested_capital_ratio"),
+        "cash_drag_ratio": holdout_manifest.get("cash_drag_ratio"),
+        "peak_slot_utilization": holdout_manifest.get("peak_slot_utilization"),
+        "realized_split_depth": holdout_manifest.get("realized_split_depth"),
+    }
+    threshold_pairs = (
+        ("min_trade_count", "trade_count", ">="),
+        ("min_closed_trade_count", "closed_trade_count", ">="),
+        ("min_distinct_entry_months", "distinct_entry_months", ">="),
+        ("min_avg_invested_capital_ratio", "avg_invested_capital_ratio", ">="),
+        ("max_cash_drag_ratio", "cash_drag_ratio", "<="),
+        ("min_peak_slot_utilization", "peak_slot_utilization", ">="),
+        ("min_realized_split_depth", "realized_split_depth", ">="),
+    )
+    for threshold_key, metric_key, operator in threshold_pairs:
+        if threshold_key not in thresholds:
+            continue
+        metric_value = metric_values.get(metric_key)
+        threshold_value = thresholds.get(threshold_key)
+        passed = None
+        if metric_value is not None and threshold_value is not None:
+            if operator == ">=":
+                passed = float(metric_value) >= float(threshold_value)
+            else:
+                passed = float(metric_value) <= float(threshold_value)
+        threshold_checks.append(
+            {
+                "threshold_key": threshold_key,
+                "metric_key": metric_key,
+                "operator": operator,
+                "threshold_value": threshold_value,
+                "metric_value": metric_value,
+                "passed": passed,
+            }
+        )
     return {
         "behavior_gate_status": _resolve_behavior_evidence_status(holdout_manifest),
-        "holdout_class": holdout_manifest.get("holdout_class"),
+        "internal_holdout_class": holdout_manifest.get("internal_holdout_class"),
         "approval_eligible": bool(holdout_manifest.get("approval_eligible", False)),
         "external_claim_eligible": bool(
             holdout_manifest.get("external_claim_eligible", False)
@@ -1881,6 +1925,7 @@ def _build_behavior_evidence_summary(holdout_manifest: dict) -> dict:
             ),
             "cash_drag_ratio": holdout_manifest.get("cash_drag_ratio"),
         },
+        "threshold_checks": threshold_checks,
     }
 
 
@@ -1923,35 +1968,133 @@ def _build_promotion_ablation_summary(candidate_summary_df, holdout_manifest: di
     )
     final_row = candidate_summary_df.iloc[0].to_dict() if not candidate_summary_df.empty else None
     final_candidate_id = None if final_row is None else int(final_row["shortlist_candidate_id"])
+    candidate_pool_count = int(len(candidate_summary_df))
+    hard_gate_pass_candidate_count = (
+        int(candidate_summary_df["hard_gate_pass"].sum())
+        if not candidate_summary_df.empty
+        else 0
+    )
     axis_rows = [
         {
             "axis": "Legacy-Calmar",
             "selection_rule": "highest promotion_oos_calmar_median",
             "behavior_gate_status": None,
+            "candidate_pool_count": candidate_pool_count,
+            "hard_gate_pass_candidate_count": hard_gate_pass_candidate_count,
             **_build_candidate_report_payload(legacy_row),
         },
         {
             "axis": "Robust-Score",
             "selection_rule": "highest robust_score without hard gate",
             "behavior_gate_status": None,
+            "candidate_pool_count": candidate_pool_count,
+            "hard_gate_pass_candidate_count": hard_gate_pass_candidate_count,
             **_build_candidate_report_payload(robust_row),
         },
         {
             "axis": "Robust+Gate",
             "selection_rule": "hard gate then robust_score tie-break",
             "behavior_gate_status": None,
+            "candidate_pool_count": candidate_pool_count,
+            "hard_gate_pass_candidate_count": hard_gate_pass_candidate_count,
             **_build_candidate_report_payload(robust_gate_row),
         },
         {
             "axis": "Robust+Gate+Behavior",
             "selection_rule": "same champion as Robust+Gate; behavior is evidence gate only in v1",
             "behavior_gate_status": _resolve_behavior_evidence_status(holdout_manifest),
+            "candidate_pool_count": candidate_pool_count,
+            "hard_gate_pass_candidate_count": hard_gate_pass_candidate_count,
             **_build_candidate_report_payload(final_row),
         },
     ]
     axis_df = pd.DataFrame(axis_rows)
     axis_df["matches_final_champion"] = axis_df["candidate_id"] == final_candidate_id
+    axis_df["selection_interpretation"] = axis_df["matches_final_champion"].map(
+        {True: "same_as_final_champion", False: "different_from_final_champion"}
+    )
+    axis_df.loc[axis_df["candidate_id"].isna(), "selection_interpretation"] = (
+        "no_candidate_selected"
+    )
     return axis_df
+
+
+def _safe_metric_delta(champion_value, runner_up_value):
+    try:
+        if champion_value is None or runner_up_value is None:
+            return None
+        return float(champion_value) - float(runner_up_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_runner_up_comparison(candidate_summary_df):
+    if len(candidate_summary_df) < 2:
+        return {
+            "runner_up_present": False,
+            "comparison_basis": "selection_rank",
+            "runner_up": None,
+            "deltas": {},
+        }
+    champion_row = candidate_summary_df.iloc[0].to_dict()
+    runner_up_row = candidate_summary_df.iloc[1].to_dict()
+    return {
+        "runner_up_present": True,
+        "comparison_basis": "selection_rank",
+        "runner_up": _build_candidate_report_payload(runner_up_row),
+        "deltas": {
+            "robust_score_delta": _safe_metric_delta(
+                champion_row.get("robust_score"),
+                runner_up_row.get("robust_score"),
+            ),
+            "promotion_fold_pass_rate_delta": _safe_metric_delta(
+                champion_row.get("promotion_fold_pass_rate"),
+                runner_up_row.get("promotion_fold_pass_rate"),
+            ),
+            "promotion_oos_calmar_median_delta": _safe_metric_delta(
+                champion_row.get("promotion_oos_calmar_median"),
+                runner_up_row.get("promotion_oos_calmar_median"),
+            ),
+            "promotion_oos_cagr_median_delta": _safe_metric_delta(
+                champion_row.get("promotion_oos_cagr_median"),
+                runner_up_row.get("promotion_oos_cagr_median"),
+            ),
+            "promotion_oos_mdd_depth_worst_delta": _safe_metric_delta(
+                champion_row.get("promotion_oos_mdd_depth_worst"),
+                runner_up_row.get("promotion_oos_mdd_depth_worst"),
+            ),
+        },
+    }
+
+
+def _build_executive_summary(
+    *,
+    candidate_summary_df,
+    final_candidate_manifest: dict,
+    holdout_manifest: dict,
+    lane_manifest: dict,
+):
+    champion_row = candidate_summary_df.iloc[0].to_dict() if not candidate_summary_df.empty else {}
+    champion_reason = (
+        "hard gate passed and deterministic tie-break won"
+        if bool(champion_row.get("hard_gate_pass"))
+        else "no hard-gate-passing candidate; provisional champion only"
+    )
+    return {
+        "candidate_count": int(len(candidate_summary_df)),
+        "hard_gate_pass_candidate_count": int(candidate_summary_df["hard_gate_pass"].sum()),
+        "champion_selection_reason": champion_reason,
+        "lane_approval_state": (
+            "approval_eligible" if bool(lane_manifest.get("approval_eligible")) else "approval_blocked"
+        ),
+        "external_claim_state": (
+            "external_claim_eligible"
+            if bool(holdout_manifest.get("external_claim_eligible"))
+            else "external_claim_blocked"
+        ),
+        "holdout_status": str(final_candidate_manifest.get("holdout_execution_status") or "unknown"),
+        "behavior_gate_status": _resolve_behavior_evidence_status(holdout_manifest),
+    }
 
 
 def _build_promotion_explanation_report(
@@ -1965,7 +2108,7 @@ def _build_promotion_explanation_report(
 ) -> dict:
     champion_payload = _build_candidate_report_payload(candidate_summary_df.iloc[0].to_dict())
     return {
-        "report_version": "promotion_explanation_report_v1",
+        "report_version": "promotion_explanation_report_v2",
         "lane_type": lane_manifest.get("lane_type"),
         "selection_contract_version": selection_settings["selection_contract_version"],
         "hard_gate_version": selection_settings["hard_gate_version"],
@@ -1975,6 +2118,12 @@ def _build_promotion_explanation_report(
         "final_lane_approval_eligible": bool(lane_manifest.get("approval_eligible", False)),
         "final_lane_external_claim_eligible": bool(
             lane_manifest.get("external_claim_eligible", False)
+        ),
+        "executive_summary": _build_executive_summary(
+            candidate_summary_df=candidate_summary_df,
+            final_candidate_manifest=final_candidate_manifest,
+            holdout_manifest=holdout_manifest,
+            lane_manifest=lane_manifest,
         ),
         "champion": {
             **champion_payload,
@@ -1992,6 +2141,7 @@ def _build_promotion_explanation_report(
             "reserve_auto_succession_deferred": True,
             "reserve_usage_scope": "provenance_only_for_issue68",
         },
+        "runner_up_comparison": _build_runner_up_comparison(candidate_summary_df),
         "ablation_axes": ablation_df.to_dict("records"),
         "behavior_evidence": _build_behavior_evidence_summary(holdout_manifest),
         "notes": [
@@ -2000,6 +2150,70 @@ def _build_promotion_explanation_report(
             "Holdout remains forbidden as a candidate selection stage.",
         ],
     }
+
+
+def _render_promotion_explanation_markdown(report: dict) -> str:
+    executive = dict(report.get("executive_summary") or {})
+    champion = dict(report.get("champion") or {})
+    runner_up_comparison = dict(report.get("runner_up_comparison") or {})
+    behavior = dict(report.get("behavior_evidence") or {})
+    lines = [
+        "# Promotion Explanation Summary",
+        "",
+        "## Executive Summary",
+        f"- Champion candidate id: {champion.get('candidate_id')}",
+        f"- Champion selection reason: {executive.get('champion_selection_reason')}",
+        f"- Lane approval state: {executive.get('lane_approval_state')}",
+        f"- External claim state: {executive.get('external_claim_state')}",
+        f"- Holdout status: {executive.get('holdout_status')}",
+        f"- Behavior gate status: {executive.get('behavior_gate_status')}",
+        "",
+        "## Champion Snapshot",
+        f"- Candidate signature: {champion.get('candidate_signature')}",
+        f"- Hard gate pass: {champion.get('hard_gate_pass')}",
+        f"- Robust score: {champion.get('robust_score')}",
+        f"- Promotion fold pass rate: {champion.get('promotion_fold_pass_rate')}",
+        f"- Promotion OOS Calmar median: {champion.get('promotion_oos_calmar_median')}",
+        f"- Promotion OOS CAGR median: {champion.get('promotion_oos_cagr_median')}",
+        f"- Promotion OOS MDD worst depth: {champion.get('promotion_oos_mdd_depth_worst')}",
+        "",
+        "## Runner-up Comparison",
+    ]
+    if runner_up_comparison.get("runner_up_present"):
+        runner_up = dict(runner_up_comparison.get("runner_up") or {})
+        deltas = dict(runner_up_comparison.get("deltas") or {})
+        lines.extend(
+            [
+                f"- Runner-up candidate id: {runner_up.get('candidate_id')}",
+                f"- Runner-up signature: {runner_up.get('candidate_signature')}",
+                f"- Robust score delta: {deltas.get('robust_score_delta')}",
+                f"- Fold pass rate delta: {deltas.get('promotion_fold_pass_rate_delta')}",
+                f"- Calmar median delta: {deltas.get('promotion_oos_calmar_median_delta')}",
+                f"- CAGR median delta: {deltas.get('promotion_oos_cagr_median_delta')}",
+                f"- MDD worst depth delta: {deltas.get('promotion_oos_mdd_depth_worst_delta')}",
+            ]
+        )
+    else:
+        lines.append("- No runner-up candidate was available.")
+    lines.extend(["", "## Behavior Evidence"])
+    lines.append(f"- Internal holdout class: {behavior.get('internal_holdout_class')}")
+    lines.append(f"- Approval eligible: {behavior.get('approval_eligible')}")
+    lines.append(f"- External claim eligible: {behavior.get('external_claim_eligible')}")
+    for check in behavior.get("threshold_checks") or []:
+        lines.append(
+            f"- Threshold {check.get('threshold_key')}: "
+            f"{check.get('metric_value')} {check.get('operator')} {check.get('threshold_value')} "
+            f"=> passed={check.get('passed')}"
+        )
+    if behavior.get("external_claim_reasons"):
+        lines.extend(["", "## External Claim Reasons"])
+        for reason in behavior.get("external_claim_reasons") or []:
+            lines.append(f"- {reason}")
+    lines.extend(["", "## Notes"])
+    for note in report.get("notes") or []:
+        lines.append(f"- {note}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _find_selected_finalist_index(finalists_df: "pd.DataFrame", selected_params_dict: dict) -> int:
@@ -3098,12 +3312,24 @@ def run_walk_forward_analysis():
             waiver_reason=holdout_settings["waiver_reason"],
         )
 
-    cpu_audit_outcome = _resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits)
+    selection_cpu_check_outcome = _resolve_cpu_audit_outcome(
+        cpu_cert_settings,
+        all_selection_audits,
+    )
+    lane_cpu_audit_outcome = selection_cpu_check_outcome
+    if lane_type == "promotion_evaluation":
+        if final_candidate_manifest is None:
+            lane_cpu_audit_outcome = "missing_final_candidate_audit"
+        else:
+            lane_cpu_audit_outcome = str(
+                final_candidate_manifest.get("cpu_audit_outcome")
+                or "missing_final_candidate_audit"
+            )
     lane_reasons = _build_current_lane_reasons(
         lane_type=lane_type,
         total_folds=total_folds,
         overlap_days=overlap_days,
-        cpu_audit_outcome=cpu_audit_outcome,
+        cpu_audit_outcome=lane_cpu_audit_outcome,
     )
     lane_reasons.extend(_build_final_candidate_gate_reasons(final_candidate_manifest))
     lane_approval_eligible = bool(holdout_manifest.get("approval_eligible")) and not lane_reasons
@@ -3122,7 +3348,8 @@ def run_walk_forward_analysis():
         ticker_universe_snapshot_id=wfo_settings.get("ticker_universe_snapshot_id"),
         engine_version_hash=wfo_settings.get("engine_version_hash") or os.environ.get("MAGICSPLIT_ENGINE_VERSION_HASH"),
         composite_curve_allowed=lane_contract["composite_curve_allowed"],
-        cpu_audit_outcome=cpu_audit_outcome,
+        cpu_audit_outcome=lane_cpu_audit_outcome,
+        selection_cpu_check_outcome=selection_cpu_check_outcome,
         reasons=lane_reasons,
     )
     manifest_paths = write_wfo_manifests(
@@ -3158,5 +3385,18 @@ def run_walk_forward_analysis():
             os.path.join(results_dir, "promotion_explanation_report.json"),
             promotion_explanation_report,
         )
+        promotion_explanation_markdown_path = Path(
+            os.path.join(results_dir, "promotion_explanation_summary.md")
+        )
+        promotion_explanation_markdown_path.write_text(
+            _render_promotion_explanation_markdown(
+                promotion_explanation_report
+            ),
+            encoding="utf-8",
+        )
         print(f"✅ Promotion ablation summary saved to: {promotion_ablation_path}")
         print(f"✅ Promotion explanation report saved to: {promotion_explanation_path}")
+        print(
+            "✅ Promotion explanation summary saved to: "
+            f"{promotion_explanation_markdown_path.as_posix()}"
+        )

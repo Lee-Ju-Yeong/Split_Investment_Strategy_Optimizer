@@ -258,7 +258,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `approval_eligible(내부 승인 가능)`는 내부 절차상 다음 단계로 진행 가능한지 보는 값이다.
   - `external_claim_eligible(대외 설명 가능)`는 외부나 관리직에게 `이제 최종 승인 증거로 설명해도 된다`고 말할 수 있는지 보는 더 엄격한 값이다.
   - waiver(예외 승인 사유)가 들어간 holdout은 내부적으로는 진행할 수 있어도, `external_claim_eligible=false`로 남는다.
-  - `holdout_class`는 내부 분류용 라벨이다. 최종 대외 설명 가능 여부는 반드시 `external_claim_eligible`로 판단해야 한다.
+  - `internal_holdout_class(내부용 holdout 분류)`는 참고용 라벨이다. 최종 대외 설명 가능 여부는 반드시 `external_claim_eligible`로 판단해야 한다.
 - 현재 구현 상태:
   - `holdout_start`, `holdout_end`를 config에 넣으면 `holdout_manifest.json(holdout 상태 기록 파일)`이 함께 저장된다.
   - `holdout_auto_execute=true(holdout 자동 실행 옵션)`를 같이 넣으면, promotion lane이 끝난 뒤 `final_candidate_manifest.json`의 champion만 CPU로 holdout을 실행한다.
@@ -268,6 +268,8 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `holdout_adequacy_thresholds(holdout 충분성 최소 기준)`가 설정되어 있으면, `trade_count`, `closed_trade_count`, `distinct_entry_months`, `avg_invested_capital_ratio`, `cash_drag_ratio` 같은 지표가 기준을 못 넘을 때 `approval_eligible=false`로 강등된다.
   - 다만 `holdout_waiver_reason(예외 승인 사유)`가 있으면, `holdout_too_short` 또는 adequacy threshold 미달은 `waived_reasons(예외 승인으로 넘긴 사유 목록)`으로 남기고 계속 진행할 수 있다.
   - `final_candidate_manifest.json`은 holdout 직전 champion/reserve 봉인용이고, `champion_params`와 `reserve_candidates`까지 포함해서 holdout 입력 계약을 self-contained(파일 하나만 봐도 필요한 정보가 다 들어 있는 상태)하게 남긴다.
+  - `lane_manifest.json`의 `cpu_audit_outcome`은 이제 promotion lane에서 `final candidate CPU audit(최종 후보 CPU 검산)` 결과를 뜻한다.
+  - 예전 `cpu_certification(선택 단계 CPU 확인)`은 `selection_cpu_check_outcome`으로 따로 기록되며, 최종 승인 SSOT는 아니다.
   - 단, 이번 `#68`에서는 reserve는 자동 승계에 쓰지 않고 provenance(후보 기록) 용도로만 남긴다.
   - 이 파일에는 `promotion_shortlist_hash`, `freeze_contract_hash`, `canonical_holdout_*` 정보도 같이 남아서, 후보가 freeze 이후 바뀌지 않았는지와 holdout 경계가 정책과 맞는지를 나중에도 다시 확인할 수 있다.
   - `holdout_auto_execute=true`일 때는 `final candidate CPU audit -> holdout 실행 -> adequacy metric(holdout이 충분히 의미 있었는지 보는 지표) 계산`까지 이어지고, 결과가 manifest에 다시 반영된다.
@@ -275,7 +277,9 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `holdout_manifest.json`에는 이제 `external_claim_eligible`와 `external_claim_reasons`도 같이 남는다. 그래서 `waiver가 있었는지`, `짧은 holdout이었는지`, `대외 설명용으로 닫혔는지`를 명확히 구분할 수 있다.
   - `lane_manifest.json`에도 `external_claim_eligible`가 같이 남아서, lane 전체가 내부 승인만 가능한 상태인지, 대외 설명까지 가능한 상태인지 구분할 수 있다.
   - promotion lane은 이제 `promotion_ablation_summary.csv`와 `promotion_explanation_report.json`도 함께 남긴다. 이 두 파일은 “왜 champion이 뽑혔는지”와 “behavior evidence(행동지표 근거)가 어땠는지”를 설명하는 보고용 산출물이다.
+  - 추가로 `promotion_explanation_summary.md`도 함께 남긴다. 이 파일은 팀원이나 관리직이 바로 읽을 수 있도록 핵심 설명만 한 장 요약으로 정리한 것이다.
   - 중요한 점: `promotion_ablation_summary.csv`는 현재 `설명용 비교 리포트`에 가깝다. 아직 독립적인 새 선택기(selector, 후보를 다시 고르는 별도 로직)라고 읽으면 안 된다.
+  - `promotion_explanation_report.json`은 이제 `executive_summary(한눈에 보는 요약)`, `runner_up_comparison(2등 후보와 비교)`, `behavior_evidence.threshold_checks(행동지표 기준별 통과/실패)`를 함께 남긴다.
 - 현재 저장소 상태:
 - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout(임시 내부 검증용 holdout)`
 - 아주 쉽게 말하면:

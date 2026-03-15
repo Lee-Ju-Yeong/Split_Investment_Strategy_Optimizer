@@ -220,12 +220,6 @@ def _lane_manifest_reasons(index: int, manifest: Mapping[str, object]) -> list[s
     evidence_tier = str(manifest.get("evidence_tier") or "").strip().lower()
     if evidence_tier and evidence_tier != "approval_grade":
         reasons.append(f"{prefix}.evidence_tier={evidence_tier}")
-    lane_type = str(manifest.get("lane_type") or "").strip().lower()
-    cpu_audit_outcome = str(manifest.get("cpu_audit_outcome") or "").strip().lower()
-    if lane_type == "promotion_evaluation" and cpu_audit_outcome != "pass":
-        reasons.append(f"{prefix}.cpu_audit_required_for_promotion={cpu_audit_outcome or 'missing'}")
-    if cpu_audit_outcome and cpu_audit_outcome not in {"disabled", "pass"}:
-        reasons.append(f"{prefix}.cpu_audit_outcome={cpu_audit_outcome}")
     for reason in manifest.get("reasons") or []:
         reasons.append(f"{prefix}.reason={reason}")
     return reasons
@@ -238,9 +232,6 @@ def _holdout_manifest_reasons(index: int, manifest: Mapping[str, object]) -> lis
         reasons.append(f"{prefix}.approval_ineligible")
     if not bool(manifest.get("external_claim_eligible", False)):
         reasons.append(f"{prefix}.external_claim_ineligible")
-    holdout_class = str(manifest.get("holdout_class") or "").strip().lower()
-    if holdout_class and holdout_class != "approval_grade":
-        reasons.append(f"{prefix}.holdout_class={holdout_class}")
     if not bool(manifest.get("holdout_backtest_executed", False)):
         reasons.append(f"{prefix}.holdout_backtest_not_executed")
     before_holdout = manifest.get("promotion_wfo_end_before_holdout")

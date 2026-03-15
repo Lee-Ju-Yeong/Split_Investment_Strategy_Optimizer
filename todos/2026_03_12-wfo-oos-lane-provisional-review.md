@@ -361,9 +361,9 @@
   - `wfo_end`
   - `holdout_date_reuse_forbidden`
   - `parity_canary_excluded_ranges`
-  - `holdout_class`
+  - `internal_holdout_class`
     - 예:
-      - `approval_grade`
+      - `internal_approval_ready`
       - `internal_provisional`
   - `trade_count`
   - `closed_trade_count`
