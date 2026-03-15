@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import time as time_module
 
 import pandas as pd
 
@@ -82,6 +83,67 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertTrue(policy["approval_eligible"])
         self.assertEqual(policy["missing_adequacy_fields"], [])
 
+    def test_holdout_is_internal_provisional_when_adequacy_thresholds_fail(self):
+        policy = wfo.evaluate_holdout_policy(
+            holdout_start="2022-01-01",
+            holdout_end="2023-12-31",
+            wfo_end="2021-12-31",
+            adequacy_metrics={
+                "trade_count": 12,
+                "closed_trade_count": 8,
+                "avg_hold_days": 48.0,
+                "distinct_entry_months": 4,
+                "avg_invested_capital_ratio": 0.12,
+                "cash_drag_ratio": 0.88,
+            },
+            adequacy_thresholds={
+                "min_trade_count": 20,
+                "min_distinct_entry_months": 6,
+                "min_avg_invested_capital_ratio": 0.20,
+                "max_cash_drag_ratio": 0.80,
+            },
+        )
+
+        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertFalse(policy["approval_eligible"])
+        self.assertIn("trade_count_below_min=12.0000<20.0000", policy["reasons"])
+        self.assertIn("distinct_entry_months_below_min=4.0000<6.0000", policy["reasons"])
+        self.assertIn(
+            "avg_invested_capital_ratio_below_min=0.1200<0.2000",
+            policy["reasons"],
+        )
+        self.assertIn("cash_drag_ratio_above_max=0.8800>0.8000", policy["reasons"])
+
+    def test_holdout_waiver_can_preserve_approval_for_short_or_adequacy_failures(self):
+        policy = wfo.evaluate_holdout_policy(
+            holdout_start="2025-01-01",
+            holdout_end="2025-11-30",
+            wfo_end="2024-12-31",
+            adequacy_metrics={
+                "trade_count": 12,
+                "closed_trade_count": 8,
+                "avg_hold_days": 48.0,
+                "distinct_entry_months": 4,
+            },
+            adequacy_thresholds={
+                "min_trade_count": 20,
+                "min_distinct_entry_months": 6,
+            },
+            waiver_reason="committee_override_due_to_limited_fresh_window",
+        )
+
+        self.assertTrue(policy["approval_eligible"])
+        self.assertEqual(policy["holdout_class"], "approval_grade")
+        self.assertFalse(policy["external_claim_eligible"])
+        self.assertTrue(policy["waiver_applied"])
+        self.assertEqual(
+            policy["waiver_reason"],
+            "committee_override_due_to_limited_fresh_window",
+        )
+        self.assertEqual(policy["reasons"], [])
+        self.assertIn("holdout_too_short=334<730", policy["waived_reasons"])
+        self.assertIn("trade_count_below_min=12.0000<20.0000", policy["waived_reasons"])
+
     def test_build_holdout_manifest_carries_policy_and_metrics(self):
         manifest = wfo.build_holdout_manifest(
             holdout_start="2022-01-01",
@@ -104,6 +166,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
 
         self.assertEqual(manifest["holdout_class"], "approval_grade")
         self.assertTrue(manifest["approval_eligible"])
+        self.assertTrue(manifest["external_claim_eligible"])
         self.assertEqual(manifest["holdout_length_days"], 730)
         self.assertEqual(manifest["wfo_end"], "2021-12-31")
         self.assertTrue(manifest["holdout_backtest_executed"])
@@ -115,6 +178,36 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(manifest["avg_invested_capital_ratio"], 0.78)
         self.assertEqual(manifest["cash_drag_ratio"], 0.22)
         self.assertTrue(manifest["holdout_date_reuse_forbidden"])
+
+    def test_build_holdout_manifest_records_thresholds_and_waiver(self):
+        manifest = wfo.build_holdout_manifest(
+            holdout_start="2025-01-01",
+            holdout_end="2025-11-30",
+            wfo_end="2024-12-31",
+            adequacy_metrics={
+                "trade_count": 12,
+                "closed_trade_count": 8,
+                "avg_hold_days": 48.0,
+                "distinct_entry_months": 4,
+            },
+            adequacy_thresholds={
+                "min_trade_count": 20,
+                "min_distinct_entry_months": 6,
+            },
+            waiver_reason="committee_override_due_to_limited_fresh_window",
+            holdout_backtest_attempted=True,
+            holdout_backtest_success=True,
+            holdout_backtest_blocked=False,
+        )
+
+        self.assertTrue(manifest["approval_eligible"])
+        self.assertFalse(manifest["external_claim_eligible"])
+        self.assertTrue(manifest["waiver_applied"])
+        self.assertEqual(
+            manifest["adequacy_thresholds"]["min_trade_count"],
+            20.0,
+        )
+        self.assertIn("holdout_too_short=334<730", manifest["waived_reasons"])
 
     def test_build_holdout_manifest_distinguishes_attempted_from_success(self):
         manifest = wfo.build_holdout_manifest(
@@ -148,6 +241,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         manifest = wfo.build_lane_manifest(
             lane_type="legacy_wfo",
             approval_eligible=False,
+            external_claim_eligible=False,
             decision_date="2026-03-14",
             research_data_cutoff="2021-12-31",
             promotion_data_cutoff="2021-12-31",
@@ -159,6 +253,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(manifest["lane_type"], "legacy_wfo")
         self.assertEqual(manifest["evidence_tier"], "internal_provisional")
         self.assertFalse(manifest["approval_eligible"])
+        self.assertFalse(manifest["external_claim_eligible"])
         self.assertTrue(manifest["composite_curve_allowed"])
         self.assertEqual(manifest["cpu_audit_outcome"], "disabled")
         self.assertEqual(manifest["reasons"], ["lane_mode_not_separated"])
@@ -167,6 +262,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         manifest = wfo.build_lane_manifest(
             lane_type="legacy_wfo",
             approval_eligible=False,
+            external_claim_eligible=False,
             decision_date="2026-03-14",
             promotion_data_cutoff="2021-12-31",
             composite_curve_allowed=True,
@@ -201,6 +297,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                     "promotion_mode": "frozen_shortlist_single_anchor_eval",
                     "promotion_shortlist_path": shortlist_path.as_posix(),
                     "promotion_selection_metric": "cagr",
+                    "decision_date": "2026-03-14",
                 }
             )
 
@@ -214,6 +311,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             "frozen_shortlist_single_anchor_eval",
         )
         self.assertTrue(settings["shortlist_hash"])
+        self.assertEqual(settings["decision_date"], "2026-03-14")
 
     def test_resolve_lane_type_accepts_research_start_date_robustness(self):
         lane_type = wfo._resolve_lane_type({"lane_type": "research_start_date_robustness"})
@@ -303,6 +401,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                     "candidate_signature": "max_stocks=30",
                     "hard_gate_pass": True,
                     "hard_gate_fail_reasons": "",
+                    "robust_score": 0.42,
                     "promotion_fold_pass_rate": 1.0,
                     "promotion_oos_calmar_median": 0.20,
                     "promotion_oos_mdd_depth_worst": 0.00,
@@ -322,6 +421,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                     "candidate_signature": "max_stocks=25",
                     "hard_gate_pass": True,
                     "hard_gate_fail_reasons": "",
+                    "robust_score": 0.31,
                     "promotion_fold_pass_rate": 0.8,
                     "promotion_oos_calmar_median": 0.18,
                     "promotion_oos_mdd_depth_worst": 0.05,
@@ -341,6 +441,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
                     "candidate_signature": "max_stocks=20",
                     "hard_gate_pass": False,
                     "hard_gate_fail_reasons": "promotion_fold_pass_rate_below_min",
+                    "robust_score": 0.08,
                     "promotion_fold_pass_rate": 0.5,
                     "promotion_oos_calmar_median": 0.10,
                     "promotion_oos_mdd_depth_worst": 0.03,
@@ -357,19 +458,37 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             ]
         )
 
-        manifest = wfo._build_final_candidate_manifest(
-            summary_df,
-            selection_settings=wfo._resolve_selection_contract_settings(
-                {"selection_contract": {"reserve_count": 2}}
-            ),
-            shortlist_hash="abc123",
-            decision_date="2026-03-14",
-            research_data_cutoff="2024-12-31",
-            promotion_data_cutoff="2024-12-31",
-            holdout_settings={"holdout_start": "2025-01-01", "holdout_end": "2025-11-30"},
-            engine_version_hash="engine123",
-            cpu_audit_required=True,
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            shortlist_path.write_text(
+                "max_stocks,order_investment_ratio,additional_buy_drop_rate,sell_profit_rate,additional_buy_priority,stop_loss_rate,max_splits_limit,max_inactivity_period\n"
+                "20,0.02,0.04,0.05,0,-0.15,10,90\n"
+                "30,0.03,0.05,0.06,1,-0.10,15,60\n"
+                "25,0.025,0.05,0.055,1,-0.10,12,70\n",
+                encoding="utf-8",
+            )
+            past_ts = 1735603200
+            os.utime(shortlist_path, (past_ts, past_ts))
+            manifest = wfo._build_final_candidate_manifest(
+                summary_df,
+                selection_settings=wfo._resolve_selection_contract_settings(
+                    {"selection_contract": {"reserve_count": 2}}
+                ),
+                shortlist_path=shortlist_path.as_posix(),
+                shortlist_hash=wfo._hash_file_sha256(shortlist_path.as_posix()),
+                decision_date="2026-03-14",
+                research_data_cutoff="2024-12-31",
+                promotion_data_cutoff="2024-12-31",
+                holdout_settings={
+                    "holdout_start": "2025-01-01",
+                    "holdout_end": "2025-11-30",
+                    "canonical_promotion_wfo_end": "2024-12-31",
+                    "canonical_holdout_start": "2025-01-01",
+                    "canonical_holdout_end": "2025-11-30",
+                },
+                engine_version_hash="engine123",
+                cpu_audit_required=True,
+            )
 
         self.assertEqual(manifest["selection_mode"], "single_champion_only")
         self.assertEqual(manifest["champion_candidate_id"], 2)
@@ -381,6 +500,19 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             manifest["reserve_succession_rule"],
             "prelocked_non_performance_only",
         )
+        self.assertEqual(manifest["robust_score_version"], "promotion_robust_score_v1")
+        self.assertEqual(
+            manifest["robust_score_thresholds"]["robust_score_std_penalty"],
+            0.50,
+        )
+        self.assertEqual(
+            manifest["freeze_contract_version"],
+            "promotion_freeze_contract_v1",
+        )
+        self.assertTrue(manifest["freeze_contract_verified"])
+        self.assertTrue(manifest["promotion_shortlist_hash_verified"])
+        self.assertFalse(manifest["promotion_shortlist_modified_after_decision_date"])
+        self.assertTrue(manifest["canonical_holdout_contract_verified"])
         self.assertEqual(len(manifest["hard_gate_results_by_candidate"]), 3)
 
     def test_compute_holdout_adequacy_metrics_uses_daily_snapshots_and_trade_history(self):
@@ -412,6 +544,11 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             {
                 "champion_hard_gate_pass": False,
                 "champion_params": {},
+                "freeze_contract_verified": False,
+                "freeze_contract_hash": "",
+                "freeze_contract_reasons": [
+                    "promotion_shortlist_modified_after_decision_date"
+                ],
             },
             holdout_start=None,
             holdout_end="2025-11-30",
@@ -420,6 +557,84 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertIn("holdout_window_missing_for_auto_execute", reasons)
         self.assertIn("no_candidate_passed_hard_gate", reasons)
         self.assertIn("champion_params_missing", reasons)
+        self.assertIn("freeze_contract_not_verified", reasons)
+        self.assertIn("freeze_contract_hash_mismatch", reasons)
+        self.assertIn("promotion_shortlist_modified_after_decision_date", reasons)
+
+    def test_build_final_candidate_manifest_flags_shortlist_modified_after_decision_date(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            shortlist_path.write_text(
+                "max_stocks,order_investment_ratio,additional_buy_drop_rate,sell_profit_rate,additional_buy_priority,stop_loss_rate,max_splits_limit,max_inactivity_period\n"
+                "30,0.03,0.05,0.06,1,-0.10,15,60\n",
+                encoding="utf-8",
+            )
+            future_ts = time_module.time() + 86400
+            os.utime(shortlist_path, (future_ts, future_ts))
+            summary_df = pd.DataFrame(
+                [
+                    {
+                        "selection_rank": 1,
+                        "shortlist_candidate_id": 1,
+                        "candidate_signature": "max_stocks=30",
+                        "hard_gate_pass": True,
+                        "hard_gate_fail_reasons": "",
+                        "robust_score": 0.42,
+                        "promotion_fold_pass_rate": 1.0,
+                        "promotion_oos_calmar_median": 0.8,
+                        "promotion_oos_mdd_depth_worst": 0.1,
+                        "promotion_oos_cagr_median": 0.2,
+                        "max_stocks": 30,
+                        "order_investment_ratio": 0.03,
+                        "additional_buy_drop_rate": 0.05,
+                        "sell_profit_rate": 0.06,
+                        "additional_buy_priority": "highest_drop",
+                        "stop_loss_rate": -0.10,
+                        "max_splits_limit": 15,
+                        "max_inactivity_period": 60,
+                    }
+                ]
+            )
+
+            manifest = wfo._build_final_candidate_manifest(
+                summary_df,
+                selection_settings=wfo._resolve_selection_contract_settings({}),
+                shortlist_path=shortlist_path.as_posix(),
+                shortlist_hash=wfo._hash_file_sha256(shortlist_path.as_posix()),
+                decision_date="2026-03-14",
+                research_data_cutoff="2024-12-31",
+                promotion_data_cutoff="2024-12-31",
+                holdout_settings={
+                    "holdout_start": "2025-01-01",
+                    "holdout_end": "2025-11-30",
+                    "canonical_promotion_wfo_end": "2024-12-31",
+                    "canonical_holdout_start": "2025-01-01",
+                    "canonical_holdout_end": "2025-11-30",
+                },
+                engine_version_hash="engine123",
+                cpu_audit_required=True,
+            )
+
+        self.assertFalse(manifest["freeze_contract_verified"])
+        self.assertTrue(manifest["promotion_shortlist_modified_after_decision_date"])
+        self.assertIn(
+            "promotion_shortlist_modified_after_decision_date",
+            manifest["freeze_contract_reasons"],
+        )
+
+    def test_compute_robust_score_penalizes_variance(self):
+        stable_score, stable_mean, stable_std = wfo._compute_robust_score(
+            pd.Series([0.20, 0.20, 0.20]),
+            std_penalty=0.50,
+        )
+        volatile_score, volatile_mean, volatile_std = wfo._compute_robust_score(
+            pd.Series([0.05, 0.20, 0.35]),
+            std_penalty=0.50,
+        )
+
+        self.assertAlmostEqual(stable_mean, volatile_mean)
+        self.assertLess(stable_std, volatile_std)
+        self.assertGreater(stable_score, volatile_score)
 
     def test_build_current_lane_reasons_requires_cpu_audit_for_promotion_lane(self):
         reasons = wfo._build_current_lane_reasons(
@@ -435,6 +650,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         lane_manifest = wfo.build_lane_manifest(
             lane_type="legacy_wfo",
             approval_eligible=False,
+            external_claim_eligible=False,
             decision_date="2026-03-14",
             promotion_data_cutoff="2021-12-31",
             composite_curve_allowed=True,

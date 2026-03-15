@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
-from datetime import datetime
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +42,15 @@ _HOLDOUT_ADEQUACY_FIELDS = (
     "avg_hold_days",
     "distinct_entry_months",
 )
+_SUPPORTED_HOLDOUT_ADEQUACY_THRESHOLDS = (
+    "min_trade_count",
+    "min_closed_trade_count",
+    "min_distinct_entry_months",
+    "min_avg_invested_capital_ratio",
+    "max_cash_drag_ratio",
+    "min_peak_slot_utilization",
+    "min_realized_split_depth",
+)
 _DEFAULT_PARITY_CANARY_EXCLUDED_RANGES = (
     ("2025-12-01", "2026-01-31"),
 )
@@ -53,6 +62,10 @@ _SUPPORTED_WFO_LANE_TYPES = (
 _RESEARCH_WFO_MODE = "frozen_shortlist_multi_anchor_eval"
 _PROMOTION_WFO_MODE = "frozen_shortlist_single_anchor_eval"
 _SELECTION_CONTRACT_VERSION = "promotion_holdout_selector_v1"
+_FINAL_CANDIDATE_FREEZE_CONTRACT_VERSION = "promotion_freeze_contract_v1"
+_DEFAULT_CANONICAL_PROMOTION_WFO_END = "2024-12-31"
+_DEFAULT_CANONICAL_HOLDOUT_START = "2025-01-01"
+_DEFAULT_CANONICAL_HOLDOUT_END = "2025-11-30"
 
 
 def _coerce_date(value):
@@ -62,6 +75,27 @@ def _coerce_date(value):
         except TypeError:
             pass
     return datetime.fromisoformat(str(value)).date()
+
+
+def _coerce_datetime_utc(value):
+    if value is None or str(value).strip() == "":
+        return None
+    raw = str(value).strip()
+    try:
+        resolved = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        resolved = datetime.combine(_coerce_date(raw), time.max)
+    if resolved.tzinfo is None:
+        return resolved.replace(tzinfo=timezone.utc)
+    return resolved.astimezone(timezone.utc)
+
+
+def _require_decision_date(value, *, context_label: str) -> str:
+    if value is None or str(value).strip() == "":
+        raise ValueError(
+            f"{context_label} requires walk_forward_settings.decision_date."
+        )
+    return _coerce_date(value).isoformat()
 
 
 def _inclusive_day_count(start_date, end_date) -> int:
@@ -88,6 +122,50 @@ def _normalize_contaminated_ranges(ranges) -> list[dict]:
     return normalized
 
 
+def _normalize_holdout_adequacy_thresholds(thresholds) -> dict:
+    resolved = {}
+    for key in _SUPPORTED_HOLDOUT_ADEQUACY_THRESHOLDS:
+        if key not in dict(thresholds or {}):
+            continue
+        value = dict(thresholds or {}).get(key)
+        if value is None:
+            continue
+        resolved[key] = float(value)
+    return resolved
+
+
+def _evaluate_holdout_adequacy_thresholds(adequacy_metrics, thresholds: dict) -> list[str]:
+    metrics = dict(adequacy_metrics or {})
+    reasons: list[str] = []
+    comparisons = (
+        ("min_trade_count", "trade_count", ">="),
+        ("min_closed_trade_count", "closed_trade_count", ">="),
+        ("min_distinct_entry_months", "distinct_entry_months", ">="),
+        ("min_avg_invested_capital_ratio", "avg_invested_capital_ratio", ">="),
+        ("max_cash_drag_ratio", "cash_drag_ratio", "<="),
+        ("min_peak_slot_utilization", "peak_slot_utilization", ">="),
+        ("min_realized_split_depth", "realized_split_depth", ">="),
+    )
+    for threshold_key, metric_key, operator in comparisons:
+        if threshold_key not in thresholds:
+            continue
+        metric_value = metrics.get(metric_key)
+        if metric_value is None:
+            reasons.append(f"{metric_key}_missing_for_threshold")
+            continue
+        resolved_metric = float(metric_value)
+        resolved_threshold = float(thresholds[threshold_key])
+        if operator == ">=" and resolved_metric < resolved_threshold:
+            reasons.append(
+                f"{metric_key}_below_min={resolved_metric:.4f}<{resolved_threshold:.4f}"
+            )
+        if operator == "<=" and resolved_metric > resolved_threshold:
+            reasons.append(
+                f"{metric_key}_above_max={resolved_metric:.4f}>{resolved_threshold:.4f}"
+            )
+    return reasons
+
+
 def _ranges_overlap(start_date, end_date, range_start, range_end) -> bool:
     return not (end_date < range_start or range_end < start_date)
 
@@ -99,6 +177,8 @@ def evaluate_holdout_policy(
     wfo_end=None,
     contaminated_ranges=None,
     adequacy_metrics=None,
+    adequacy_thresholds=None,
+    waiver_reason: str | None = None,
     min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
 ) -> dict:
     start = _coerce_date(holdout_start)
@@ -111,17 +191,33 @@ def evaluate_holdout_policy(
         for item in normalized_ranges
     )
     adequacy = dict(adequacy_metrics or {})
+    thresholds = _normalize_holdout_adequacy_thresholds(adequacy_thresholds)
     missing_fields = [field for field in _HOLDOUT_ADEQUACY_FIELDS if field not in adequacy]
     reasons = []
+    waivable_reasons: list[str] = []
     if length_days < int(min_length_days):
-        reasons.append(f"holdout_too_short={length_days}<{int(min_length_days)}")
+        waivable_reasons.append(f"holdout_too_short={length_days}<{int(min_length_days)}")
     if resolved_wfo_end is not None and start <= resolved_wfo_end:
         reasons.append("holdout_starts_on_or_before_wfo_end")
     if overlap:
         reasons.append("holdout_range_contaminated")
     if missing_fields:
         reasons.append("missing_adequacy_fields=" + ",".join(missing_fields))
+    adequacy_threshold_failures = _evaluate_holdout_adequacy_thresholds(adequacy, thresholds)
+    waivable_reasons.extend(adequacy_threshold_failures)
+    resolved_waiver_reason = str(waiver_reason or "").strip()
+    waiver_applied = bool(resolved_waiver_reason and waivable_reasons)
+    if waiver_applied:
+        waived_reasons = list(waivable_reasons)
+    else:
+        reasons.extend(waivable_reasons)
+        waived_reasons = []
     approval_eligible = not reasons
+    external_claim_reasons = list(reasons)
+    if waiver_applied:
+        external_claim_reasons.append("holdout_waiver_applied")
+        external_claim_reasons.extend(waived_reasons)
+    external_claim_eligible = not external_claim_reasons
     return {
         "holdout_start": start.isoformat(),
         "holdout_end": end.isoformat(),
@@ -129,12 +225,19 @@ def evaluate_holdout_policy(
         "holdout_length_days": int(length_days),
         "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
         "approval_eligible": bool(approval_eligible),
+        "external_claim_eligible": bool(external_claim_eligible),
         "promotion_wfo_end_before_holdout": bool(
             resolved_wfo_end is None or resolved_wfo_end < start
         ),
         "contaminated_ranges": normalized_ranges,
         "contaminated_overlap": bool(overlap),
         "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
+        "adequacy_thresholds": thresholds,
+        "adequacy_threshold_failures": adequacy_threshold_failures,
+        "waiver_applied": waiver_applied,
+        "waiver_reason": resolved_waiver_reason or None,
+        "waived_reasons": waived_reasons,
+        "external_claim_reasons": external_claim_reasons,
         "missing_adequacy_fields": missing_fields,
         "reasons": reasons,
     }
@@ -147,6 +250,8 @@ def build_holdout_manifest(
     wfo_end,
     contaminated_ranges=None,
     adequacy_metrics=None,
+    adequacy_thresholds=None,
+    waiver_reason: str | None = None,
     holdout_backtest_executed: bool | None = None,
     holdout_backtest_attempted: bool | None = None,
     holdout_backtest_success: bool | None = None,
@@ -159,6 +264,8 @@ def build_holdout_manifest(
         wfo_end=wfo_end,
         contaminated_ranges=contaminated_ranges,
         adequacy_metrics=adequacy_metrics,
+        adequacy_thresholds=adequacy_thresholds,
+        waiver_reason=waiver_reason,
         min_length_days=min_length_days,
     )
     adequacy = dict(adequacy_metrics or {})
@@ -181,6 +288,14 @@ def build_holdout_manifest(
     if blocked:
         reasons.append("holdout_backtest_blocked")
     approval_eligible = bool(policy["approval_eligible"]) and bool(success)
+    external_claim_reasons = list(policy["external_claim_reasons"])
+    if not attempted:
+        external_claim_reasons.append("holdout_backtest_not_attempted")
+    elif not success:
+        external_claim_reasons.append("holdout_backtest_not_successful")
+    if blocked:
+        external_claim_reasons.append("holdout_backtest_blocked")
+    external_claim_eligible = bool(policy["external_claim_eligible"]) and bool(success)
     holdout_class = "approval_grade" if approval_eligible else "internal_provisional"
     return {
         "holdout_start": policy["holdout_start"],
@@ -195,8 +310,15 @@ def build_holdout_manifest(
         "holdout_class": holdout_class,
         "holdout_length_days": policy["holdout_length_days"],
         "approval_eligible": approval_eligible,
+        "external_claim_eligible": external_claim_eligible,
         "promotion_wfo_end_before_holdout": policy["promotion_wfo_end_before_holdout"],
         "required_adequacy_fields": policy["required_adequacy_fields"],
+        "adequacy_thresholds": policy["adequacy_thresholds"],
+        "adequacy_threshold_failures": policy["adequacy_threshold_failures"],
+        "waiver_applied": policy["waiver_applied"],
+        "waiver_reason": policy["waiver_reason"],
+        "waived_reasons": policy["waived_reasons"],
+        "external_claim_reasons": external_claim_reasons,
         "missing_adequacy_fields": policy["missing_adequacy_fields"],
         "trade_count": adequacy.get("trade_count"),
         "closed_trade_count": adequacy.get("closed_trade_count"),
@@ -214,6 +336,7 @@ def build_lane_manifest(
     *,
     lane_type: str,
     approval_eligible: bool,
+    external_claim_eligible: bool,
     decision_date=None,
     research_data_cutoff=None,
     promotion_data_cutoff=None,
@@ -231,6 +354,7 @@ def build_lane_manifest(
         "lane_type": str(lane_type),
         "evidence_tier": evidence_tier,
         "approval_eligible": bool(approval_eligible),
+        "external_claim_eligible": bool(external_claim_eligible),
         "decision_date": decision,
         "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
         "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
@@ -248,6 +372,8 @@ def _build_unconfigured_holdout_manifest(
     *,
     wfo_end,
     contaminated_ranges=None,
+    adequacy_thresholds=None,
+    waiver_reason: str | None = None,
 ) -> dict:
     return {
         "holdout_start": None,
@@ -262,8 +388,15 @@ def _build_unconfigured_holdout_manifest(
         "holdout_class": "unconfigured",
         "holdout_length_days": None,
         "approval_eligible": False,
+        "external_claim_eligible": False,
         "promotion_wfo_end_before_holdout": None,
         "required_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
+        "adequacy_thresholds": _normalize_holdout_adequacy_thresholds(adequacy_thresholds),
+        "adequacy_threshold_failures": [],
+        "waiver_applied": False,
+        "waiver_reason": str(waiver_reason or "").strip() or None,
+        "waived_reasons": [],
+        "external_claim_reasons": ["holdout_window_missing", "holdout_backtest_not_attempted"],
         "missing_adequacy_fields": list(_HOLDOUT_ADEQUACY_FIELDS),
         "trade_count": None,
         "closed_trade_count": None,
@@ -343,8 +476,29 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
         or wfo_settings.get("internal_provisional_holdout_start"),
         "holdout_end": wfo_settings.get("holdout_end")
         or wfo_settings.get("internal_provisional_holdout_end"),
+        "canonical_promotion_wfo_end": str(
+            wfo_settings.get("canonical_promotion_wfo_end")
+            or _DEFAULT_CANONICAL_PROMOTION_WFO_END
+        ).strip()
+        or None,
+        "canonical_holdout_start": str(
+            wfo_settings.get("canonical_holdout_start")
+            or wfo_settings.get("internal_provisional_holdout_start")
+            or _DEFAULT_CANONICAL_HOLDOUT_START
+        ).strip()
+        or None,
+        "canonical_holdout_end": str(
+            wfo_settings.get("canonical_holdout_end")
+            or wfo_settings.get("internal_provisional_holdout_end")
+            or _DEFAULT_CANONICAL_HOLDOUT_END
+        ).strip()
+        or None,
         "contaminated_ranges": contaminated_ranges,
         "auto_execute": bool(wfo_settings.get("holdout_auto_execute", False)),
+        "adequacy_thresholds": _normalize_holdout_adequacy_thresholds(
+            wfo_settings.get("holdout_adequacy_thresholds")
+        ),
+        "waiver_reason": str(wfo_settings.get("holdout_waiver_reason") or "").strip() or None,
     }
 
 
@@ -357,6 +511,22 @@ def _hash_file_sha256(path: str) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _file_mtime_utc_iso(path: str) -> str | None:
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+    return datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc).isoformat()
+
+
+def _was_file_modified_after_decision_date(path: str, decision_date) -> bool:
+    decision_dt = _coerce_datetime_utc(decision_date)
+    file_path = Path(path)
+    if decision_dt is None or not file_path.exists():
+        return False
+    modified_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+    return modified_dt > decision_dt
 
 
 def _hash_json_sha256(payload) -> str:
@@ -426,6 +596,10 @@ def _resolve_promotion_runtime_settings(wfo_settings: dict) -> dict:
         raise ValueError(
             "promotion_evaluation requires walk_forward_settings.promotion_shortlist_path."
         )
+    decision_date = _require_decision_date(
+        wfo_settings.get("decision_date"),
+        context_label="promotion_evaluation",
+    )
     selection_metric = str(
         wfo_settings.get("promotion_selection_metric")
         or wfo_settings.get("cpu_certification_metric")
@@ -437,6 +611,7 @@ def _resolve_promotion_runtime_settings(wfo_settings: dict) -> dict:
         "promotion_shortlist_path": shortlist_path,
         "promotion_selection_metric": selection_metric,
         "shortlist_hash": shortlist_hash or _hash_file_sha256(shortlist_path),
+        "decision_date": decision_date,
     }
 
 
@@ -461,18 +636,150 @@ def _resolve_selection_contract_settings(wfo_settings: dict) -> dict:
         "per_fold_min_oos_calmar_ratio": float(
             settings.get("per_fold_min_oos_calmar_ratio", 0.0)
         ),
+        "robust_score_version": str(
+            settings.get("robust_score_version") or "promotion_robust_score_v1"
+        ).strip() or "promotion_robust_score_v1",
+        "robust_score_std_penalty": float(
+            settings.get("robust_score_std_penalty", 0.50)
+        ),
         "reserve_count": max(int(settings.get("reserve_count", 2) or 2), 0),
         "selection_mode": "single_champion_only",
         "reserve_succession_rule": "prelocked_non_performance_only",
         "tie_break_rule": [
             "hard_gate_pass desc",
+            "robust_score desc",
             "promotion_fold_pass_rate desc",
-            "promotion_oos_calmar_median desc",
             "promotion_oos_mdd_depth_worst asc",
             "promotion_oos_cagr_median desc",
             "candidate_signature asc",
         ],
     }
+
+
+def _build_freeze_contract_payload(
+    *,
+    decision_date,
+    research_data_cutoff,
+    promotion_data_cutoff,
+    shortlist_path: str,
+    shortlist_hash: str | None,
+    shortlist_mtime_utc: str | None,
+    holdout_settings: dict,
+) -> dict:
+    return {
+        "decision_date": _require_decision_date(
+            decision_date,
+            context_label="promotion freeze contract",
+        ),
+        "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
+        "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
+        "promotion_shortlist_path": str(shortlist_path),
+        "promotion_shortlist_hash": shortlist_hash,
+        "promotion_shortlist_mtime_utc": shortlist_mtime_utc,
+        "holdout_start": holdout_settings.get("holdout_start"),
+        "holdout_end": holdout_settings.get("holdout_end"),
+        "canonical_promotion_wfo_end": holdout_settings.get("canonical_promotion_wfo_end"),
+        "canonical_holdout_start": holdout_settings.get("canonical_holdout_start"),
+        "canonical_holdout_end": holdout_settings.get("canonical_holdout_end"),
+    }
+
+
+def _evaluate_freeze_contract(
+    *,
+    decision_date,
+    research_data_cutoff,
+    promotion_data_cutoff,
+    shortlist_path: str,
+    shortlist_hash: str | None,
+    holdout_settings: dict,
+) -> dict:
+    shortlist_mtime_utc = _file_mtime_utc_iso(shortlist_path)
+    resolved_shortlist_hash = _hash_file_sha256(shortlist_path)
+    reasons: list[str] = []
+    resolved_decision_date = _require_decision_date(
+        decision_date,
+        context_label="promotion freeze contract",
+    )
+    promotion_shortlist_hash_verified = resolved_shortlist_hash == str(shortlist_hash or "")
+    if not promotion_shortlist_hash_verified:
+        reasons.append("promotion_shortlist_hash_mismatch")
+    shortlist_modified_after_decision_date = _was_file_modified_after_decision_date(
+        shortlist_path,
+        resolved_decision_date,
+    )
+    if shortlist_modified_after_decision_date:
+        reasons.append("promotion_shortlist_modified_after_decision_date")
+
+    canonical_holdout_contract_verified = True
+    canonical_promotion_wfo_end = holdout_settings.get("canonical_promotion_wfo_end")
+    canonical_holdout_start = holdout_settings.get("canonical_holdout_start")
+    canonical_holdout_end = holdout_settings.get("canonical_holdout_end")
+    if canonical_promotion_wfo_end:
+        canonical_end = _coerce_date(canonical_promotion_wfo_end)
+        if research_data_cutoff and _coerce_date(research_data_cutoff) > canonical_end:
+            reasons.append("research_data_cutoff_exceeds_canonical_promotion_wfo_end")
+            canonical_holdout_contract_verified = False
+        if promotion_data_cutoff and _coerce_date(promotion_data_cutoff) > canonical_end:
+            reasons.append("promotion_data_cutoff_exceeds_canonical_promotion_wfo_end")
+            canonical_holdout_contract_verified = False
+    if canonical_holdout_start and str(holdout_settings.get("holdout_start") or "") != str(
+        canonical_holdout_start
+    ):
+        reasons.append("holdout_start_mismatch_canonical_contract")
+        canonical_holdout_contract_verified = False
+    if canonical_holdout_end and str(holdout_settings.get("holdout_end") or "") != str(
+        canonical_holdout_end
+    ):
+        reasons.append("holdout_end_mismatch_canonical_contract")
+        canonical_holdout_contract_verified = False
+
+    freeze_contract_payload = _build_freeze_contract_payload(
+        decision_date=resolved_decision_date,
+        research_data_cutoff=research_data_cutoff,
+        promotion_data_cutoff=promotion_data_cutoff,
+        shortlist_path=shortlist_path,
+        shortlist_hash=shortlist_hash,
+        shortlist_mtime_utc=shortlist_mtime_utc,
+        holdout_settings=holdout_settings,
+    )
+    return {
+        "freeze_contract_hash": _hash_json_sha256(freeze_contract_payload),
+        "freeze_contract_payload": freeze_contract_payload,
+        "freeze_contract_reasons": reasons,
+        "freeze_contract_verified": not reasons,
+        "promotion_shortlist_hash_verified": promotion_shortlist_hash_verified,
+        "promotion_shortlist_mtime_utc": shortlist_mtime_utc,
+        "promotion_shortlist_modified_after_decision_date": (
+            shortlist_modified_after_decision_date
+        ),
+        "canonical_holdout_contract_verified": canonical_holdout_contract_verified,
+    }
+
+
+def _freeze_contract_payload_from_manifest(manifest: dict) -> dict:
+    return {
+        "decision_date": manifest.get("decision_date"),
+        "research_data_cutoff": manifest.get("research_data_cutoff"),
+        "promotion_data_cutoff": manifest.get("promotion_data_cutoff"),
+        "promotion_shortlist_path": manifest.get("promotion_shortlist_path"),
+        "promotion_shortlist_hash": manifest.get("promotion_shortlist_hash"),
+        "promotion_shortlist_mtime_utc": manifest.get("promotion_shortlist_mtime_utc"),
+        "holdout_start": manifest.get("holdout_start"),
+        "holdout_end": manifest.get("holdout_end"),
+        "canonical_promotion_wfo_end": manifest.get("canonical_promotion_wfo_end"),
+        "canonical_holdout_start": manifest.get("canonical_holdout_start"),
+        "canonical_holdout_end": manifest.get("canonical_holdout_end"),
+    }
+
+
+def _freeze_contract_hash_matches(manifest: dict) -> bool:
+    freeze_contract_hash = str(manifest.get("freeze_contract_hash") or "").strip()
+    if not freeze_contract_hash:
+        return False
+    return (
+        _hash_json_sha256(_freeze_contract_payload_from_manifest(manifest))
+        == freeze_contract_hash
+    )
 
 
 def _resolve_research_runtime_settings(wfo_settings: dict) -> dict:
@@ -798,6 +1105,22 @@ def _safe_positive_ratio(numerator, denominator):
     return resolved_numerator / resolved_denominator
 
 
+def _compute_robust_score(calmar_series, *, std_penalty: float):
+    import math
+    import pandas as pd
+
+    resolved_series = pd.to_numeric(calmar_series, errors="coerce").dropna()
+    if resolved_series.empty:
+        return None, None, None
+    calmar_mean = float(resolved_series.mean())
+    calmar_std = float(resolved_series.std(ddof=0))
+    fold_count = int(len(resolved_series))
+    robust_score = (calmar_mean - (float(std_penalty) * calmar_std)) * math.log1p(
+        max(fold_count, 1)
+    )
+    return robust_score, calmar_mean, calmar_std
+
+
 def _build_metric_snapshot(evaluated_df, *, prefix: str):
     columns = ["shortlist_candidate_id", "cagr", "mdd", "calmar_ratio"]
     snapshot = evaluated_df[columns].copy()
@@ -903,6 +1226,10 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
             if not oos_mdd_depth_series.empty
             else None
         )
+        robust_score, oos_calmar_mean, oos_calmar_std = _compute_robust_score(
+            group["oos_calmar_ratio"],
+            std_penalty=selection_settings["robust_score_std_penalty"],
+        )
         hard_gate_fail_reasons = []
         if ratio_median is None:
             hard_gate_fail_reasons.append("promotion_oos_is_calmar_ratio_median_missing")
@@ -929,10 +1256,13 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
                 "promotion_fold_pass_count": int(group["fold_gate_pass"].sum()),
                 "promotion_fold_pass_rate": fold_pass_rate,
                 "promotion_oos_calmar_median": float(oos_calmar_series.median()),
+                "promotion_oos_calmar_mean": oos_calmar_mean,
+                "promotion_oos_calmar_std": oos_calmar_std,
                 "promotion_oos_cagr_median": float(oos_cagr_series.median()),
                 "promotion_oos_mdd_depth_p95": oos_mdd_depth_p95,
                 "promotion_oos_mdd_depth_worst": oos_mdd_depth_worst,
                 "promotion_oos_is_calmar_ratio_median": ratio_median,
+                "robust_score": robust_score,
                 "hard_gate_pass": bool(hard_gate_pass),
                 "hard_gate_fail_reasons": ",".join(hard_gate_fail_reasons),
                 **{key: first_row.get(key) for key in _CPU_CERT_PARAM_KEYS},
@@ -944,8 +1274,8 @@ def _summarize_promotion_candidates(fold_metrics_df, selection_settings: dict):
     summary_df = summary_df.sort_values(
         [
             "hard_gate_pass",
+            "robust_score",
             "promotion_fold_pass_rate",
-            "promotion_oos_calmar_median",
             "promotion_oos_mdd_depth_worst",
             "promotion_oos_cagr_median",
             "candidate_signature",
@@ -970,6 +1300,7 @@ def _build_final_candidate_manifest(
     candidate_summary_df,
     *,
     selection_settings: dict,
+    shortlist_path: str,
     shortlist_hash: str | None,
     decision_date,
     research_data_cutoff,
@@ -980,6 +1311,10 @@ def _build_final_candidate_manifest(
 ):
     if candidate_summary_df.empty:
         raise ValueError("Promotion candidate summary is empty.")
+    resolved_decision_date = _require_decision_date(
+        decision_date,
+        context_label="promotion final candidate selection",
+    )
     champion = candidate_summary_df.iloc[0].to_dict()
     champion_params = _extract_strategy_params(champion, {})
     reserve_count = selection_settings["reserve_count"]
@@ -1007,6 +1342,7 @@ def _build_final_candidate_manifest(
             "candidate_signature",
             "hard_gate_pass",
             "hard_gate_fail_reasons",
+            "robust_score",
             "promotion_fold_pass_rate",
             "promotion_oos_calmar_median",
             "promotion_oos_mdd_depth_worst",
@@ -1018,7 +1354,15 @@ def _build_final_candidate_manifest(
         "candidate_signature": champion["candidate_signature"],
         "params": champion_params,
     }
-    readiness_reasons = []
+    freeze_contract = _evaluate_freeze_contract(
+        decision_date=resolved_decision_date,
+        research_data_cutoff=research_data_cutoff,
+        promotion_data_cutoff=promotion_data_cutoff,
+        shortlist_path=shortlist_path,
+        shortlist_hash=shortlist_hash,
+        holdout_settings=holdout_settings,
+    )
+    readiness_reasons = list(freeze_contract["freeze_contract_reasons"])
     if not bool(champion.get("hard_gate_pass")):
         readiness_reasons.append("no_candidate_passed_hard_gate")
     if cpu_audit_required:
@@ -1027,22 +1371,44 @@ def _build_final_candidate_manifest(
         "selection_contract_version": selection_settings["selection_contract_version"],
         "selection_mode": selection_settings["selection_mode"],
         "hard_gate_version": selection_settings["hard_gate_version"],
+        "robust_score_version": selection_settings["robust_score_version"],
         "hard_gate_thresholds": {
             "min_promotion_fold_pass_rate": selection_settings["min_promotion_fold_pass_rate"],
             "min_oos_is_calmar_ratio_median": selection_settings["min_oos_is_calmar_ratio_median"],
             "max_oos_mdd_depth_p95": selection_settings["max_oos_mdd_depth_p95"],
             "per_fold_min_oos_calmar_ratio": selection_settings["per_fold_min_oos_calmar_ratio"],
         },
+        "robust_score_thresholds": {
+            "robust_score_std_penalty": selection_settings["robust_score_std_penalty"],
+        },
         "tie_break_rule": list(selection_settings["tie_break_rule"]),
         "holdout_candidate_count": 1,
         "holdout_candidate_pack_forbidden": True,
         "holdout_selection_forbidden": True,
-        "decision_date": _coerce_date(decision_date or datetime.now()).isoformat(),
+        "freeze_contract_version": _FINAL_CANDIDATE_FREEZE_CONTRACT_VERSION,
+        "decision_date": resolved_decision_date,
         "research_data_cutoff": str(research_data_cutoff) if research_data_cutoff else None,
         "promotion_data_cutoff": str(promotion_data_cutoff) if promotion_data_cutoff else None,
         "holdout_start": holdout_settings.get("holdout_start"),
         "holdout_end": holdout_settings.get("holdout_end"),
+        "canonical_promotion_wfo_end": holdout_settings.get("canonical_promotion_wfo_end"),
+        "canonical_holdout_start": holdout_settings.get("canonical_holdout_start"),
+        "canonical_holdout_end": holdout_settings.get("canonical_holdout_end"),
+        "promotion_shortlist_path": str(shortlist_path),
         "promotion_shortlist_hash": shortlist_hash,
+        "promotion_shortlist_hash_verified": freeze_contract[
+            "promotion_shortlist_hash_verified"
+        ],
+        "promotion_shortlist_mtime_utc": freeze_contract["promotion_shortlist_mtime_utc"],
+        "promotion_shortlist_modified_after_decision_date": freeze_contract[
+            "promotion_shortlist_modified_after_decision_date"
+        ],
+        "freeze_contract_hash": freeze_contract["freeze_contract_hash"],
+        "freeze_contract_verified": freeze_contract["freeze_contract_verified"],
+        "freeze_contract_reasons": freeze_contract["freeze_contract_reasons"],
+        "canonical_holdout_contract_verified": freeze_contract[
+            "canonical_holdout_contract_verified"
+        ],
         "candidate_ranking_hash": _hash_json_sha256(ranking_records),
         "final_candidate_hash": _hash_json_sha256(champion_payload),
         "champion_candidate_id": int(champion["shortlist_candidate_id"]),
@@ -1052,6 +1418,9 @@ def _build_final_candidate_manifest(
         "reserve_candidate_signatures": reserve_candidate_signatures,
         "reserve_candidates": reserve_candidates,
         "reserve_succession_rule": selection_settings["reserve_succession_rule"],
+        "reserve_auto_succession_implemented": False,
+        "reserve_auto_succession_deferred": True,
+        "reserve_candidates_for_provenance_only": True,
         "reserve_promotion_allowed_reasons": [
             "final_candidate_cpu_audit_fail",
             "final_candidate_hash_mismatch",
@@ -1095,6 +1464,11 @@ def _build_holdout_auto_execute_block_reasons(
         reasons.append("no_candidate_passed_hard_gate")
     if not dict(final_candidate_manifest.get("champion_params") or {}):
         reasons.append("champion_params_missing")
+    if not bool(final_candidate_manifest.get("freeze_contract_verified", False)):
+        reasons.append("freeze_contract_not_verified")
+    if not _freeze_contract_hash_matches(final_candidate_manifest):
+        reasons.append("freeze_contract_hash_mismatch")
+    reasons.extend(list(final_candidate_manifest.get("freeze_contract_reasons") or []))
     return reasons
 
 
@@ -1316,7 +1690,9 @@ def _update_final_candidate_manifest_for_holdout(
     updated["cpu_audit_reasons"] = list(cpu_audit_result.get("reasons") or [])
     updated["cpu_audit_metrics"] = dict(cpu_audit_result.get("metrics") or {})
 
-    readiness_reasons = []
+    readiness_reasons = list(updated.get("freeze_contract_reasons") or [])
+    if not _freeze_contract_hash_matches(updated):
+        readiness_reasons.append("freeze_contract_hash_mismatch")
     if not bool(updated.get("champion_hard_gate_pass")):
         readiness_reasons.append("no_candidate_passed_hard_gate")
     if updated["cpu_audit_outcome"] != "pass":
@@ -1354,6 +1730,11 @@ def _build_final_candidate_gate_reasons(final_candidate_manifest: dict | None) -
     if final_candidate_manifest is None:
         return []
     reasons = []
+    if not bool(final_candidate_manifest.get("freeze_contract_verified")):
+        reasons.append("final_candidate_freeze_contract_not_verified")
+    if not _freeze_contract_hash_matches(final_candidate_manifest):
+        reasons.append("final_candidate_freeze_contract_hash_mismatch")
+    reasons.extend(list(final_candidate_manifest.get("freeze_contract_reasons") or []))
     if not bool(final_candidate_manifest.get("champion_hard_gate_pass")):
         reasons.append("final_candidate_no_hard_gate_pass")
     cpu_audit_required = bool(final_candidate_manifest.get("cpu_audit_required"))
@@ -1385,6 +1766,240 @@ def _build_metric_distribution_summary(metrics_df, metric_columns: tuple[str, ..
             "max": float(series.max()),
         }
     return summary
+
+
+def _select_candidate_from_summary(
+    candidate_summary_df,
+    *,
+    sort_columns: list[str],
+    ascending: list[bool],
+    require_hard_gate: bool = False,
+):
+    ranked = candidate_summary_df.copy()
+    if require_hard_gate:
+        ranked = ranked[ranked["hard_gate_pass"]]
+    if ranked.empty:
+        return None
+    ranked = ranked.sort_values(
+        sort_columns,
+        ascending=ascending,
+        kind="stable",
+    )
+    return ranked.iloc[0].to_dict()
+
+
+def _build_candidate_report_payload(candidate_row: dict | None) -> dict:
+    payload = {
+        "candidate_id": None,
+        "candidate_signature": None,
+        "selection_rank": None,
+        "hard_gate_pass": None,
+        "hard_gate_fail_reasons": None,
+        "robust_score": None,
+        "promotion_fold_pass_rate": None,
+        "promotion_oos_calmar_median": None,
+        "promotion_oos_cagr_median": None,
+        "promotion_oos_mdd_depth_worst": None,
+        "params": {},
+    }
+    if candidate_row is None:
+        return payload
+    payload.update(
+        {
+            "candidate_id": int(candidate_row["shortlist_candidate_id"]),
+            "candidate_signature": candidate_row.get("candidate_signature"),
+            "selection_rank": int(candidate_row["selection_rank"]),
+            "hard_gate_pass": bool(candidate_row["hard_gate_pass"]),
+            "hard_gate_fail_reasons": candidate_row.get("hard_gate_fail_reasons") or "",
+            "robust_score": candidate_row.get("robust_score"),
+            "promotion_fold_pass_rate": candidate_row.get("promotion_fold_pass_rate"),
+            "promotion_oos_calmar_median": candidate_row.get("promotion_oos_calmar_median"),
+            "promotion_oos_cagr_median": candidate_row.get("promotion_oos_cagr_median"),
+            "promotion_oos_mdd_depth_worst": candidate_row.get("promotion_oos_mdd_depth_worst"),
+            "params": _extract_strategy_params(candidate_row, {}),
+        }
+    )
+    return payload
+
+
+def _resolve_behavior_evidence_status(holdout_manifest: dict) -> str:
+    if not bool(holdout_manifest.get("holdout_backtest_attempted")):
+        return "not_attempted"
+    if bool(holdout_manifest.get("holdout_backtest_blocked")):
+        return "blocked"
+    if bool(holdout_manifest.get("waiver_applied")) and list(
+        holdout_manifest.get("waived_reasons") or []
+    ):
+        return "waived"
+    if list(holdout_manifest.get("missing_adequacy_fields") or []):
+        return "failed"
+    if list(holdout_manifest.get("adequacy_threshold_failures") or []):
+        return "failed"
+    if bool(holdout_manifest.get("holdout_backtest_success")):
+        return "passed"
+    return "failed"
+
+
+def _build_behavior_evidence_summary(holdout_manifest: dict) -> dict:
+    return {
+        "behavior_gate_status": _resolve_behavior_evidence_status(holdout_manifest),
+        "holdout_class": holdout_manifest.get("holdout_class"),
+        "approval_eligible": bool(holdout_manifest.get("approval_eligible", False)),
+        "external_claim_eligible": bool(
+            holdout_manifest.get("external_claim_eligible", False)
+        ),
+        "holdout_backtest_attempted": bool(
+            holdout_manifest.get("holdout_backtest_attempted", False)
+        ),
+        "holdout_backtest_success": bool(
+            holdout_manifest.get("holdout_backtest_success", False)
+        ),
+        "holdout_backtest_blocked": bool(
+            holdout_manifest.get("holdout_backtest_blocked", False)
+        ),
+        "waiver_applied": bool(holdout_manifest.get("waiver_applied", False)),
+        "waiver_reason": holdout_manifest.get("waiver_reason"),
+        "waived_reasons": list(holdout_manifest.get("waived_reasons") or []),
+        "external_claim_reasons": list(
+            holdout_manifest.get("external_claim_reasons") or []
+        ),
+        "adequacy_threshold_failures": list(
+            holdout_manifest.get("adequacy_threshold_failures") or []
+        ),
+        "missing_adequacy_fields": list(
+            holdout_manifest.get("missing_adequacy_fields") or []
+        ),
+        "metrics": {
+            "trade_count": holdout_manifest.get("trade_count"),
+            "closed_trade_count": holdout_manifest.get("closed_trade_count"),
+            "avg_hold_days": holdout_manifest.get("avg_hold_days"),
+            "distinct_entry_months": holdout_manifest.get("distinct_entry_months"),
+            "peak_slot_utilization": holdout_manifest.get("peak_slot_utilization"),
+            "realized_split_depth": holdout_manifest.get("realized_split_depth"),
+            "avg_invested_capital_ratio": holdout_manifest.get(
+                "avg_invested_capital_ratio"
+            ),
+            "cash_drag_ratio": holdout_manifest.get("cash_drag_ratio"),
+        },
+    }
+
+
+def _build_promotion_ablation_summary(candidate_summary_df, holdout_manifest: dict):
+    import pandas as pd
+
+    legacy_row = _select_candidate_from_summary(
+        candidate_summary_df,
+        sort_columns=[
+            "promotion_oos_calmar_median",
+            "promotion_fold_pass_rate",
+            "promotion_oos_mdd_depth_worst",
+            "promotion_oos_cagr_median",
+            "candidate_signature",
+        ],
+        ascending=[False, False, True, False, True],
+    )
+    robust_row = _select_candidate_from_summary(
+        candidate_summary_df,
+        sort_columns=[
+            "robust_score",
+            "promotion_fold_pass_rate",
+            "promotion_oos_mdd_depth_worst",
+            "promotion_oos_calmar_median",
+            "candidate_signature",
+        ],
+        ascending=[False, False, True, False, True],
+    )
+    robust_gate_row = _select_candidate_from_summary(
+        candidate_summary_df,
+        sort_columns=[
+            "robust_score",
+            "promotion_fold_pass_rate",
+            "promotion_oos_mdd_depth_worst",
+            "promotion_oos_cagr_median",
+            "candidate_signature",
+        ],
+        ascending=[False, False, True, False, True],
+        require_hard_gate=True,
+    )
+    final_row = candidate_summary_df.iloc[0].to_dict() if not candidate_summary_df.empty else None
+    final_candidate_id = None if final_row is None else int(final_row["shortlist_candidate_id"])
+    axis_rows = [
+        {
+            "axis": "Legacy-Calmar",
+            "selection_rule": "highest promotion_oos_calmar_median",
+            "behavior_gate_status": None,
+            **_build_candidate_report_payload(legacy_row),
+        },
+        {
+            "axis": "Robust-Score",
+            "selection_rule": "highest robust_score without hard gate",
+            "behavior_gate_status": None,
+            **_build_candidate_report_payload(robust_row),
+        },
+        {
+            "axis": "Robust+Gate",
+            "selection_rule": "hard gate then robust_score tie-break",
+            "behavior_gate_status": None,
+            **_build_candidate_report_payload(robust_gate_row),
+        },
+        {
+            "axis": "Robust+Gate+Behavior",
+            "selection_rule": "same champion as Robust+Gate; behavior is evidence gate only in v1",
+            "behavior_gate_status": _resolve_behavior_evidence_status(holdout_manifest),
+            **_build_candidate_report_payload(final_row),
+        },
+    ]
+    axis_df = pd.DataFrame(axis_rows)
+    axis_df["matches_final_champion"] = axis_df["candidate_id"] == final_candidate_id
+    return axis_df
+
+
+def _build_promotion_explanation_report(
+    *,
+    candidate_summary_df,
+    final_candidate_manifest: dict,
+    holdout_manifest: dict,
+    lane_manifest: dict,
+    selection_settings: dict,
+    ablation_df,
+) -> dict:
+    champion_payload = _build_candidate_report_payload(candidate_summary_df.iloc[0].to_dict())
+    return {
+        "report_version": "promotion_explanation_report_v1",
+        "lane_type": lane_manifest.get("lane_type"),
+        "selection_contract_version": selection_settings["selection_contract_version"],
+        "hard_gate_version": selection_settings["hard_gate_version"],
+        "robust_score_version": selection_settings["robust_score_version"],
+        "candidate_count": int(len(candidate_summary_df)),
+        "hard_gate_pass_candidate_count": int(candidate_summary_df["hard_gate_pass"].sum()),
+        "final_lane_approval_eligible": bool(lane_manifest.get("approval_eligible", False)),
+        "final_lane_external_claim_eligible": bool(
+            lane_manifest.get("external_claim_eligible", False)
+        ),
+        "champion": {
+            **champion_payload,
+            "cpu_audit_outcome": final_candidate_manifest.get("cpu_audit_outcome"),
+            "holdout_execution_status": final_candidate_manifest.get(
+                "holdout_execution_status"
+            ),
+            "holdout_ready": bool(final_candidate_manifest.get("holdout_ready", False)),
+        },
+        "reserve_policy": {
+            "reserve_candidates_recorded": bool(
+                final_candidate_manifest.get("reserve_candidates")
+            ),
+            "reserve_auto_succession_implemented": False,
+            "reserve_auto_succession_deferred": True,
+            "reserve_usage_scope": "provenance_only_for_issue68",
+        },
+        "ablation_axes": ablation_df.to_dict("records"),
+        "behavior_evidence": _build_behavior_evidence_summary(holdout_manifest),
+        "notes": [
+            "Behavior evidence is a post-selection explanation gate in v1, not a selector.",
+            "Reserve automatic succession is deferred outside issue #68.",
+            "Holdout remains forbidden as a candidate selection stage.",
+        ],
+    }
 
 
 def _find_selected_finalist_index(finalists_df: "pd.DataFrame", selected_params_dict: dict) -> int:
@@ -1955,6 +2570,8 @@ def _run_research_start_date_robustness(
             wfo_end=pd.to_datetime(backtest_settings["end_date"]).date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_metrics={},
+            adequacy_thresholds=holdout_settings["adequacy_thresholds"],
+            waiver_reason=holdout_settings["waiver_reason"],
             holdout_backtest_attempted=False,
             holdout_backtest_success=False,
             holdout_backtest_blocked=False,
@@ -1963,11 +2580,14 @@ def _run_research_start_date_robustness(
         holdout_manifest = _build_unconfigured_holdout_manifest(
             wfo_end=pd.to_datetime(backtest_settings["end_date"]).date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
+            adequacy_thresholds=holdout_settings["adequacy_thresholds"],
+            waiver_reason=holdout_settings["waiver_reason"],
         )
 
     lane_manifest = build_lane_manifest(
         lane_type="research_start_date_robustness",
         approval_eligible=False,
+        external_claim_eligible=False,
         decision_date=wfo_settings.get("decision_date"),
         research_data_cutoff=wfo_settings.get("research_data_cutoff")
         or backtest_settings["end_date"],
@@ -2316,6 +2936,7 @@ def run_walk_forward_analysis():
    
     print(f"\n✅ Robust parameters for each fold saved to: {params_filepath}")
 
+    promotion_candidate_summary_df = None
     final_candidate_manifest = None
     final_candidate_manifest_path = None
     if lane_type == "promotion_evaluation" and promotion_candidate_fold_frames:
@@ -2343,6 +2964,7 @@ def run_walk_forward_analysis():
         final_candidate_manifest = _build_final_candidate_manifest(
             promotion_candidate_summary_df,
             selection_settings=selection_contract_settings,
+            shortlist_path=promotion_settings["promotion_shortlist_path"],
             shortlist_hash=lane_shortlist_hash,
             decision_date=wfo_settings.get("decision_date"),
             research_data_cutoff=wfo_settings.get("research_data_cutoff")
@@ -2445,6 +3067,8 @@ def run_walk_forward_analysis():
             wfo_end=total_end_date.date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_metrics=holdout_adequacy_metrics,
+            adequacy_thresholds=holdout_settings["adequacy_thresholds"],
+            waiver_reason=holdout_settings["waiver_reason"],
             holdout_backtest_attempted=bool(holdout_execution and holdout_execution.get("attempted")),
             holdout_backtest_success=bool(holdout_execution and holdout_execution.get("success")),
             holdout_backtest_blocked=bool(holdout_execution and holdout_execution.get("blocked")),
@@ -2470,6 +3094,8 @@ def run_walk_forward_analysis():
         holdout_manifest = _build_unconfigured_holdout_manifest(
             wfo_end=total_end_date.date().isoformat(),
             contaminated_ranges=holdout_settings["contaminated_ranges"],
+            adequacy_thresholds=holdout_settings["adequacy_thresholds"],
+            waiver_reason=holdout_settings["waiver_reason"],
         )
 
     cpu_audit_outcome = _resolve_cpu_audit_outcome(cpu_cert_settings, all_selection_audits)
@@ -2481,9 +3107,13 @@ def run_walk_forward_analysis():
     )
     lane_reasons.extend(_build_final_candidate_gate_reasons(final_candidate_manifest))
     lane_approval_eligible = bool(holdout_manifest.get("approval_eligible")) and not lane_reasons
+    lane_external_claim_eligible = bool(
+        holdout_manifest.get("external_claim_eligible")
+    ) and not lane_reasons
     lane_manifest = build_lane_manifest(
         lane_type=lane_type,
         approval_eligible=lane_approval_eligible,
+        external_claim_eligible=lane_external_claim_eligible,
         decision_date=wfo_settings.get("decision_date"),
         research_data_cutoff=wfo_settings.get("research_data_cutoff") or total_end_date.date().isoformat(),
         promotion_data_cutoff=wfo_settings.get("promotion_data_cutoff") or total_end_date.date().isoformat(),
@@ -2502,3 +3132,31 @@ def run_walk_forward_analysis():
     )
     print(f"✅ Lane manifest saved to: {manifest_paths['lane_manifest_path']}")
     print(f"✅ Holdout manifest saved to: {manifest_paths['holdout_manifest_path']}")
+    if (
+        lane_type == "promotion_evaluation"
+        and promotion_candidate_summary_df is not None
+        and final_candidate_manifest is not None
+    ):
+        promotion_ablation_df = _build_promotion_ablation_summary(
+            promotion_candidate_summary_df,
+            holdout_manifest,
+        )
+        promotion_ablation_path = os.path.join(
+            results_dir,
+            "promotion_ablation_summary.csv",
+        )
+        promotion_ablation_df.to_csv(promotion_ablation_path, index=False)
+        promotion_explanation_report = _build_promotion_explanation_report(
+            candidate_summary_df=promotion_candidate_summary_df,
+            final_candidate_manifest=final_candidate_manifest,
+            holdout_manifest=holdout_manifest,
+            lane_manifest=lane_manifest,
+            selection_settings=selection_contract_settings,
+            ablation_df=promotion_ablation_df,
+        )
+        promotion_explanation_path = _write_json_artifact(
+            os.path.join(results_dir, "promotion_explanation_report.json"),
+            promotion_explanation_report,
+        )
+        print(f"✅ Promotion ablation summary saved to: {promotion_ablation_path}")
+        print(f"✅ Promotion explanation report saved to: {promotion_explanation_path}")
