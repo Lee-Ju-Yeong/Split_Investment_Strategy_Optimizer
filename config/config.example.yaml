@@ -177,10 +177,10 @@ walk_forward_settings:
   holdout_contaminated_ranges:
     - start: "2025-12-01"
       end: "2026-01-31"
-  # CPU audit:
-  # GPU가 고른 finalist shortlist를 CPU로 다시 돌려 `pass/fail`만 검산합니다.
-  # research lane에서는 보통 `not_applicable`로 기록되고 selection path에 쓰지 않습니다.
-  # 이 설정이 켜져 있어도 release/promotion은 별도 gate(`strict_pit`, parity, future reference=0)를 닫아야 합니다.
+  # CPU selection quality check(선택 단계 품질 확인, optional):
+  # GPU가 고른 finalist shortlist를 CPU로 다시 돌려 selection 단계 품질을 확인합니다.
+  # 최종 승인 SSOT는 이 필드가 아니라 `final candidate CPU audit(최종 후보 CPU 검산)`입니다.
+  # research lane에서는 보통 `not_applicable`로 기록됩니다.
   cpu_certification_enabled: true
   cpu_certification_top_n: 5
   cpu_certification_metric: "calmar_ratio"

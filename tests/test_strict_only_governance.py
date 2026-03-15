@@ -112,6 +112,7 @@ def _lane_manifest(
     approval_eligible: bool = True,
     external_claim_eligible: bool | None = None,
     cpu_audit_outcome: str = "pass",
+    selection_cpu_check_outcome: str = "not_applicable",
 ) -> dict:
     resolved_external_claim_eligible = (
         approval_eligible
@@ -124,7 +125,8 @@ def _lane_manifest(
         "approval_eligible": approval_eligible,
         "external_claim_eligible": resolved_external_claim_eligible,
         "cpu_audit_outcome": cpu_audit_outcome,
-        "reasons": [] if approval_eligible and cpu_audit_outcome == "pass" else ["lane_mode_not_separated"],
+        "selection_cpu_check_outcome": selection_cpu_check_outcome,
+        "reasons": [] if approval_eligible else ["lane_mode_not_separated"],
     }
 
 
@@ -142,7 +144,9 @@ def _holdout_manifest(
         else external_claim_eligible
     )
     return {
-        "holdout_class": "approval_grade" if approval_eligible else "internal_provisional",
+        "internal_holdout_class": (
+            "internal_approval_ready" if approval_eligible else "internal_provisional"
+        ),
         "approval_eligible": approval_eligible,
         "external_claim_eligible": resolved_external_claim_eligible,
         "holdout_backtest_executed": holdout_backtest_executed,
@@ -363,7 +367,13 @@ class TestStrictOnlyGovernance(unittest.TestCase):
                     end_date="2025-01-28",
                 )
             ],
-            lane_manifests=[_lane_manifest(approval_eligible=False, cpu_audit_outcome="enabled_but_no_selection_audit")],
+            lane_manifests=[
+                _lane_manifest(
+                    approval_eligible=False,
+                    cpu_audit_outcome="pending_final_candidate_audit",
+                    selection_cpu_check_outcome="enabled_but_no_selection_audit",
+                )
+            ],
             holdout_manifests=[_holdout_manifest(approval_eligible=False, holdout_backtest_executed=False)],
             final_candidate_manifests=[
                 _final_candidate_manifest(
@@ -383,10 +393,6 @@ class TestStrictOnlyGovernance(unittest.TestCase):
         self.assertEqual(summary["final_candidate_manifest_count"], 1)
         self.assertIn("lane_manifest[0].approval_ineligible", summary["reasons"])
         self.assertIn("lane_manifest[0].external_claim_ineligible", summary["reasons"])
-        self.assertIn(
-            "lane_manifest[0].cpu_audit_required_for_promotion=enabled_but_no_selection_audit",
-            summary["reasons"],
-        )
         self.assertIn("holdout_manifest[0].external_claim_ineligible", summary["reasons"])
         self.assertIn("holdout_manifest[0].holdout_backtest_not_executed", summary["reasons"])
         self.assertIn("final_candidate_manifest[0].champion_hard_gate_pass=false", summary["reasons"])

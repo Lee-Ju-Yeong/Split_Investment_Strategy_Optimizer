@@ -33,7 +33,9 @@
   - holdout adequacy 기준은 이제 `holdout_adequacy_thresholds`와 `holdout_waiver_reason` 구조로 manifest에 연결된다.
   - holdout과 lane에는 이제 `approval_eligible(내부 승인 가능)`와 `external_claim_eligible(대외 설명 가능)`가 분리되어 기록된다.
     - waiver가 있는 approval-grade run은 내부적으로는 진행 가능할 수 있지만, `external_claim_eligible=false`로 남는다.
-    - `holdout_class`는 내부 분류용 라벨이고, 대외 설명 가능 여부의 최종 판단은 반드시 `external_claim_eligible`를 본다.
+    - `internal_holdout_class(내부용 holdout 분류)`는 참고용 라벨이고, 대외 설명 가능 여부의 최종 판단은 반드시 `external_claim_eligible`를 본다.
+  - promotion lane의 CPU 최종 판정 SSOT는 이제 `final candidate CPU audit(최종 후보 CPU 검산)`이다.
+    - 예전 `cpu_certification(선택 단계 CPU 확인)`은 `selection_cpu_check_outcome`으로 따로 기록되는 선택 단계 품질 확인용 보조 정보다.
   - reserve 자동 승계는 이번 `#68` 범위에서 보류(defer, 이번 작업 범위에서는 보류)하고, reserve는 provenance(후보 기록) 용도로만 남긴다.
   - `promotion_ablation_summary.csv`는 현재 선택 로직을 다시 돌리는 파일이 아니라, “왜 이 champion이 뽑혔는지”를 설명하는 비교 리포트다.
   - 현재 설계 방향은 `promotion lane`과 `research lane`을 분리하는 것이다.
@@ -228,6 +230,10 @@
   - `promotion_explanation_report.json`
     - 현재 상태:
       - champion, reserve 정책, behavior evidence, ablation 4축 비교를 한 파일에서 설명용으로 요약
+      - `executive_summary`, `runner_up_comparison`, `behavior_evidence.threshold_checks`까지 포함
+  - `promotion_explanation_summary.md`
+    - 현재 상태:
+      - 사람(팀원/관리직)이 바로 읽을 수 있는 짧은 설명 요약
   - `anchor_manifest.json`
   - research lane의 `anchor/fold metric distribution summary`
 
@@ -297,7 +303,7 @@
   - `holdout_end`
   - `wfo_end`
   - `holdout_date_reuse_forbidden`
-  - `holdout_class`
+  - `internal_holdout_class`
   - `holdout_length_days`
   - `trade_count`
   - `closed_trade_count`

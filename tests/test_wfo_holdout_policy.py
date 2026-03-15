@@ -24,7 +24,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             },
         )
 
-        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertEqual(policy["internal_holdout_class"], "internal_provisional")
         self.assertFalse(policy["approval_eligible"])
         self.assertIn("holdout_too_short=334<730", policy["reasons"])
 
@@ -41,7 +41,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             },
         )
 
-        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertEqual(policy["internal_holdout_class"], "internal_provisional")
         self.assertFalse(policy["approval_eligible"])
         self.assertTrue(policy["contaminated_overlap"])
         self.assertIn("holdout_range_contaminated", policy["reasons"])
@@ -59,7 +59,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             },
         )
 
-        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertEqual(policy["internal_holdout_class"], "internal_provisional")
         self.assertFalse(policy["approval_eligible"])
         self.assertFalse(policy["promotion_wfo_end_before_holdout"])
         self.assertIn("holdout_starts_on_or_before_wfo_end", policy["reasons"])
@@ -79,7 +79,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         )
 
         self.assertEqual(policy["holdout_length_days"], 730)
-        self.assertEqual(policy["holdout_class"], "approval_grade")
+        self.assertEqual(policy["internal_holdout_class"], "internal_approval_ready")
         self.assertTrue(policy["approval_eligible"])
         self.assertEqual(policy["missing_adequacy_fields"], [])
 
@@ -104,7 +104,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             },
         )
 
-        self.assertEqual(policy["holdout_class"], "internal_provisional")
+        self.assertEqual(policy["internal_holdout_class"], "internal_provisional")
         self.assertFalse(policy["approval_eligible"])
         self.assertIn("trade_count_below_min=12.0000<20.0000", policy["reasons"])
         self.assertIn("distinct_entry_months_below_min=4.0000<6.0000", policy["reasons"])
@@ -133,7 +133,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         )
 
         self.assertTrue(policy["approval_eligible"])
-        self.assertEqual(policy["holdout_class"], "approval_grade")
+        self.assertEqual(policy["internal_holdout_class"], "internal_approval_ready")
         self.assertFalse(policy["external_claim_eligible"])
         self.assertTrue(policy["waiver_applied"])
         self.assertEqual(
@@ -164,7 +164,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             holdout_backtest_blocked=False,
         )
 
-        self.assertEqual(manifest["holdout_class"], "approval_grade")
+        self.assertEqual(manifest["internal_holdout_class"], "internal_approval_ready")
         self.assertTrue(manifest["approval_eligible"])
         self.assertTrue(manifest["external_claim_eligible"])
         self.assertEqual(manifest["holdout_length_days"], 730)
@@ -636,7 +636,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertLess(stable_std, volatile_std)
         self.assertGreater(stable_score, volatile_score)
 
-    def test_build_current_lane_reasons_requires_cpu_audit_for_promotion_lane(self):
+    def test_build_current_lane_reasons_no_longer_uses_legacy_cpu_selection_for_promotion_gate(self):
         reasons = wfo._build_current_lane_reasons(
             lane_type="promotion_evaluation",
             total_folds=4,
@@ -644,7 +644,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             cpu_audit_outcome="disabled",
         )
 
-        self.assertIn("cpu_audit_required_for_promotion", reasons)
+        self.assertEqual(reasons, [])
 
     def test_write_wfo_manifests_persists_lane_and_holdout_json(self):
         lane_manifest = wfo.build_lane_manifest(
@@ -655,6 +655,7 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
             promotion_data_cutoff="2021-12-31",
             composite_curve_allowed=True,
             cpu_audit_outcome="disabled",
+            selection_cpu_check_outcome="disabled",
             reasons=["lane_mode_not_separated"],
         )
         holdout_manifest = wfo.build_holdout_manifest(
@@ -676,8 +677,9 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
 
         self.assertIn('"lane_type": "legacy_wfo"', lane_payload)
         self.assertIn('"cpu_audit_outcome": "disabled"', lane_payload)
+        self.assertIn('"selection_cpu_check_outcome": "disabled"', lane_payload)
         self.assertIn('"holdout_start": "2025-01-01"', holdout_payload)
-        self.assertIn('"holdout_class": "internal_provisional"', holdout_payload)
+        self.assertIn('"internal_holdout_class": "internal_provisional"', holdout_payload)
         self.assertIn('"holdout_backtest_executed": false', holdout_payload)
 
 

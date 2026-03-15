@@ -215,6 +215,9 @@ class TestWfoLaneExecution(unittest.TestCase):
                         encoding="utf-8"
                     )
                 )
+                explanation_summary_md = Path(
+                    result_dir, "promotion_explanation_summary.md"
+                ).read_text(encoding="utf-8")
                 final_candidate_manifest = json.loads(
                     Path(result_dir, "final_candidate_manifest.json").read_text(encoding="utf-8")
                 )
@@ -237,8 +240,12 @@ class TestWfoLaneExecution(unittest.TestCase):
         self.assertIn(("2023-01-01", "2023-12-31", 12_000_000.0), gpu_calls)
         self.assertEqual(lane_manifest["lane_type"], "promotion_evaluation")
         self.assertIsNotNone(lane_manifest["shortlist_hash"])
-        self.assertEqual(lane_manifest["cpu_audit_outcome"], "disabled")
-        self.assertIn("cpu_audit_required_for_promotion", lane_manifest["reasons"])
+        self.assertEqual(lane_manifest["cpu_audit_outcome"], "pending_final_candidate_audit")
+        self.assertEqual(lane_manifest["selection_cpu_check_outcome"], "disabled")
+        self.assertIn(
+            "final_candidate_cpu_audit_outcome=pending_final_candidate_audit",
+            lane_manifest["reasons"],
+        )
         self.assertTrue(lane_manifest["composite_curve_allowed"])
         self.assertEqual(
             selection_audit_df["selected_shortlist_candidate_id"].tolist(),
@@ -288,12 +295,27 @@ class TestWfoLaneExecution(unittest.TestCase):
             ablation_df["matches_final_champion"].tolist(),
             [True, True, True, True],
         )
-        self.assertEqual(explanation_report["report_version"], "promotion_explanation_report_v1")
+        self.assertEqual(
+            ablation_df["selection_interpretation"].tolist(),
+            ["same_as_final_champion"] * 4,
+        )
+        self.assertEqual(explanation_report["report_version"], "promotion_explanation_report_v2")
         self.assertTrue(explanation_report["reserve_policy"]["reserve_auto_succession_deferred"])
+        self.assertEqual(
+            explanation_report["executive_summary"]["champion_selection_reason"],
+            "hard gate passed and deterministic tie-break won",
+        )
+        self.assertTrue(explanation_report["runner_up_comparison"]["runner_up_present"])
+        self.assertIn(
+            "threshold_checks",
+            explanation_report["behavior_evidence"],
+        )
         self.assertEqual(
             explanation_report["behavior_evidence"]["behavior_gate_status"],
             "not_attempted",
         )
+        self.assertIn("# Promotion Explanation Summary", explanation_summary_md)
+        self.assertIn("## Runner-up Comparison", explanation_summary_md)
         self.assertEqual(curve.index.strftime("%Y-%m-%d").tolist(), [
             "2022-01-01",
             "2022-12-31",
@@ -427,6 +449,9 @@ class TestWfoLaneExecution(unittest.TestCase):
                         encoding="utf-8"
                     )
                 )
+                explanation_summary_md = Path(
+                    result_dir, "promotion_explanation_summary.md"
+                ).read_text(encoding="utf-8")
             finally:
                 os.chdir(previous_cwd)
 
@@ -451,6 +476,11 @@ class TestWfoLaneExecution(unittest.TestCase):
             "passed",
         )
         self.assertFalse(explanation_report["behavior_evidence"]["approval_eligible"])
+        self.assertGreaterEqual(
+            len(explanation_report["behavior_evidence"]["threshold_checks"]),
+            0,
+        )
+        self.assertIn("## Behavior Evidence", explanation_summary_md)
 
     def test_promotion_lane_auto_execute_blocks_when_no_candidate_passes_hard_gate(self):
         config = self._promotion_config()
