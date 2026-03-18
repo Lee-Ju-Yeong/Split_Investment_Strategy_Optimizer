@@ -104,6 +104,9 @@
   - 이전 fold의 마지막 돈을 다음 fold에 넘기지 않는다.
   - `단일 합성 equity curve`를 만들지 않는다.
   - 결과는 `anchor별/fold별 metric 분포`로 본다.
+- 현재 길이 기본값(2026-03-16 세션 기준):
+  - `research lane`의 OOS 기본값은 `거래일 기준 378일(약 18개월)`로 둔다.
+  - `1년(365일)` OOS는 예전 탐색용 하한선으로는 이해할 수 있지만, 기본 운영값으로는 낮춘다.
 - 이 lane에서 할 수 있는 말:
   - `시작 시점이 바뀌어도 성과 분포가 과하게 흔들리지 않았다`
 - 이 lane에서 하면 안 되는 말:
@@ -122,6 +125,8 @@
   - 같은 fold 안에서 `IS`와 `OOS`는 겹치지 않는다.
   - promotion lane의 `OOS` 날짜는 fold끼리 재사용하지 않는다.
   - CPU `audit`은 `pass/fail`에 가깝게 쓴다.
+- 현재 길이 기본값(2026-03-16 세션 기준):
+  - `promotion lane`의 OOS 기본값도 `거래일 기준 378일(약 18개월)`로 맞춘다.
 - 이 lane에서 할 수 있는 말:
   - `고정 출발점에서 시간 전이 검증을 통과했다`
 
@@ -405,5 +410,6 @@
 ## 11. 참고 문서
 - [#68 Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
 - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
+- [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
 - [#98 GPU Throughput Refactor](/root/projects/Split_Investment_Strategy_Optimizer/todos/done_2026_02_17-issue98-gpu-throughput-refactor.md)
 - [WFO analysis context](/root/projects/Split_Investment_Strategy_Optimizer/llm-context/04_wfo_analysis.md)

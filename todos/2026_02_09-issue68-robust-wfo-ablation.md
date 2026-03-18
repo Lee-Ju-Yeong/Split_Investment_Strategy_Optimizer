@@ -288,7 +288,7 @@
 - `#67 tier mode`와 `#56 parity`가 안정화된 뒤에도 같은 기준으로 판정 가능하다.
 - research lane 결과가 `release-grade evidence`로 오해되지 않도록 artifact/label guardrail이 남는다.
 - approval-grade run이라면 `promotion_WFO_end < approval_grade_holdout_start`가 문서와 manifest에서 동시에 증명된다.
-- approval-grade run이라면 `holdout_length_days >= 730` 또는 명시적 waiver 사유가 남는다.
+  - approval-grade run이라면 `holdout_length_days >= 504`(거래일 기준 약 24개월) 또는 명시적 waiver 사유가 남는다.
 - 대외 설명 가능 run이라면 `external_claim_eligible=true`가 lane/holdout manifest 둘 다에서 확인된다.
 - approval-grade run이라면 holdout adequacy 필드가 함께 남는다.
 - holdout adequacy는 `미청산 비율`보다 `자본 배치 적정성` 중심으로 해석된다.
@@ -333,6 +333,8 @@
   - CPU certification의 목표는 `rerank`보다 `audit/pass-fail`에 가깝게 잠근다.
   - `Anchored WFO`는 `고정 출발점에서 시간 전이 검증`용이다.
   - `multi-anchor Anchored WFO`는 `시작 시점 민감도` 관찰용이다.
+  - 현재 기본 WFO OOS 길이는 `research/promotion 모두 거래일 기준 378일(약 18개월)`로 맞춘다.
+  - `1년(365일)` OOS는 빠른 탐색용 예외로는 남길 수 있지만, 기본 운영값으로는 권장하지 않는다.
   - `approval-grade holdout`은 기본적으로 `24개월 이상`을 목표로 둔다.
   - 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급한다.
   - holdout 적정성은 `미청산 비율` 하나보다 `자본 배치 적정성`과 `실제 회전/청산 커버리지`를 같이 보는 쪽이 맞다.

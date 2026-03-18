@@ -1,6 +1,6 @@
 # Project Status Dashboard
 
-> Last updated: 2026-03-14
+> Last updated: 2026-03-16
 > Role: 이 파일은 현재 진행 중인 일을 빠르게 파악하는 관제판입니다.
 > Rule: 상세 계획, 작업 로그, 증적은 각 `todos/*.md` 문서가 담당합니다.
 
@@ -59,6 +59,7 @@
 ### Strategy & Research
 - `#101` deterministic Tier1 bias 완화: 특정 종목 고착보다 `theta x scenario x fold` 분포를 기준으로 파라미터를 고르려는 연구 트랙입니다. [doc](todos/2026_02_22-issue101-feat-tier1.md)
 - `GPU-native WFO v2`: 현재 공식 경로가 아닌 내부 연구용 문서입니다. [doc](todos/2026_03_06-gpu-native-wfo-v2-design.md)
+- `WFO shortlist derivation review`: `single-window shortlist` vs `research-stage WFO full-grid` 논의를 다시 열기 전에 읽는 결정 메모입니다. [doc](todos/2026_03_16-wfo-shortlist-derivation-review.md)
 
 ### Supporting Notes
 - 로컬 DB 없이 할 수 있는 개발 범위: [note](todos/2026_02_14-notebook-no-local-db-dev.md)
@@ -77,6 +78,9 @@
 - [GPU-native WFO v2 design](todos/2026_03_06-gpu-native-wfo-v2-design.md)
   - 성격: `research`
   - 읽는 시점: 공식 경로 대체를 고민할 때
+- [WFO shortlist derivation review](todos/2026_03_16-wfo-shortlist-derivation-review.md)
+  - 성격: `review`
+  - 읽는 시점: `single-window shortlist` 대신 `research-stage WFO full-grid`를 기본 경로로 올릴지 다시 논의할 때
 - [성능/안정성 재검토 메모](todos/2026_03_06-performance-stability-review.md)
   - 성격: `review`
   - 읽는 시점: `#98`을 왜 바로 열지 않는지 설명이 필요할 때

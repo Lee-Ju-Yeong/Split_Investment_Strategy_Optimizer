@@ -55,6 +55,13 @@
 - `approval-grade holdout(승인용 최종 등급 holdout)`
   - 기본 목표:
     - `24개월 이상 untouched(끝까지 별도로 남겨 둔) 구간`
+- 현재 길이 정책(2026-03-16 기준):
+  - `research lane`
+    - 기본 OOS는 `거래일 기준 378일(약 18개월)`
+  - `promotion lane`
+    - 기본 OOS도 `거래일 기준 378일(약 18개월)`
+  - `1년 OOS`
+    - 빠른 탐색용 최소선으로는 이해할 수 있지만, 현재 기본 운영값으로는 권장하지 않는다.
 
 ### 4-2. 아직 구현이 다 안 된 것
 - 현재 `walk_forward_analyzer.py`는 lane 분리, final candidate(최종 후보) 봉인, holdout 자동 실행, holdout adequacy 강등까지 상당 부분 자동화했다.
@@ -93,7 +100,7 @@ git status --short --branch
 ```
 - WFO 관련 설정과 holdout 메타데이터(설정 정보) 확인:
 ```bash
-rg -n "walk_forward_settings|lane_type|promotion_shortlist_path|research_shortlist_path|holdout_start|holdout_end|holdout_auto_execute" config/config.yaml
+rg -n "walk_forward_settings|lane_type|period_length_basis|period_length_days|promotion_shortlist_path|research_shortlist_path|holdout_start|holdout_end|holdout_auto_execute" config/config.yaml
 ```
 - GPU 파라미터 simulation 실행:
 ```bash
@@ -236,6 +243,32 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - holdout에 후보 pack(여러 후보 묶음)을 넣고 나중에 더 좋은 것을 고르기
 - 여기서 할 수 있는 말:
   - `고정 출발점 기준 시간 전이 검증을 통과했다`
+- benchmark(시장 비교 기준) 원칙:
+  - promotion lane 결과는 나중에 benchmark와 비교해 설명하는 것이 좋다.
+  - 현재 권장 baseline은:
+    - `KOSDAQ buy-and-hold`
+      - 주 baseline(주 비교 기준)
+      - 이유:
+        - 실제로 전략이 주로 코스닥 종목을 많이 사기 때문
+    - `KOSPI buy-and-hold`
+      - 보조 baseline(보조 비교 기준)
+      - 이유:
+        - 한국 대표 시장 기준으로 설명하기 쉽기 때문
+  - 중요한 점:
+    - 이 baseline들은 현재 v1에서 champion을 다시 뽑는 선택 규칙이 아니다.
+    - 즉, `선정은 WFO 계약대로`, `설명은 코스닥/코스피 비교표로` 간다.
+  - 최소 비교 지표:
+    - `CAGR`
+    - `MDD`
+    - `Calmar`
+  - 비교 조건:
+    - 같은 기간
+    - 같은 시작 자금
+    - 같은 OOS / holdout 창
+- 현재 OOS 길이 메모:
+  - Magic Split는 천천히 자본을 배치하고, 추가매수 뒤 회복/청산을 보는 데 시간이 걸릴 수 있다.
+  - 그래서 현재 운영 기본값은 `period_length_basis=trading_days` 기준 `research/promotion 모두 378일(약 18개월)`로 둔다.
+  - `365 거래일 OOS`는 빠른 탐색용 예외로만 해석하고, 기본 승인 흐름의 표준값으로는 쓰지 않는다.
 
 ### 5-6. Step 5. CPU audit(CPU 기준 검산)
 - 목적:
@@ -280,6 +313,10 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - 추가로 `promotion_explanation_summary.md`도 함께 남긴다. 이 파일은 팀원이나 관리직이 바로 읽을 수 있도록 핵심 설명만 한 장 요약으로 정리한 것이다.
   - 중요한 점: `promotion_ablation_summary.csv`는 현재 `설명용 비교 리포트`에 가깝다. 아직 독립적인 새 선택기(selector, 후보를 다시 고르는 별도 로직)라고 읽으면 안 된다.
   - `promotion_explanation_report.json`은 이제 `executive_summary(한눈에 보는 요약)`, `runner_up_comparison(2등 후보와 비교)`, `behavior_evidence.threshold_checks(행동지표 기준별 통과/실패)`를 함께 남긴다.
+  - benchmark 비교가 붙을 때도 이 원칙은 유지한다.
+    - `KOSDAQ`은 주 baseline
+    - `KOSPI`는 보조 baseline
+    - report 해석용이지, champion 순위를 다시 뒤집는 selector(후보를 다시 고르는 로직)는 아니다
 - 현재 저장소 상태:
 - `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout(임시 내부 검증용 holdout)`
 - 아주 쉽게 말하면:
@@ -374,5 +411,6 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 
 ## 12. 관련 문서
 - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+- [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
 - [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
 - [Hybrid Release Gate Board](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-06-hybrid-release-gate-board.md)
