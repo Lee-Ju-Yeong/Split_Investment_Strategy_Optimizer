@@ -35,7 +35,8 @@ _CPU_CERT_INT_KEYS = {
     "max_inactivity_period",
 }
 _CPU_CERT_SORT_COLUMNS = ("calmar_ratio", "cagr", "mdd")
-_APPROVAL_GRADE_HOLDOUT_MIN_DAYS = 730
+_CALENDAR_DAY_APPROVAL_GRADE_HOLDOUT_MIN_DAYS = 730
+_TRADING_DAY_APPROVAL_GRADE_HOLDOUT_MIN_DAYS = 504
 _HOLDOUT_ADEQUACY_FIELDS = (
     "trade_count",
     "closed_trade_count",
@@ -58,6 +59,10 @@ _SUPPORTED_WFO_LANE_TYPES = (
     "legacy_wfo",
     "promotion_evaluation",
     "research_start_date_robustness",
+)
+_SUPPORTED_WFO_LENGTH_BASES = (
+    "calendar_days",
+    "trading_days",
 )
 _RESEARCH_WFO_MODE = "frozen_shortlist_multi_anchor_eval"
 _PROMOTION_WFO_MODE = "frozen_shortlist_single_anchor_eval"
@@ -104,6 +109,115 @@ def _inclusive_day_count(start_date, end_date) -> int:
     if end < start:
         raise ValueError("holdout_end must be on or after holdout_start")
     return int((end - start).days + 1)
+
+
+def _resolve_period_length_basis(wfo_settings: dict) -> str:
+    basis = str(wfo_settings.get("period_length_basis") or "calendar_days").strip().lower()
+    if basis not in _SUPPORTED_WFO_LENGTH_BASES:
+        raise ValueError(
+            "Unsupported walk_forward_settings.period_length_basis. "
+            f"Expected one of: {', '.join(_SUPPORTED_WFO_LENGTH_BASES)}."
+        )
+    return basis
+
+
+def _default_holdout_min_length_days(length_basis: str) -> int:
+    if str(length_basis) == "trading_days":
+        return _TRADING_DAY_APPROVAL_GRADE_HOLDOUT_MIN_DAYS
+    return _CALENDAR_DAY_APPROVAL_GRADE_HOLDOUT_MIN_DAYS
+
+
+def _normalize_trading_dates_index(trading_dates):
+    import pandas as pd
+
+    if trading_dates is None:
+        return None
+    index = pd.DatetimeIndex(pd.to_datetime(list(trading_dates))).normalize().sort_values().unique()
+    return pd.DatetimeIndex(index)
+
+
+def _build_window_date_index(
+    start_date,
+    end_date,
+    *,
+    length_basis: str,
+    trading_dates=None,
+):
+    import pandas as pd
+
+    start = pd.to_datetime(start_date).normalize()
+    end = pd.to_datetime(end_date).normalize()
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+    if str(length_basis) == "trading_days":
+        normalized = _normalize_trading_dates_index(trading_dates)
+        if normalized is None:
+            raise ValueError("trading_days basis requires trading_dates.")
+        window = normalized[(normalized >= start) & (normalized <= end)]
+        if len(window) == 0:
+            raise ValueError("No trading dates found inside the requested window.")
+        return pd.DatetimeIndex(window)
+    return pd.date_range(start=start, end=end, freq="D")
+
+
+def _count_window_length(
+    start_date,
+    end_date,
+    *,
+    length_basis: str,
+    trading_dates=None,
+) -> int:
+    return int(
+        len(
+            _build_window_date_index(
+                start_date,
+                end_date,
+                length_basis=length_basis,
+                trading_dates=trading_dates,
+            )
+        )
+    )
+
+
+def _load_runtime_trading_dates(
+    *,
+    config: dict,
+    backtest_settings: dict,
+    wfo_settings: dict,
+    holdout_settings: dict,
+):
+    if _resolve_period_length_basis(wfo_settings) != "trading_days":
+        return None
+
+    from ..data_handler import DataHandler
+
+    start_candidates = [backtest_settings["start_date"]]
+    end_candidates = [backtest_settings["end_date"]]
+    if _resolve_lane_type(wfo_settings) == "research_start_date_robustness":
+        start_candidates.extend(list(wfo_settings.get("research_anchor_start_dates") or []))
+    if holdout_settings.get("holdout_start"):
+        start_candidates.append(holdout_settings["holdout_start"])
+    if holdout_settings.get("holdout_end"):
+        end_candidates.append(holdout_settings["holdout_end"])
+
+    min_start = min(_coerce_date(item) for item in start_candidates)
+    max_end = max(_coerce_date(item) for item in end_candidates)
+    try:
+        handler = DataHandler(
+            dict(config["database"]),
+            strategy_params=dict(config.get("strategy_params") or {}),
+        )
+        trading_dates = handler.get_trading_dates(min_start.isoformat(), max_end.isoformat())
+        normalized = _normalize_trading_dates_index(trading_dates)
+        if normalized is None or len(normalized) == 0:
+            raise ValueError("No trading dates were loaded from DailyStockPrice.")
+        return normalized
+    except Exception as exc:
+        raise RuntimeError(
+            "walk_forward_settings.period_length_basis=trading_days requires "
+            "runtime trading dates from DailyStockPrice, but loading failed "
+            f"({type(exc).__name__}: {exc})."
+        )
 
 
 def _normalize_contaminated_ranges(ranges) -> list[dict]:
@@ -179,12 +293,24 @@ def evaluate_holdout_policy(
     adequacy_metrics=None,
     adequacy_thresholds=None,
     waiver_reason: str | None = None,
-    min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
+    min_length_days: int | None = None,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
 ) -> dict:
     start = _coerce_date(holdout_start)
     end = _coerce_date(holdout_end)
     resolved_wfo_end = _coerce_date(wfo_end) if wfo_end is not None else None
-    length_days = _inclusive_day_count(start, end)
+    resolved_min_length_days = (
+        _default_holdout_min_length_days(length_basis)
+        if min_length_days is None
+        else int(min_length_days)
+    )
+    length_days = _count_window_length(
+        start,
+        end,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
+    )
     normalized_ranges = _normalize_contaminated_ranges(contaminated_ranges)
     overlap = any(
         _ranges_overlap(start, end, _coerce_date(item["start"]), _coerce_date(item["end"]))
@@ -195,8 +321,10 @@ def evaluate_holdout_policy(
     missing_fields = [field for field in _HOLDOUT_ADEQUACY_FIELDS if field not in adequacy]
     reasons = []
     waivable_reasons: list[str] = []
-    if length_days < int(min_length_days):
-        waivable_reasons.append(f"holdout_too_short={length_days}<{int(min_length_days)}")
+    if length_days < int(resolved_min_length_days):
+        waivable_reasons.append(
+            f"holdout_too_short={length_days}<{int(resolved_min_length_days)}"
+        )
     if resolved_wfo_end is not None and start <= resolved_wfo_end:
         reasons.append("holdout_starts_on_or_before_wfo_end")
     if overlap:
@@ -226,6 +354,8 @@ def evaluate_holdout_policy(
         "holdout_end": end.isoformat(),
         "wfo_end": resolved_wfo_end.isoformat() if resolved_wfo_end is not None else None,
         "holdout_length_days": int(length_days),
+        "holdout_length_basis": str(length_basis),
+        "holdout_min_length_days": int(resolved_min_length_days),
         "internal_holdout_class": internal_holdout_class,
         "approval_eligible": bool(approval_eligible),
         "external_claim_eligible": bool(external_claim_eligible),
@@ -259,7 +389,9 @@ def build_holdout_manifest(
     holdout_backtest_attempted: bool | None = None,
     holdout_backtest_success: bool | None = None,
     holdout_backtest_blocked: bool = False,
-    min_length_days: int = _APPROVAL_GRADE_HOLDOUT_MIN_DAYS,
+    min_length_days: int | None = None,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
 ) -> dict:
     policy = evaluate_holdout_policy(
         holdout_start=holdout_start,
@@ -270,6 +402,8 @@ def build_holdout_manifest(
         adequacy_thresholds=adequacy_thresholds,
         waiver_reason=waiver_reason,
         min_length_days=min_length_days,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
     )
     adequacy = dict(adequacy_metrics or {})
     reasons = list(policy["reasons"])
@@ -314,6 +448,8 @@ def build_holdout_manifest(
         "parity_canary_excluded_ranges": policy["contaminated_ranges"],
         "internal_holdout_class": internal_holdout_class,
         "holdout_length_days": policy["holdout_length_days"],
+        "holdout_length_basis": policy["holdout_length_basis"],
+        "holdout_min_length_days": policy["holdout_min_length_days"],
         "approval_eligible": approval_eligible,
         "external_claim_eligible": external_claim_eligible,
         "promotion_wfo_end_before_holdout": policy["promotion_wfo_end_before_holdout"],
@@ -381,6 +517,7 @@ def _build_unconfigured_holdout_manifest(
     contaminated_ranges=None,
     adequacy_thresholds=None,
     waiver_reason: str | None = None,
+    length_basis: str = "calendar_days",
 ) -> dict:
     return {
         "holdout_start": None,
@@ -394,6 +531,8 @@ def _build_unconfigured_holdout_manifest(
         "parity_canary_excluded_ranges": _normalize_contaminated_ranges(contaminated_ranges),
         "internal_holdout_class": "unconfigured",
         "holdout_length_days": None,
+        "holdout_length_basis": str(length_basis),
+        "holdout_min_length_days": int(_default_holdout_min_length_days(length_basis)),
         "approval_eligible": False,
         "external_claim_eligible": False,
         "promotion_wfo_end_before_holdout": None,
@@ -846,6 +985,7 @@ def build_anchor_manifest(
     minimum_is_length_days: int,
     minimum_oos_length_days: int,
     coverage_normalized: bool,
+    length_basis: str = "calendar_days",
     shortlist_freeze_mode: str = _RESEARCH_WFO_MODE,
 ) -> dict:
     return {
@@ -854,78 +994,97 @@ def build_anchor_manifest(
         "anchor_spacing_rule": str(anchor_spacing_rule),
         "minimum_is_length_days": int(minimum_is_length_days),
         "minimum_oos_length_days": int(minimum_oos_length_days),
+        "length_basis": str(length_basis),
         "shortlist_freeze_mode": str(shortlist_freeze_mode),
         "coverage_normalized": bool(coverage_normalized),
     }
 
 
-def _build_legacy_fold_periods(start_date, end_date, total_folds: int, period_length_days: int) -> tuple[list[dict], int]:
-    import pandas as pd
-
-    start = pd.to_datetime(start_date).normalize()
-    end = pd.to_datetime(end_date).normalize()
+def _build_legacy_fold_periods(
+    start_date,
+    end_date,
+    total_folds: int,
+    period_length_days: int,
+    *,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
+) -> tuple[list[dict], int]:
+    dates = _build_window_date_index(
+        start_date,
+        end_date,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
+    )
     total = int(total_folds)
     period_days = int(period_length_days)
-    length = pd.Timedelta(days=period_days)
     if total <= 0 or period_days <= 0:
         raise ValueError("total_folds and period_length_days must be positive.")
 
-    max_shift_days = (end - start).days - (period_days - 1)
+    total_days = len(dates)
+    max_shift_days = total_days - period_days
     if max_shift_days >= period_days:
         shift_days = period_days
     else:
         shift_days = min(max_shift_days, (period_days + 1) // 2 + 1)
         if shift_days < 1:
             shift_days = 1
-    shift = pd.Timedelta(days=shift_days)
-    last_is_start = end - shift - (length - pd.Timedelta(days=1))
-    span_days = (last_is_start - start).days
+    last_is_start_idx = total_days - shift_days - period_days
+    span_days = int(last_is_start_idx)
     if span_days <= 0:
         raise ValueError(
             "Configuration Error: Cannot fit legacy WFO folds within the requested window."
         )
 
-    is_starts = [start]
+    is_start_indices = [0]
     if total > 1:
         base_step = span_days // (total - 1)
         remainder = span_days % (total - 1)
         for index in range(1, total):
             add_days = base_step + (1 if index <= remainder else 0)
-            is_starts.append(is_starts[-1] + pd.Timedelta(days=add_days))
+            is_start_indices.append(is_start_indices[-1] + add_days)
 
     fold_periods = []
-    for index, is_start in enumerate(is_starts, start=1):
-        is_end = is_start + length - pd.Timedelta(days=1)
-        oos_start = is_start + shift
-        oos_end = oos_start + length - pd.Timedelta(days=1)
-        if oos_start < is_start + pd.Timedelta(days=1):
+    for index, is_start_idx in enumerate(is_start_indices, start=1):
+        is_end_idx = is_start_idx + period_days - 1
+        oos_start_idx = is_start_idx + shift_days
+        oos_end_idx = oos_start_idx + period_days - 1
+        if oos_start_idx < is_start_idx + 1:
             raise ValueError("Causality violated: OOS must start after IS start.")
-        if oos_end > end or is_start < start or is_end > end:
+        if oos_end_idx >= total_days or is_end_idx >= total_days:
             raise ValueError("Legacy WFO fold is out of the configured date range.")
         fold_periods.append(
             {
                 "Fold": index,
-                "IS_Start": is_start.date(),
-                "IS_End": is_end.date(),
-                "OOS_Start": oos_start.date(),
-                "OOS_End": oos_end.date(),
+                "IS_Start": dates[is_start_idx].date(),
+                "IS_End": dates[is_end_idx].date(),
+                "OOS_Start": dates[oos_start_idx].date(),
+                "OOS_End": dates[oos_end_idx].date(),
             }
         )
     return fold_periods, period_days - shift_days
 
 
-def _build_promotion_fold_periods(start_date, end_date, total_folds: int, period_length_days: int) -> tuple[list[dict], int]:
-    import pandas as pd
-
-    start = pd.to_datetime(start_date).normalize()
-    end = pd.to_datetime(end_date).normalize()
+def _build_promotion_fold_periods(
+    start_date,
+    end_date,
+    total_folds: int,
+    period_length_days: int,
+    *,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
+) -> tuple[list[dict], int]:
+    dates = _build_window_date_index(
+        start_date,
+        end_date,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
+    )
     total = int(total_folds)
     period_days = int(period_length_days)
-    length = pd.Timedelta(days=period_days)
     if total <= 0 or period_days <= 0:
         raise ValueError("total_folds and period_length_days must be positive.")
 
-    total_days = int((end - start).days + 1)
+    total_days = len(dates)
     initial_is_days = total_days - (total * period_days)
     if initial_is_days <= 0:
         raise ValueError(
@@ -934,21 +1093,20 @@ def _build_promotion_fold_periods(start_date, end_date, total_folds: int, period
         )
 
     fold_periods = []
-    initial_is_length = pd.Timedelta(days=initial_is_days)
     for index in range(total):
-        is_start = start
-        is_end = start + initial_is_length + (index * length) - pd.Timedelta(days=1)
-        oos_start = is_end + pd.Timedelta(days=1)
-        oos_end = oos_start + length - pd.Timedelta(days=1)
-        if oos_end > end:
+        is_start_idx = 0
+        is_end_idx = initial_is_days + (index * period_days) - 1
+        oos_start_idx = is_end_idx + 1
+        oos_end_idx = oos_start_idx + period_days - 1
+        if oos_end_idx >= total_days:
             raise ValueError("promotion_evaluation OOS period exceeds configured end_date.")
         fold_periods.append(
             {
                 "Fold": index + 1,
-                "IS_Start": is_start.date(),
-                "IS_End": is_end.date(),
-                "OOS_Start": oos_start.date(),
-                "OOS_End": oos_end.date(),
+                "IS_Start": dates[is_start_idx].date(),
+                "IS_End": dates[is_end_idx].date(),
+                "OOS_Start": dates[oos_start_idx].date(),
+                "OOS_End": dates[oos_end_idx].date(),
             }
         )
     return fold_periods, 0
@@ -961,6 +1119,8 @@ def _build_lane_execution_contract(
     end_date,
     total_folds: int,
     period_length_days: int,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
 ) -> dict:
     if lane_type == "promotion_evaluation":
         fold_periods, overlap_days = _build_promotion_fold_periods(
@@ -968,6 +1128,8 @@ def _build_lane_execution_contract(
             end_date,
             total_folds,
             period_length_days,
+            length_basis=length_basis,
+            trading_dates=trading_dates,
         )
         return {
             "fold_periods": fold_periods,
@@ -982,6 +1144,8 @@ def _build_lane_execution_contract(
         end_date,
         total_folds,
         period_length_days,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
     )
     return {
         "fold_periods": fold_periods,
@@ -998,6 +1162,8 @@ def _build_research_anchor_contracts(
     end_date,
     total_folds: int,
     period_length_days: int,
+    length_basis: str = "calendar_days",
+    trading_dates=None,
 ) -> list[dict]:
     contracts = []
     for anchor_index, anchor_date in enumerate(anchor_dates, start=1):
@@ -1006,6 +1172,8 @@ def _build_research_anchor_contracts(
             end_date,
             total_folds,
             period_length_days,
+            length_basis=length_basis,
+            trading_dates=trading_dates,
         )
         contracts.append(
             {
@@ -2663,6 +2831,8 @@ def _run_research_start_date_robustness(
     initial_cash: float,
     results_dir: str,
     holdout_settings: dict,
+    length_basis: str,
+    trading_dates,
     backtest_runner,
     analyzer_cls,
 ):
@@ -2691,6 +2861,8 @@ def _run_research_start_date_robustness(
         end_date=pd.to_datetime(backtest_settings["end_date"]),
         total_folds=int(wfo_settings["total_folds"]),
         period_length_days=int(wfo_settings["period_length_days"]),
+        length_basis=length_basis,
+        trading_dates=trading_dates,
     )
 
     def _research_is_batch_evaluator(**kwargs):
@@ -2782,9 +2954,11 @@ def _run_research_start_date_robustness(
     )
 
     first_is_lengths = [
-        _inclusive_day_count(
+        _count_window_length(
             contract["fold_periods"][0]["IS_Start"],
             contract["fold_periods"][0]["IS_End"],
+            length_basis=length_basis,
+            trading_dates=trading_dates,
         )
         for contract in anchor_contracts
     ]
@@ -2794,6 +2968,7 @@ def _run_research_start_date_robustness(
         anchor_spacing_rule=research_settings["anchor_spacing_rule"],
         minimum_is_length_days=min(first_is_lengths),
         minimum_oos_length_days=int(wfo_settings["period_length_days"]),
+        length_basis=length_basis,
         coverage_normalized=research_settings["coverage_normalized"],
     )
 
@@ -2811,6 +2986,8 @@ def _run_research_start_date_robustness(
             holdout_backtest_attempted=False,
             holdout_backtest_success=False,
             holdout_backtest_blocked=False,
+            length_basis=length_basis,
+            trading_dates=trading_dates,
         )
     else:
         holdout_manifest = _build_unconfigured_holdout_manifest(
@@ -2818,6 +2995,7 @@ def _run_research_start_date_robustness(
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            length_basis=length_basis,
         )
 
     lane_manifest = build_lane_manifest(
@@ -2875,6 +3053,14 @@ def run_walk_forward_analysis():
     backtest_settings = config['backtest_settings']
     initial_cash = backtest_settings['initial_cash']
     cpu_cert_settings = _get_cpu_certification_settings(wfo_settings)
+    length_basis = _resolve_period_length_basis(wfo_settings)
+    holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
+    trading_dates = _load_runtime_trading_dates(
+        config=config,
+        backtest_settings=backtest_settings,
+        wfo_settings=wfo_settings,
+        holdout_settings=holdout_settings,
+    )
 
     # 2. [핵심] 모든 기간 파라미터 자동 계산
     # --------------------------------------------------------------------------
@@ -2893,7 +3079,6 @@ def run_walk_forward_analysis():
     total_folds = int(wfo_settings['total_folds'])
     period_length_days = int(wfo_settings['period_length_days'])
     lane_type = _resolve_lane_type(wfo_settings)
-    holdout_settings = _resolve_holdout_runtime_settings(wfo_settings)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     results_dir = os.path.join("results", f"wfo_run_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
@@ -2906,6 +3091,8 @@ def run_walk_forward_analysis():
             initial_cash=initial_cash,
             results_dir=results_dir,
             holdout_settings=holdout_settings,
+            length_basis=length_basis,
+            trading_dates=trading_dates,
             backtest_runner=run_single_backtest,
             analyzer_cls=PerformanceAnalyzer,
         )
@@ -2930,6 +3117,8 @@ def run_walk_forward_analysis():
         end_date=total_end_date,
         total_folds=total_folds,
         period_length_days=period_length_days,
+        length_basis=length_basis,
+        trading_dates=trading_dates,
     )
     fold_periods = lane_contract["fold_periods"]
     overlap_days = int(lane_contract["overlap_days"])
@@ -3308,6 +3497,8 @@ def run_walk_forward_analysis():
             holdout_backtest_attempted=bool(holdout_execution and holdout_execution.get("attempted")),
             holdout_backtest_success=bool(holdout_execution and holdout_execution.get("success")),
             holdout_backtest_blocked=bool(holdout_execution and holdout_execution.get("blocked")),
+            length_basis=length_basis,
+            trading_dates=trading_dates,
         )
         if final_candidate_manifest is not None:
             holdout_manifest.update(
@@ -3332,6 +3523,7 @@ def run_walk_forward_analysis():
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            length_basis=length_basis,
         )
 
     selection_cpu_check_outcome = _resolve_cpu_audit_outcome(

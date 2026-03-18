@@ -124,7 +124,12 @@ parameter_space:
 
 walk_forward_settings:
   total_folds: 6
-  period_length_days: 365
+  # `period_length_days` is interpreted by `period_length_basis`.
+  # Current Magic Split baseline uses trading-day windows:
+  # - 378 trading days ~= about 18 months
+  # - 365 trading days should be treated as exploratory/provisional only
+  period_length_basis: "trading_days"
+  period_length_days: 378
   # Optional manifest metadata for WFO artifacts.
   # - `legacy_wfo`: 기존 overlap/mean aggregation 경로를 그대로 사용하며 provisional로 기록합니다.
   # - `promotion_evaluation`: frozen shortlist 기반 single-anchor non-overlap anchored WFO를 사용합니다.

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import time as time_module
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -12,6 +13,28 @@ from src.analysis import walk_forward_analyzer as wfo
 
 
 class TestWfoHoldoutPolicy(unittest.TestCase):
+    @patch("src.data_handler.DataHandler")
+    def test_load_runtime_trading_dates_requires_daily_stock_price_when_trading_days(self, mock_handler_cls):
+        mock_handler = mock_handler_cls.return_value
+        mock_handler.get_trading_dates.side_effect = RuntimeError("db unavailable")
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "period_length_basis=trading_days requires runtime trading dates",
+        ):
+            wfo._load_runtime_trading_dates(
+                config={"database": {"host": "127.0.0.1"}},
+                backtest_settings={
+                    "start_date": "2020-01-01",
+                    "end_date": "2024-12-31",
+                },
+                wfo_settings={
+                    "period_length_basis": "trading_days",
+                    "lane_type": "promotion_evaluation",
+                },
+                holdout_settings={},
+            )
+
     def test_short_holdout_is_internal_provisional_even_with_adequacy_fields(self):
         policy = wfo.evaluate_holdout_policy(
             holdout_start="2025-01-01",
@@ -82,6 +105,27 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(policy["internal_holdout_class"], "internal_approval_ready")
         self.assertTrue(policy["approval_eligible"])
         self.assertEqual(policy["missing_adequacy_fields"], [])
+
+    def test_evaluate_holdout_policy_uses_trading_day_count_when_requested(self):
+        policy = wfo.evaluate_holdout_policy(
+            holdout_start="2025-01-01",
+            holdout_end="2025-01-06",
+            wfo_end="2024-12-31",
+            adequacy_metrics={
+                "trade_count": 10,
+                "closed_trade_count": 8,
+                "avg_hold_days": 5.0,
+                "distinct_entry_months": 1,
+            },
+            min_length_days=4,
+            length_basis="trading_days",
+            trading_dates=pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06"]),
+        )
+
+        self.assertEqual(policy["holdout_length_days"], 3)
+        self.assertEqual(policy["holdout_length_basis"], "trading_days")
+        self.assertEqual(policy["holdout_min_length_days"], 4)
+        self.assertIn("holdout_too_short=3<4", policy["reasons"])
 
     def test_holdout_is_internal_provisional_when_adequacy_thresholds_fail(self):
         policy = wfo.evaluate_holdout_policy(
@@ -350,6 +394,37 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertEqual(fold_periods[0]["OOS_Start"].isoformat(), "2022-01-01")
         self.assertEqual(fold_periods[0]["OOS_End"].isoformat(), "2022-12-31")
         self.assertEqual(fold_periods[1]["OOS_Start"].isoformat(), "2023-01-01")
+
+    def test_build_promotion_fold_periods_uses_trading_day_windows_when_requested(self):
+        trading_dates = pd.to_datetime(
+            [
+                "2020-01-02",
+                "2020-01-03",
+                "2020-01-06",
+                "2020-01-07",
+                "2020-01-08",
+                "2020-01-09",
+                "2020-01-10",
+            ]
+        )
+
+        fold_periods, overlap_days = wfo._build_promotion_fold_periods(
+            "2020-01-01",
+            "2020-01-10",
+            total_folds=2,
+            period_length_days=2,
+            length_basis="trading_days",
+            trading_dates=trading_dates,
+        )
+
+        self.assertEqual(overlap_days, 0)
+        self.assertEqual(fold_periods[0]["IS_Start"].isoformat(), "2020-01-02")
+        self.assertEqual(fold_periods[0]["IS_End"].isoformat(), "2020-01-06")
+        self.assertEqual(fold_periods[0]["OOS_Start"].isoformat(), "2020-01-07")
+        self.assertEqual(fold_periods[0]["OOS_End"].isoformat(), "2020-01-08")
+        self.assertEqual(fold_periods[1]["IS_End"].isoformat(), "2020-01-08")
+        self.assertEqual(fold_periods[1]["OOS_Start"].isoformat(), "2020-01-09")
+        self.assertEqual(fold_periods[1]["OOS_End"].isoformat(), "2020-01-10")
 
     def test_aggregate_oos_curves_stitches_non_overlap_promotion_curve(self):
         import pandas as pd
