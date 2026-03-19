@@ -161,6 +161,11 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - 좋은 후보를 넓게 찾는다.
 - 해석:
   - 여기서 중요한 것은 `무조건 1등 하나`가 아니라 `후보군(shortlist, 압축된 후보 목록)` 또는 `plateau(특정 한 점이 아니라 넓게 안정적인 구간)`다.
+- 확장 메모:
+  - 필요하면 여러 standalone window를 묶은 `N-window derivation(여러 기간을 함께 보는 후보 압축)`을 discovery-only source로 붙일 수 있다.
+  - 단, 이것은 approval workflow 자체가 아니라 upstream shortlist source다.
+  - 상세 계약은 아래 문서를 따른다.
+    - [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
 - 산출물:
   - GPU simulation 결과
   - 후보군
@@ -195,8 +200,10 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - 어떤 후보를 freeze 했는지
   - 언제 freeze 했는지
   - 어떤 데이터 cutoff(이 시점까지만 보고 판단했다는 경계)까지 보고 freeze 했는지
+  - shortlist가 어떤 standalone source / window bundle / derivation rule에서 나왔는지
 - 여기서 하면 안 되는 것:
   - freeze 이후 holdout을 보고 후보를 다시 수정하기
+  - `shortlist_source_manifest.json` 없이 promotion lane으로 올리기
 
 ### 5-5. Step 4. Promotion evaluation lane(승인 심사용 검증 경로)
 - 목적:
@@ -207,6 +214,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - 이 단계는 `재탐색`이 아니라 `승인 심사`다.
 - 실행 전제:
   - `promotion_shortlist_path`로 freeze된 후보 CSV/JSON을 넘긴다.
+  - shortlist derivation이 N-window source에서 왔다면 `shortlist_source_manifest.json`도 같이 검증할 수 있어야 한다.
   - promotion lane은 이 shortlist(압축된 후보 목록) 밖의 새 후보를 다시 찾지 않는다.
 - 산출물:
   - fold별 결과
@@ -412,5 +420,6 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 ## 12. 관련 문서
 - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
 - [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
+- [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
 - [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
 - [Hybrid Release Gate Board](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-06-hybrid-release-gate-board.md)

@@ -2,239 +2,486 @@
 
 > 작성일: 2026-03-14
 > 대상 독자: 처음 이 프로젝트를 접하는 팀원, 관리직 임원, 협업자
-> 목적: Magic Split 전략의 WFO 개선이 왜 필요했는지, 지금 어디까지 왔는지, 다음에 무엇을 해야 하는지 쉽게 공유하는 문서
+> 목적: Magic Split 전략의 WFO 개선이 왜 필요했는지, `simulation(후보를 넓게 찾는 단계)` 이후 실제로 무엇을 하는지, 지금 어디까지 왔는지를 초심자도 이해하기 쉽게 공유하는 문서
 
 ## 1. 한 줄 요약
-- 우리는 `좋아 보이는 파라미터`를 찾는 단계와 `정말 운영해도 되는지 확인하는 단계`를 분리하는 쪽으로 WFO 체계를 다시 만들고 있다.
-- 지금은 그 구조의 큰 골격과 핵심 guardrail(실수 방지 장치)은 대부분 들어왔고, 남은 것은 `행동지표/ablation(비교 실험) 고도화`와 `approval-grade holdout(승인용 최종 등급 holdout)의 최종 마감` 같은 마지막 마감 작업에 가깝다.
-- 다만 `마지막 마감`이라는 뜻이 `이제 아무 검증도 안 남았다`는 뜻은 아니다. 특히 `freeze contract(후보 고정 계약)`과 `holdout 차단 경로`는 계속 보수적으로 잠그는 중이다.
+- 우리는 `좋아 보이는 파라미터(설정값 조합)`를 찾는 단계와 `정말 운영해도 되는지 확인하는 단계`를 분리하는 쪽으로 WFO 체계를 다시 만들고 있다.
+- 쉽게 말하면, `문제집 많이 풀기`와 `진짜 시험 보기`를 구분하기 시작한 것이다.
+- 지금은 큰 뼈대와 핵심 guardrail(실수 방지 장치)은 대부분 들어왔고, 남은 것은 `설명용 보고서 고도화`와 `approval-grade holdout(승인용 최종 등급 holdout, 정말 마지막 최종 시험지)` 마감에 가깝다.
 
-## 2. 이 문서가 필요한 이유
-- 기존 WFO는 연구용 결과와 승인용 결과가 섞여 읽힐 여지가 있었다.
-- 그러면 팀 내부에서는 물론, 나중에 관리직이나 외부 이해관계자에게도 이런 오해가 생길 수 있다.
-  - `이 수익곡선이 진짜 최종 성적표인가?`
-  - `이 결과는 후보 탐색용인가, 운영 승인용인가?`
-  - `이 전략은 언제 시작해도 안정적인가, 아니면 특정 구간에서만 좋아 보였는가?`
-- 그래서 지금은 단순히 코드 몇 줄을 고친 것이 아니라, `전략 검증의 의미` 자체를 더 명확히 다시 세우는 작업을 하고 있다.
-- 최근에는 `decision_date(후보 고정 기준일)`가 없으면 promotion lane이 아예 시작되지 않도록 바꿔서, “언제 후보를 고정했는가”를 더 엄격하게 다루기 시작했다.
+## 2. 가장 먼저 이해해야 할 것
+- 이 프로젝트에서 `simulation(후보를 넓게 찾는 단계)`은 `좋아 보이는 후보를 많이 찾는 과정`이다.
+- 하지만 `simulation 결과가 좋다`와 `실제로 운영 승인할 수 있다`는 전혀 다른 말이다.
+- 그래서 지금 구조는 아래처럼 나뉜다.
 
-## 3. 먼저 아주 쉽게: WFO가 뭐냐
-- WFO는 `Walk-Forward Optimization`의 줄임말이다.
-- 아주 쉽게 말하면:
-  - 과거로 공부하고
-  - 그다음 미래 구간으로 시험 보고
-  - 이걸 여러 번 반복해서
-  - 전략이 시간이 지나도 버티는지 확인하는 방식이다.
+1. `simulation(후보를 넓게 찾는 단계)`
+   - 후보를 많이 찾는다.
+2. `research WFO(연구용 WFO, 시작 시점 흔들림을 보는 단계)`
+   - 언제 시작하느냐에 따라 결과가 너무 크게 달라지지 않는지 본다.
+3. `shortlist freeze(후보 고정)`
+   - 후보를 좁히고, 이제부터는 답을 바꾸지 않겠다고 정한다.
+4. `promotion WFO(승인 심사용 WFO, 더 엄격한 검증 단계)`
+   - 시간이 앞으로 흘러가도 이 후보가 버티는지 다시 본다.
+5. `CPU audit(CPU 기준 검산, 다시 최적화가 아니라 계산 확인)`
+   - GPU가 고른 후보가 CPU 기준에서도 이상 없는지 확인한다.
+6. `holdout(끝까지 남겨 둔 최종 시험 구간)`
+   - 마지막으로 따로 남겨 둔 구간에서 최종 확인한다.
 
-비유로 보면:
-- `파라미터 시뮬레이션`은 문제집을 많이 푸는 단계다.
-- `WFO`는 모의고사를 여러 번 보는 단계다.
-- `holdout`은 끝까지 안 풀고 남겨 둔 마지막 시험지다.
+## 3. 아주 쉬운 비유
+- `simulation`은 문제집을 많이 푸는 단계다.
+- `research WFO`는 여러 날짜에 본 모의고사다.
+- `promotion WFO`는 공식 모의평가다.
+- `holdout`은 끝까지 안 풀고 남겨 둔 진짜 마지막 시험지다.
 
-## 4. 왜 이번에 WFO를 다시 손봤나
-### 4-1. 예전 방식의 핵심 문제
-- 예전 구조는 `연구용 관찰`과 `승인용 검증`이 충분히 분리되어 있지 않았다.
-- 특히 아래 같은 문제가 쟁점이 됐다.
-  - 같은 날짜가 여러 검증에 겹쳐 들어갈 수 있었다.
-  - OOS 결과를 평균 합성한 curve가 실제 운용 계좌처럼 읽힐 수 있었다.
-  - 시작 시점이 달라도 안정적인지와, 시간이 지나도 버티는지가 같은 질문처럼 섞였다.
-  - 최신 holdout 구간도 길이가 짧아서 `최종 승인용 마지막 증거`라고 부르기에는 약했다.
+이 비유에서 중요한 점은 하나다.
+- `문제집에서 1등` 했다고
+- `진짜 시험에서도 통과`한 것은 아니다.
 
-### 4-2. 왜 이게 중요한가
-- Magic Split 전략은 한 번에 풀인하지 않는다.
-- 조금 사고, 더 떨어지면 추가로 사고, 시간이 지난 뒤 빠져나오는 구조다.
-- 그래서 단기 성과 1위보다 더 중요한 질문은 아래에 가깝다.
-  - `언제 시작해도 너무 심하게 흔들리지 않는가`
-  - `시간이 지나도 다시 설명 가능한가`
-  - `실제 자본이 적절히 배치되고 회전했는가`
+현재 길이 기준(2026-03-16 기준):
+- `research WFO`
+  - 현재 기본 OOS는 `거래일 기준 378일(약 18개월)`로 본다.
+- `promotion WFO`
+  - 현재 기본 OOS도 `거래일 기준 378일(약 18개월)`로 맞춘다.
+- `holdout`
+  - `24개월 이상`, 즉 `거래일 기준 약 504일 이상`을 목표로 둔다.
+- 예전 `1년(365일)` OOS
+  - 빠른 탐색용 최소선으로는 이해할 수 있지만, 현재 기본 운영값으로는 권장하지 않는다.
 
-즉, 이 전략은 단순히 `가장 높은 수익률 하나`를 고르는 게임이 아니라, `오래 버티고 다시 설명 가능한 후보`를 고르는 문제에 가깝다.
+## 4. 초심자가 먼저 알아두면 좋은 실행 감각
+- 이 프로젝트에서 자주 쓰는 실행 명령은 생각보다 단순하다.
+- 핵심은 `명령어가 많이 다른 것`이 아니라, `어떤 설정 파일(config, 실행 설정 파일)을 주느냐`가 다르다는 점이다.
 
-## 5. 우리가 새로 잡은 큰 구조
-### 5-1. 두 개의 lane(검증 경로)으로 분리
-- 이제 WFO는 크게 두 갈래로 본다.
+가장 자주 쓰는 기본 형태는 이것이다.
 
-1. `Research lane(연구용 검증 경로)`
-- 질문:
-  - `시작 시점이 달라도 결과가 너무 흔들리지 않는가`
-- 성격:
-  - 연구용
-  - 시작 시점 민감도 관찰용
-- 현재 권장 방식:
-  - `multi-anchor Anchored WFO(시작점을 여러 개 두고 반복 검증하는 방식)`
+```bash
+MAGICSPLIT_CONFIG_PATH=/root/projects/Split_Investment_Strategy_Optimizer/config/원하는설정파일.yaml \
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.walk_forward_analyzer
+```
 
-2. `Promotion lane(승인 심사용 검증 경로)`
-- 질문:
-  - `시간이 앞으로 가도 이 후보가 버티는가`
-- 성격:
-  - 승인 심사용
-  - 더 엄격한 시간 전이 검증
-- 현재 권장 방식:
-  - `single-anchor non-overlap Anchored WFO(출발점은 하나로 고정하고, 시험 구간이 겹치지 않게 보는 방식)`
-
-### 5-2. 왜 이렇게 나눴나
-- 두 질문은 비슷해 보이지만 사실 다르다.
-- `Research lane(연구용 검증 경로)`은:
-  - `이 파라미터가 특정 시작일 운빨이 아닌가?`
-  - 를 보는 쪽이다.
-- `Promotion lane(승인 심사용 검증 경로)`은:
-  - `이 후보를 진짜 공식 검증 기준으로 봐도 통과하나?`
-  - 를 보는 쪽이다.
-
-한 줄로 정리하면:
-- research는 `후보를 이해하는 단계`
-- promotion은 `후보를 심사하는 단계`
-
-## 6. 그동안 어떤 결정을 했나
-### 6-1. 연구용 결과를 최종 승인용처럼 보이게 하지 않기
-- research lane(연구용 검증 경로)에서는 단일 합성 수익곡선을 최종 성적표처럼 쓰지 않기로 했다.
-- 대신 `anchor별/fold별 분포`를 보는 쪽으로 방향을 정리했다.
-- 이유는, 연구용 결과는 어디까지나 `흔들림 관찰`이지 `최종 승인 증거`가 아니기 때문이다.
-
-### 6-2. 후보 선정 방식을 더 보수적으로 바꾸기
-- holdout(끝까지 남겨 둔 최종 시험 구간) 직전에 여러 후보를 다시 비교하지 않기로 했다.
-- 대신:
-  - 먼저 후보를 좁히고
-  - `single champion(최종 1등 후보)` 1개를 고정하고
-  - `reserve(예비 후보)`는 provenance(후보 기록) 용도로만 남기고, 이번 `#68`에서는 자동 승계를 구현하지 않기로 했다.
+초심자 식으로 풀면:
+- `MAGICSPLIT_CONFIG_PATH`
+  - 지금 어떤 설정 파일로 실행할지 정하는 환경변수(실행 전에 잠깐 넣는 값)다.
+- `conda run -n rapids-env`
+  - GPU 관련 라이브러리가 들어 있는 실행 환경으로 들어가서 실행하겠다는 뜻이다.
+- `python -m src.walk_forward_analyzer`
+  - WFO 엔진을 실행하는 명령이다.
 
 즉:
-- `holdout(끝까지 남겨 둔 최종 시험 구간)에서 여러 후보를 비교해서 더 좋은 것 고르기`는 금지
-- `holdout 전에 champion(최종 1등 후보)을 봉인`하는 쪽으로 간다
+- `research WFO`도 이 명령을 쓰고
+- `promotion WFO`도 이 명령을 쓰고
+- 차이는 대부분 `config 안의 lane_type(어떤 검증 경로인지)`과 각종 설정값에 있다.
 
-### 6-3. holdout(끝까지 남겨 둔 최종 시험 구간)을 더 엄격하게 보기
-- 이 전략 특성상 `1년 미만 holdout`은 너무 짧다는 공감대가 생겼다.
-- 현재 정책 목표는:
-  - `approval-grade holdout(승인용 최종 등급 holdout) >= 24개월`
-- 다만 현재 저장소 기준 최신 구간은 아직 짧아서:
-  - `2025-01-01 ~ 2025-11-30`
-  - 는 `internal provisional holdout(임시 내부 검증용 holdout)`으로 부른다.
+## 5. simulation 이후에 실제로 무엇을 하나
+이 부분이 초심자에게 가장 중요하다.  
+아래 순서가 `simulation 다음 실제 WFO 흐름`이다.
+
+### 5-1. Step 1. simulation 결과를 바로 믿지 않는다
+- `simulation`은 넓게 보는 단계라서, 잘 보면 항상 좋아 보이는 후보가 몇 개는 나온다.
+- 하지만 그중 일부는:
+  - 특정 시작일에만 좋았을 수 있고
+  - 특정 구간에서만 운 좋게 맞았을 수 있고
+  - 실제 운영 기준으로는 너무 흔들릴 수 있다.
+- 그래서 `simulation 직후`에 바로 운영 승인으로 가지 않는다.
+
+이 단계에서 주로 쓰는 명령어:
+
+```bash
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.parameter_simulation_gpu
+```
+
+이 단계에서 특히 중요한 설정값:
+- `backtest_settings.start_date`, `backtest_settings.end_date`
+  - 어떤 기간을 놓고 후보를 찾을지 정한다.
+- `backtest_settings.initial_cash`
+  - 시작 자금(처음 넣는 돈)을 정한다.
+- `parameter_space`
+  - 어떤 파라미터 조합을 탐색할지 정한다.
+- `strategy_params.price_basis`
+  - 수정주가(adjusted, 권리락/액면분할 등을 반영한 가격) 기준인지 정한다.
+- `strategy_params.universe_mode`
+  - 어떤 종목 집합으로 시험할지 정한다.
+
+초심자 포인트:
+- 여기서는 `최종 1등`을 뽑는 것이 아니라
+- `후보를 넓게 찾는 것`이 목적이다.
+
+### 5-2. Step 2. research WFO로 "시작 시점 운빨"을 먼저 본다
+- 여기서 묻는 질문은 이것이다.
+- `이 후보가 특정 날짜에만 잘 맞는 것 아닌가?`
+- 방법은 여러 시작점(anchor, 출발 날짜)을 두고 비슷한 검증을 반복하는 것이다.
+- 이 단계는 `연구용`이다.
+- 즉, 여기서 할 수 있는 말은:
+  - `시작 시점이 달라도 비교적 덜 흔들렸다`
+- 여기서 하면 안 되는 말은:
+  - `이제 최종 승인됐다`
+
+이 단계에서 주로 쓰는 명령어:
+
+```bash
+MAGICSPLIT_CONFIG_PATH=config/config.issue98_research_family_ab_top8_20260314_141954.yaml \
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.walk_forward_analyzer
+```
+
+이 단계에서 특히 중요한 설정값:
+- `walk_forward_settings.lane_type: research_start_date_robustness`
+  - 연구용 WFO로 돌리겠다는 뜻이다.
+- `walk_forward_settings.research_mode: frozen_shortlist_multi_anchor_eval`
+  - 이미 만든 shortlist를 여러 시작점으로 반복 검증하겠다는 뜻이다.
+- `walk_forward_settings.research_shortlist_path`
+  - 어떤 shortlist 파일을 검증할지 적는다.
+- `walk_forward_settings.research_anchor_start_dates`
+  - 어떤 시작 날짜들로 반복 검증할지 적는다.
+- `walk_forward_settings.decision_date`
+  - 이 후보를 언제 기준으로 고정해 보기 시작했는지 남기는 날짜다.
+- `walk_forward_settings.period_length_days`
+  - 각 fold의 OOS 길이다.
+  - 현재 Magic Split 기본값은 `period_length_basis=trading_days` 기준 `378일(약 18개월)`이다.
+- `walk_forward_settings.period_length_basis`
+  - `period_length_days`를 달력일로 읽을지, 거래일로 읽을지 정하는 값이다.
+  - 현재 기본값은 `trading_days`다.
+
+실행 후 자주 보는 파일:
+
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+sed -n '1,120p' "$LATEST_DIR/lane_manifest.json"
+sed -n '1,120p' "$LATEST_DIR/anchor_manifest.json"
+```
+
+초심자 포인트:
+- research WFO는 `좋은 후보를 더 이해하는 단계`다.
+- `최종 승인 증거`를 만드는 단계가 아니다.
+- 이 전략은 천천히 사고 천천히 정리하는 편이라, 현재는 `1년 OOS`보다 `18개월 OOS`를 기본값으로 두는 쪽이 더 자연스럽다.
+
+### 5-3. Step 3. shortlist freeze로 후보를 고정한다
+- research WFO를 보고 나면 후보를 줄인다.
+- 이 줄인 목록을 `shortlist(압축된 후보 목록)`라고 부른다.
+- 그리고 `freeze(고정)`를 한다는 뜻은:
+  - 이제부터는 holdout 결과를 보고 후보를 다시 바꾸지 않겠다는 뜻이다.
+- 아주 쉽게 말하면:
+  - 답안지를 제출한 뒤에는 다시 고치지 않는 단계다.
+
+이 단계에서 실제로 확인하는 것:
+
+```bash
+sed -n '1,20p' results/research_shortlists/SHORTLIST.csv
+```
+
+이 단계에서 중요한 설정값:
+- `walk_forward_settings.promotion_shortlist_path`
+  - promotion WFO에서 쓸 최종 shortlist 경로다.
+- `walk_forward_settings.decision_date`
+  - 이 shortlist를 언제 기준으로 고정했는지 적는다.
+- `walk_forward_settings.shortlist_hash`
+  - shortlist 내용이 나중에 바뀌지 않았는지 확인하는 데 쓰는 값이다.
+- `walk_forward_settings.period_length_days`
+  - promotion fold의 OOS 길이다.
+  - 현재 기본 정책은 `period_length_basis=trading_days` 기준 `378일(약 18개월)`이다.
+
+초심자 포인트:
+- freeze는 단순 저장이 아니다.
+- `이제부터는 답을 바꾸지 않겠다`는 운영 계약에 가깝다.
+
+### 5-4. Step 4. promotion WFO로 "시간 전이"를 본다
+- 이제 질문이 바뀐다.
+- 여기서는:
+  - `이 후보가 시간이 지나도 버티는가?`
+  - `이 후보를 공식 심사 기준으로 다시 봐도 통과하는가?`
+  - 를 본다.
+- 이 단계는 `연구`가 아니라 `심사`에 가깝다.
+- 그래서 promotion WFO는:
+  - 새 후보를 다시 찾는 단계가 아니고
+  - 이미 freeze된 shortlist만 놓고 다시 심사하는 단계다.
+
+이 단계에서 주로 쓰는 명령어:
+
+```bash
+MAGICSPLIT_CONFIG_PATH=/root/projects/Split_Investment_Strategy_Optimizer/config/promotion_wfo_config.yaml \
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.walk_forward_analyzer
+```
+
+이 단계에서 특히 중요한 설정값:
+- `walk_forward_settings.lane_type: promotion_evaluation`
+  - 승인 심사용 WFO로 돌리겠다는 뜻이다.
+- `walk_forward_settings.promotion_mode: frozen_shortlist_single_anchor_eval`
+  - freeze된 shortlist만 놓고 보겠다는 뜻이다.
+- `walk_forward_settings.promotion_shortlist_path`
+  - 심사에 쓸 후보 목록 파일이다.
+- `walk_forward_settings.decision_date`
+  - 후보 고정 기준일이다.
+- `walk_forward_settings.selection_contract`
+  - 어떤 기준으로 후보를 자르고 순위를 정할지 적는 계약이다.
+
+실행 후 자주 보는 파일:
+
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+sed -n '1,40p' "$LATEST_DIR/promotion_candidate_summary.csv"
+sed -n '1,220p' "$LATEST_DIR/final_candidate_manifest.json"
+```
+
+초심자 포인트:
+- promotion WFO는 `다시 탐색`이 아니다.
+- `이미 고른 후보를 공식 기준으로 심사`하는 단계다.
+
+### 5-5. Step 5. CPU audit으로 계산을 다시 확인한다
+- GPU는 빠르지만, 최종 후보는 CPU 기준에서도 한 번 더 확인해야 한다.
+- 여기서 중요한 점은:
+  - `CPU audit`은 다시 후보를 뽑는 단계가 아니다.
+  - `계산이 제대로 되었는가`를 확인하는 단계다.
+- 쉽게 말하면:
+  - `답이 좋으냐`를 보는 게 아니라
+  - `채점이 틀리지 않았느냐`를 보는 단계다.
+
+이 단계에서 중요한 설정값:
+- `walk_forward_settings.cpu_certification_enabled`
+  - 켤지 끌지 정한다.
+- `walk_forward_settings.cpu_certification_top_n`
+  - CPU로 확인할 상위 후보 개수를 정한다.
+- `walk_forward_settings.cpu_certification_metric`
+  - 어떤 기준 점수를 중심으로 확인할지 정한다.
+
+초심자 포인트:
+- 최근 정리 방향은 `CPU가 GPU를 다시 이겨서 순위를 뒤집는 것`이 아니라
+- `GPU가 고른 후보가 CPU 기준에서도 계산상 문제 없는지 확인`하는 쪽이다.
+
+### 5-6. Step 6. holdout에서 마지막 시험을 본다
+- holdout은 `끝까지 안 보고 남겨 둔 마지막 구간`이다.
+- 여기서 확인하는 것은:
+  - 이 후보가 정말 마지막 시험지에서도 버티는가
+  - 너무 형식적으로만 좋은 숫자가 나온 것은 아닌가
+  - 거래 수나 자금 투입 같은 기본 행동이 너무 빈약하지는 않은가
+- 이 단계까지 와야 비로소 `최종 승인`에 가까운 이야기를 할 수 있다.
+
+이 단계에서 주로 쓰는 명령어:
+
+```bash
+MAGICSPLIT_CONFIG_PATH=/root/projects/Split_Investment_Strategy_Optimizer/config/promotion_wfo_config.yaml \
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.walk_forward_analyzer
+```
+
+초심자에게 헷갈릴 수 있지만:
+- holdout도 보통 `같은 WFO 명령`으로 돈다.
+- 대신 config 안에서 아래 값이 채워져 있어야 자동으로 이어진다.
+
+특히 중요한 설정값:
+- `walk_forward_settings.holdout_start`
+  - holdout 시작일
+- `walk_forward_settings.holdout_end`
+  - holdout 종료일
+- `walk_forward_settings.holdout_auto_execute`
+  - promotion WFO가 끝난 뒤 holdout을 자동 실행할지
+- `walk_forward_settings.canonical_holdout_start`
+  - 공식 holdout 계약상 시작일
+- `walk_forward_settings.canonical_holdout_end`
+  - 공식 holdout 계약상 종료일
+- `walk_forward_settings.holdout_adequacy_thresholds`
+  - 거래 수나 자금 투입 같은 기본 충분성 기준이다.
+
+실행 후 자주 보는 파일:
+
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+sed -n '1,240p' "$LATEST_DIR/holdout_manifest.json"
+sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
+```
+
+초심자 포인트:
+- holdout은 `좋은 숫자 하나 더 뽑는 곳`이 아니다.
+- `끝까지 남겨 둔 마지막 시험지`다.
+
+## 6. baseline(비교 기준)은 어떻게 봐야 하나
+- WFO와 holdout은 `이 전략 자체가 시험을 통과했는지` 보는 단계다.
+- baseline은 `그 성적이 시장 대비 어느 정도 의미가 있는지`를 보는 비교표다.
+- 즉:
+  - `WFO/holdout = 시험`
+  - `baseline = 반 평균과 비교`
+
+현재 권장 baseline 역할 분담:
+- `KOSDAQ buy-and-hold(같은 기간 코스닥 지수를 그냥 들고 있는 비교 기준)`
+  - 주 baseline(주 비교 기준)
+  - 이유:
+    - 실제로 전략이 주로 코스닥 종목을 많이 사기 때문
+- `KOSPI buy-and-hold(같은 기간 코스피 지수를 그냥 들고 있는 비교 기준)`
+  - 보조 baseline(보조 비교 기준)
+  - 이유:
+    - 관리직이나 외부 설명에서 가장 익숙한 넓은 시장 기준이기 때문
+
+중요한 원칙:
+- baseline은 `설명용`으로는 매우 중요하다.
+- 하지만 현재 v1에서는 `champion(최종 1등 후보)`을 다시 뽑는 공식 선택 규칙으로 쓰지는 않는다.
+- 쉽게 말하면:
+  - `후보 선정은 WFO 계약대로`
+  - `의미 설명은 코스닥/코스피 비교표로`
+  - 간다.
+
+초심자 포인트:
+- 주로 코스닥을 사는 전략이면 `코스피만` 비교하면 조금 억울할 수 있다.
+- 그래서 `코스닥`이 주 기준이고, `코스피`는 넓은 시장과 비교하는 보조 기준으로 두는 것이 자연스럽다.
+
+## 7. 왜 research WFO와 promotion WFO를 나눴나
+- 두 단계가 묻는 질문이 다르기 때문이다.
+
+### 7-1. research WFO가 묻는 질문
+- `언제 시작하든 너무 심하게 흔들리지 않는가?`
+- 즉, `시작 시점 민감도(언제 시작했느냐에 따라 결과가 달라지는 정도)`를 보는 쪽이다.
+
+### 7-2. promotion WFO가 묻는 질문
+- `시간이 앞으로 흐를 때도 이 후보가 버티는가?`
+- 즉, `시간 전이 강건성(시간이 바뀌어도 버티는 정도)`을 보는 쪽이다.
+
+### 7-3. 한 줄 정리
+- `research`는 후보를 이해하는 단계다.
+- `promotion`은 후보를 심사하는 단계다.
+
+## 8. 왜 이 전략에서는 이 구분이 특히 더 중요하나
+- Magic Split 전략은 한 번에 전액 투자하는 전략이 아니다.
+- 조금 사고, 더 떨어지면 더 사고, 시간이 지나면 빠져나오는 구조다.
+- 그래서 짧은 구간에서 잠깐 좋아 보이는 성과만 보면 실제 성격을 오해할 수 있다.
+
+이 전략에서 더 중요한 질문은 이런 것들이다.
+- `언제 시작해도 너무 심하게 흔들리지 않는가`
+- `시간이 지나도 설명 가능한가`
+- `실제 자본이 적절히 배치되고 회전했는가`
+
+즉, 이 전략은 `가장 높은 숫자 하나`를 찾는 게임이 아니라, `오래 버티고 다시 설명 가능한 후보`를 찾는 문제에 더 가깝다.
+
+## 9. 예전 방식에서 무엇이 문제였나
+- 예전 구조는 `연구용 관찰`과 `승인용 검증`이 충분히 분리되어 있지 않았다.
+- 그래서 아래 같은 오해가 생길 수 있었다.
+
+- 같은 날짜가 여러 검증에 겹쳐 들어갈 수 있었다.
+- OOS(Out-Of-Sample, 공부에 쓰지 않고 시험만 보는 구간) 결과를 평균 합성한 곡선이 실제 운용 계좌처럼 읽힐 수 있었다.
+- `시작 시점이 달라도 안정적인가`와 `시간이 지나도 버티는가`가 같은 질문처럼 섞였다.
+- holdout도 길이가 짧으면 `최종 승인용 마지막 증거`라고 부르기 어렵다.
+
+## 10. 지금까지 실제로 구현된 것
+### 10-1. lane(검증 경로) 분리의 뼈대
+- `promotion_evaluation(승인 심사용 실행 모드)` 경로가 정리됐다.
+- `research_start_date_robustness(시작 시점 민감도 연구 모드)` 경로가 정리됐다.
+- 즉, 이제 코드도 예전처럼 “다 같은 WFO”가 아니라, 역할을 구분해 실행할 수 있게 됐다.
+
+### 10-2. research WFO가 더 빨라졌다
+- 최근에는 research WFO 안에서 `shortlist 후보를 하나씩 따로 GPU 실행`하던 구조를 줄였다.
+- 이제 같은 fold(검증 한 구간) 안에서는 `후보 여러 개를 single GPU batch(한 번에 묶어서 처리)`로 평가하고, `market data(시장 데이터)` 준비도 재사용한다.
+- 쉽게 말하면:
+  - 예전에는 같은 문제지를 후보마다 매번 다시 펼쳐 봤다면
+  - 지금은 한 번 펼쳐 놓고 후보들을 한꺼번에 채점하는 쪽으로 개선됐다.
+- 이 변화는 `후보 선택 의미`를 바꾸는 변경이 아니라, `같은 의미를 더 효율적으로 계산`하는 쪽에 가깝다.
+
+### 10-3. 결과를 더 정직하게 남기는 manifest(상태 기록 파일) 체계
+- 결과 폴더에는 이제 아래 파일들이 남는다.
+- `lane_manifest.json(이번 실행이 어떤 경로였는지 적는 파일)`
+- `holdout_manifest.json(holdout 상태를 적는 파일)`
+- `promotion_candidate_summary.csv(후보 요약표)`
+- `final_candidate_manifest.json(최종 후보를 봉인한 기록 파일)`
+
+이 파일들이 중요한 이유는:
+- 어떤 lane으로 돌렸는지
+- 어떤 후보를 썼는지
+- holdout을 건드렸는지
+- 외부에 설명해도 되는 단계인지
+- 를 나중에 다시 증명할 수 있게 해 주기 때문이다.
+
+### 10-4. final candidate(최종 후보) 선정 계약이 생겼다
+- promotion WFO가 끝나면:
+  - 후보 요약표를 만들고
+  - `single champion(최종 1등 후보)` 1개를 정하고
+  - `final_candidate_manifest.json`에 봉인한다.
+- 이때 중요한 원칙은:
+  - holdout에 여러 후보를 넣고 나중에 더 좋은 것을 고르지 않는다는 점이다.
+- 쉽게 말하면:
+  - 마지막 시험지로 답을 다시 고르는 일을 막는 구조다.
+
+### 10-5. freeze contract(후보 고정 계약)가 들어갔다
+- 이제는 후보를 고른 뒤 아래를 다시 확인한다.
+- shortlist 파일이 `decision_date(후보 고정 기준일)` 이후 바뀌지 않았는가
+- holdout 경계가 공식 계약과 맞는가
+- 맞지 않으면 holdout 자동 실행 전에 막는다.
+
+즉, 단순히 `좋아 보이는 숫자`만 저장하는 것이 아니라,
+- `후보를 언제 고정했는가`
+- `중간에 몰래 바꾸지 않았는가`
+- 도 함께 관리하기 시작했다.
+
+### 10-6. holdout guardrail(holdout 실수 방지 장치)이 강화됐다
+- `holdout_auto_execute=true(holdout 자동 실행 옵션)`일 때도 아무 때나 holdout이 도는 것이 아니다.
+- champion(최종 1등 후보)이 준비되어 있고
+- CPU audit이 통과했고
+- freeze 계약과 holdout 계약이 맞을 때만
+- holdout을 자동 실행하게 정리했다.
+
+또 holdout 결과도 더 정직하게 기록한다.
+- `attempted(실행 시도했는가)`
+- `success(끝까지 성공했는가)`
+- `blocked(규칙 때문에 막혔는가)`
+
+그리고 holdout이 너무 형식적으로 끝나지 않도록 아래도 본다.
+- `trade_count(거래 횟수)`
+- `closed_trade_count(완결된 거래 횟수)`
+- `distinct_entry_months(서로 다른 진입 월 수)`
+- `avg_invested_capital_ratio(평균 투자 자본 비율)`
+- `cash_drag_ratio(현금이 놀고 있던 비율)`
 
 쉽게 말하면:
-- `최종 시험지`는 따로 남겨두고 있지만
-- 아직 충분히 길지 않아서
-- `완전한 최종 승인 증거`라고 부르지는 않는 상태다.
+- 수익률 숫자만 보는 것이 아니라
+- `실제로 전략이 의미 있게 움직였는가`도 같이 보기 시작한 것이다.
 
-## 7. 지금까지 실제로 구현된 것
-### 7-1. lane(검증 경로) 분리의 뼈대
-- `promotion_evaluation(승인 심사용 실행 모드)`
-  - frozen shortlist 기반으로 동작
-  - single-anchor non-overlap 방식으로 실행
-- `research_start_date_robustness(시작 시점 민감도 연구 모드)`
-  - frozen shortlist 기반 multi-anchor evaluation 경로가 생김
+## 11. 지금 상태를 가장 쉽게 말하면
+- `WFO의 큰 흐름은 많이 정리됐다.`
+- `후보 탐색`, `연구용 검증`, `승인 심사`, `최종 시험`이 예전보다 훨씬 분리되었다.
+- `후보 고정`, `최종 후보 봉인`, `holdout 차단`, `기본 행동 충분성 확인`도 코드에 많이 들어왔다.
+- 하지만 아직 `정말 대외 설명 가능한 마지막 승인 보고서`까지는 완전히 닫히지 않았다.
 
-즉, 이제 코드도 예전처럼 “다 같은 WFO”가 아니라, 어느 정도 역할을 구분해 실행할 수 있게 됐다.
-
-### 7-2. 결과를 더 정직하게 남기는 manifest(실행 계약/상태 기록 파일) 체계
-- 결과 폴더에 아래 같은 artifact(실행 결과 파일)가 남기 시작했다.
-  - `lane_manifest.json(검증 경로 상태 기록 파일)`
-  - `holdout_manifest.json(holdout 상태 기록 파일)`
-  - `promotion_candidate_summary.csv(후보 요약표)`
-  - `final_candidate_manifest.json(최종 후보 봉인 기록 파일)`
-- 이 파일들의 목적은 단순 저장이 아니라:
-  - 어떤 lane이었는지
-  - 어떤 후보를 썼는지
-  - holdout을 건드렸는지
-  - approval-grade(승인용 최종 등급)로 읽어도 되는지
-  - 를 나중에 다시 증명할 수 있게 만드는 것이다.
-- 그리고 이제 `strict_only_governance(운영 승인 판단 규칙)`도 이 파일들을 직접 읽어서:
-  - `최종 후보가 hard gate(최소 통과 기준)를 통과했는지`
-  - `CPU audit(CPU 기준 검산)이 pass(통과)인지`
-  - `holdout 실행 상태가 어떤지`
-  - 를 이유(reason)로 직접 반영할 수 있게 됐다.
-- 여기에 더해 `final_candidate_manifest.json(최종 후보 봉인 기록 파일)` 안에:
-  - `freeze_contract_hash(후보 고정 계약 해시값)`
-  - `promotion_shortlist_hash_verified(후보 목록 파일 해시 일치 여부)`
-  - `promotion_shortlist_modified_after_decision_date(후보 고정 기준일 이후 파일 수정 여부)`
-  - `canonical_holdout_contract_verified(공식 holdout 경계 계약 일치 여부)`
-  - 도 같이 남도록 바뀌었다.
-
-### 7-3. final candidate(최종 후보) 계약
-- promotion lane(승인 심사용 검증 경로)이 끝나면:
-  - 후보 요약표를 만들고
-  - `single champion(최종 1등 후보)`을 정하고
-  - `final_candidate_manifest.json(최종 후보 봉인 기록 파일)`에 봉인한다.
-- 여기에는:
-  - champion 파라미터
-  - reserve(예비 후보)
-  - candidate hash(후보 내용이 바뀌지 않았는지 확인하는 고유 지문값)
-  - tie-break 기준(점수가 비슷할 때 순서를 정하는 규칙)
-  - 이 들어간다.
-- 그리고 지금은 여기서 끝나지 않고:
-  - `hard gate(최소 통과 기준)`를 먼저 통과했는지 보고
-  - 통과한 후보 안에서만 `robust score(통과 후보끼리 비교하는 보조 점수)`로 tie-break(동점 정리)를 하도록
-  - 코드와 문서의 공식 계약이 맞춰졌다.
-- 또 `freeze contract(후보 고정 계약)`도 들어가서:
-  - shortlist(후보 목록) 파일이 `decision_date(후보 고정 기준일)` 이후 바뀌었는지
-  - holdout 경계가 현재 공식 계약과 맞는지
-  - 를 자동 실행 전에 다시 확인하게 됐다.
-- 즉 이제 `왜 이 후보가 champion(최종 1등 후보)이 되었는가`를 예전보다 훨씬 다시 설명하기 쉬워졌다.
-
-### 7-4. holdout 자동 실행과 adequacy(충분성) guardrail(실수 방지 장치)
-- `holdout_auto_execute=true(holdout 자동 실행 옵션)`일 때
-  - champion이 준비되어 있고
-  - holdout window가 설정되어 있고
-  - final CPU audit(CPU 기준 최종 검산)까지 pass일 때만
-  - holdout을 자동으로 실행하게 만들었다.
-- 또 holdout 상태를 더 정직하게 남기기 위해:
-  - `attempted`
-  - `success`
-  - `blocked`
-  - 를 구분해서 기록하도록 정리했다.
-- 여기에 더해, holdout이 너무 형식적으로만 끝나지 않도록:
-  - `trade_count(거래 횟수)`
-  - `closed_trade_count(완결된 거래 횟수)`
-  - `distinct_entry_months(서로 다른 진입 월 수)`
-  - `avg_invested_capital_ratio(평균 투자 자본 비율)`
-  - `cash_drag_ratio(현금이 놀고 있던 비율)`
-- 같은 adequacy 지표도 함께 본다.
-- 이 adequacy 기준을 못 넘으면 `approval_eligible(승인 가능 여부)=false`로 강등되고, 정말 예외가 필요할 때만 `waiver(예외 승인 사유)`를 남기는 구조가 들어왔다.
-- 그리고 이제는 `approval_eligible(내부 승인 가능)`와 `external_claim_eligible(대외 설명 가능)`를 따로 기록한다.
-  - 즉, 내부적으로는 예외 승인으로 넘길 수 있어도
-  - 대외적으로는 `아직 최종 승인 증거로 말하면 안 된다`를 코드가 따로 남겨 준다.
-
-## 8. 지금 상태를 한 문장으로 말하면
-- `WFO의 의미, 실행 경로, 최종 후보 선정 방식, freeze 계약, holdout 충분성 판단 방식까지 큰 줄기는 대부분 정리되었다.`
-- 다만 `행동지표/ablation 고도화`와 `approval-grade holdout의 최종 경계 고정`은 아직 마지막으로 남아 있다.
-
-## 9. 아직 남은 핵심 작업
-### 9-1. 행동지표(behavior metrics)와 비교 리포트를 더 발전시키기
-- 지금은 holdout adequacy 기준이 들어왔지만, 이것을 더 설득력 있는 비교 리포트로 키우는 작업이 남아 있다.
+## 12. 아직 남은 핵심 작업
+### 12-1. 행동지표(behavior metrics, 전략이 실제로 어떻게 움직였는지 보여 주는 지표) 보고서 고도화
+- 지금도 기본 행동지표는 보지만, 이것을 더 설득력 있는 설명용 보고서로 키우는 작업이 남아 있다.
 - 예를 들면:
-  - `promotion_ablation_summary.csv`
-  - `promotion_explanation_report.json`
-  - 더 풍부한 행동지표(feature) 실험
-- 이 단계가 완성되면 팀이 나중에 `왜 이번 버전이 더 낫다고 보는지`를 더 쉽게 설명할 수 있다.
+  - 어떤 후보가 왜 더 안정적인지
+  - 어느 지점에서 자금 배치가 더 나았는지
+  - 파라미터를 조금 바꿨을 때도 성격이 유지되는지
+- 를 더 쉽게 보여 주는 비교 보고서가 필요하다.
 
-## 10. 지금 진행률을 경영 관점에서 보면
-### 10-1. 이미 해결한 것
-- 후보 탐색과 승인 심사를 같은 성격으로 보던 문제를 구조적으로 분리했다.
-- 연구용 결과가 승인용처럼 보일 수 있는 위험을 많이 줄였다.
-- 결과를 나중에 추적·감사할 수 있도록 artifact(실행 결과 파일) 체계를 만들었다.
-- 최종 후보를 봉인하는 계약이 생겼다.
-- 최종 후보 선정 규칙(`hard gate + robust score + tie-break`)도 이제 코드와 문서에 같이 묶였다.
-- holdout이 짧거나, 너무 의미 없이 끝났을 때 자동으로 강등시키는 adequacy 판단도 들어왔다.
-- freeze 이후 shortlist가 바뀌었는지와 holdout 경계가 공식 계약과 맞는지도 이제 코드가 직접 확인한다.
+### 12-2. approval-grade holdout 마감
+- 현재 정책 목표는 `24개월 이상 holdout`이다.
+- 하지만 지금 저장소 기준 대표 holdout은 아직 짧다.
+- 그래서 지금 상태는:
+  - `내부 검토와 구조 정리는 많이 됐지만`
+  - `완전한 최종 승인 증거라고 부를 마지막 구간은 아직 마감 중`
+- 에 가깝다.
 
-### 10-2. 아직 남은 것
-- 행동지표/ablation을 더 설득력 있는 비교 리포트로 끌어올리는 작업
-- approval-grade holdout을 진짜 대외 설명 가능한 수준으로 닫기 위한 마지막 마감 작업
+## 13. 경영 관점에서 보면 지금 어디까지 왔나
+### 13-1. 이미 해결한 것
+- 후보 탐색과 승인 심사를 같은 것으로 보던 문제를 구조적으로 분리했다.
+- 연구용 결과가 승인용처럼 읽힐 위험을 많이 줄였다.
+- 결과를 나중에 추적하고 감사할 수 있도록 상태 기록 파일을 남기기 시작했다.
+- 최종 후보를 봉인하는 절차가 생겼다.
+- holdout이 짧거나, 너무 형식적으로 끝났을 때 자동으로 경고하거나 강등하는 구조가 들어왔다.
 
-### 10-3. 지금 이 작업의 의미
-- 이건 단순 성능 튜닝이 아니다.
-- 전략 검증을 `사람 기억과 해석`에 덜 의존하고, `재현 가능한 운영 체계`로 옮기는 작업이다.
-- 쉽게 말하면:
-  - `좋아 보인다`를
-  - `왜 좋은지 설명 가능하고, 나중에도 같은 기준으로 다시 검증 가능하다`
-  - 로 바꾸는 과정이다.
+### 13-2. 아직 남은 것
+- 행동지표와 비교 실험(ablation, 일부 조건을 바꿔 보며 설명력을 높이는 실험) 보고서 고도화
+- approval-grade holdout 최종 마감
 
-## 11. 앞으로 팀에 이렇게 설명하면 된다
-- `예전에는 연구용과 승인용 결과가 섞여 보일 위험이 있었다.`
-- `지금은 research lane / promotion lane / holdout을 분리해서, 후보 탐색과 최종 승인 절차를 다르게 운영하도록 바꾸고 있다.`
-- `현재는 final candidate manifest, governance 연결, hard gate/robust score, freeze contract, holdout adequacy guardrail까지 들어와서 큰 골격은 거의 잡혔다.`
-- `남은 것은 행동지표/ablation 고도화와 approval-grade holdout 마감 작업이다.`
+### 13-3. 이 작업의 의미
+- 이건 단순히 성능 숫자를 조금 올리는 작업이 아니다.
+- `좋아 보인다`를
+- `왜 좋은지 다시 설명할 수 있고, 나중에도 같은 기준으로 다시 검증할 수 있다`
+- 로 바꾸는 작업이다.
 
-## 12. 참고 문서
+## 14. 팀에 아주 짧게 설명하면
+- `simulation은 후보를 찾는 단계다.`
+- `research WFO는 시작일 운빨이 아닌지 보는 단계다.`
+- `promotion WFO는 시간 전이 검증을 하는 심사 단계다.`
+- `CPU audit은 계산 검산 단계다.`
+- `holdout은 끝까지 남겨 둔 마지막 시험지다.`
+- `우리는 지금 이 다섯 단계를 섞지 않도록 구조를 다시 세우는 중이다.`
+
+## 15. 참고 문서
 - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
 - [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
 - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)

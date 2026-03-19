@@ -5,15 +5,19 @@
 
 ## 1. 기본 실행
 
-### 1-1. 전체 테스트 실행
+### 1-1. CPU 빠른 테스트 (`stock_optimizer_env`)
 ```bash
-python -m unittest discover -s tests
+CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest \
+  tests.test_portfolio \
+  tests.test_point_in_time -v
 ```
 
-### 1-2. 권장 환경(rapids-env)에서 실행
+### 1-2. 전체 테스트 실행 (`rapids-env`)
 ```bash
-conda run -n rapids-env python -m unittest discover -s tests
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests
 ```
+
+전체 discovery에는 GPU 테스트 모듈이 포함되어 `cupy`, `cudf` import가 발생하므로 `rapids-env`가 사실상 필요합니다.
 
 ## 2. 테스트 분류
 
@@ -30,7 +34,7 @@ conda run -n rapids-env python -m unittest discover -s tests
 
 예시:
 ```bash
-conda run -n rapids-env python -m unittest \
+CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest \
   tests.test_data_handler \
   tests.test_data_handler_tier \
   tests.test_collector_normalization \
@@ -48,7 +52,7 @@ conda run -n rapids-env python -m unittest \
 
 실행:
 ```bash
-conda run -n rapids-env python -m unittest tests.test_integration -v
+CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest tests.test_integration -v
 ```
 
 ### 2-3. GPU 의존 테스트
@@ -60,7 +64,7 @@ conda run -n rapids-env python -m unittest tests.test_integration -v
 
 실행:
 ```bash
-conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu -v
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu -v
 ```
 
 ## 3. 이슈 #66 관련 신규 테스트
@@ -72,7 +76,7 @@ conda run -n rapids-env python -m unittest tests.test_backtest_strategy_gpu -v
 
 권장 실행:
 ```bash
-conda run -n rapids-env python -m unittest \
+CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest \
   tests.test_pipeline_batch \
   tests.test_daily_stock_tier_batch \
   tests.test_data_handler_tier \
@@ -83,7 +87,9 @@ conda run -n rapids-env python -m unittest \
 ## 4. 운영 팁
 
 - 테스트 실패 시 먼저 환경 확인:
-  - `pandas`, `pymysql`, `mysql-connector-python`, `pykrx`
-  - GPU 테스트의 경우 `cupy`, `cudf`
+  - CPU 기본 env: `stock_optimizer_env`
+  - GPU/WFO/full discovery env: `rapids-env`
+  - 주요 의존성: `pandas`, `pymysql`, `mysql-connector-python`, `pykrx`
+  - GPU 테스트 추가 의존성: `cupy`, `cudf`
 - DB 연동 테스트 전후로 테스트 데이터 정리 여부를 확인하세요.
 - CI/자동화에서는 GPU 테스트를 별도 job으로 분리하는 것을 권장합니다.
