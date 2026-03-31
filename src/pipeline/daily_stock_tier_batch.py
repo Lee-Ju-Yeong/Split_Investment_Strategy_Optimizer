@@ -40,6 +40,7 @@ DEFAULT_TIER1_POSITION_MIN_PERIODS_DAYS = 252
 DEFAULT_TIER3_FLOW20_QUANTILE = 0.10
 DEFAULT_TIER3_FLOW20_VALID_COVERAGE_THRESHOLD = 0.70
 DEFAULT_TIER3_FLOW20_CONSECUTIVE_DAYS = 5
+DEFAULT_SHORT_SELLING_PUBLICATION_LAG_TRADING_DAYS = 3
 
 
 def get_tier_ticker_universe(conn, end_date=None, mode="daily"):
@@ -545,7 +546,11 @@ def _apply_financial_risk(price_df, financial_df, financial_lag_days):
     return pd.concat(output_groups, ignore_index=True)
 
 
-def _apply_short_balance_ratio(base_df, short_balance_df):
+def _apply_short_balance_ratio(
+    base_df,
+    short_balance_df,
+    publication_lag_trading_days=DEFAULT_SHORT_SELLING_PUBLICATION_LAG_TRADING_DAYS,
+):
     output = base_df.copy()
     output["sbv_ratio"] = np.nan
     if short_balance_df is None or short_balance_df.empty:
@@ -558,6 +563,13 @@ def _apply_short_balance_ratio(base_df, short_balance_df):
     )
     short_data["market_cap"] = pd.to_numeric(short_data["market_cap"], errors="coerce")
     short_data = short_data.dropna(subset=["date"])
+    short_data = _shift_short_balance_to_available_dates(
+        base_df=output,
+        short_balance_df=short_data,
+        publication_lag_trading_days=publication_lag_trading_days,
+    )
+    if short_data.empty:
+        return output
 
     merged = output.merge(
         short_data[["stock_code", "date", "short_balance_value", "market_cap"]],
@@ -572,6 +584,39 @@ def _apply_short_balance_ratio(base_df, short_balance_df):
     )
     merged["sbv_ratio"] = pd.to_numeric(merged["sbv_ratio"], errors="coerce")
     return merged.drop(columns=["short_balance_value", "market_cap"], errors="ignore")
+
+
+def _shift_short_balance_to_available_dates(
+    base_df,
+    short_balance_df,
+    publication_lag_trading_days,
+):
+    if short_balance_df is None or short_balance_df.empty:
+        return short_balance_df
+
+    lag_days = max(int(publication_lag_trading_days), 0)
+    if lag_days == 0:
+        return short_balance_df
+
+    trading_dates = pd.Index(
+        pd.to_datetime(base_df["date"], errors="coerce").dropna().sort_values().unique()
+    )
+    if trading_dates.empty:
+        return short_balance_df.iloc[0:0].copy()
+
+    date_positions = pd.Series(np.arange(len(trading_dates)), index=trading_dates)
+    source_positions = date_positions.reindex(short_balance_df["date"])
+    shifted_positions = source_positions + lag_days
+    valid_mask = source_positions.notna() & (shifted_positions < len(trading_dates))
+    if not valid_mask.any():
+        return short_balance_df.iloc[0:0].copy()
+
+    valid_rows = valid_mask.to_numpy()
+    shifted = short_balance_df.loc[valid_rows].copy()
+    shifted["date"] = trading_dates.take(
+        shifted_positions.loc[valid_mask].astype(int).to_numpy()
+    )
+    return shifted
 
 
 def _attach_market_cap(base_df, market_cap_df):
@@ -725,6 +770,7 @@ def build_daily_stock_tier_frame(
     investor_df=None,
     market_cap_df=None,
     short_balance_df=None,
+    short_selling_publication_lag_trading_days=DEFAULT_SHORT_SELLING_PUBLICATION_LAG_TRADING_DAYS,
     lookback_days=DEFAULT_LOOKBACK_DAYS,
     financial_lag_days=DEFAULT_FINANCIAL_LAG_DAYS,
     danger_liquidity=DEFAULT_DANGER_LIQUIDITY,
@@ -785,7 +831,11 @@ def build_daily_stock_tier_frame(
         .mean()
         .reset_index(level=0, drop=True)
     )
-    base = _apply_short_balance_ratio(base, short_balance_df)
+    base = _apply_short_balance_ratio(
+        base,
+        short_balance_df,
+        publication_lag_trading_days=short_selling_publication_lag_trading_days,
+    )
     base = _attach_market_cap(base, market_cap_df)
 
     financial_with_factors = _augment_financial_factors(
@@ -1090,6 +1140,7 @@ def run_daily_stock_tier_batch(
     prime_liquidity=DEFAULT_PRIME_LIQUIDITY,
     enable_investor_v1_write=DEFAULT_ENABLE_INVESTOR_V1_WRITE,
     investor_flow5_threshold=DEFAULT_INVESTOR_FLOW5_THRESHOLD,
+    short_selling_publication_lag_trading_days=DEFAULT_SHORT_SELLING_PUBLICATION_LAG_TRADING_DAYS,
     cheap_score_pbr_lookback_years=DEFAULT_CHEAP_SCORE_PBR_LOOKBACK_YEARS,
     cheap_score_per_lookback_years=DEFAULT_CHEAP_SCORE_PER_LOOKBACK_YEARS,
     cheap_score_div_lookback_years=DEFAULT_CHEAP_SCORE_DIV_LOOKBACK_YEARS,
@@ -1188,6 +1239,7 @@ def run_daily_stock_tier_batch(
         investor_df=investor_df,
         market_cap_df=market_cap_df,
         short_balance_df=short_balance_df,
+        short_selling_publication_lag_trading_days=short_selling_publication_lag_trading_days,
         lookback_days=lookback_days,
         financial_lag_days=financial_lag_days,
         danger_liquidity=danger_liquidity,

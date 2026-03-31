@@ -124,10 +124,68 @@ parameter_space:
 
 walk_forward_settings:
   total_folds: 6
-  period_length_days: 365
-  # Hybrid lane:
-  # GPU가 상위 후보를 제안한 뒤 CPU가 shortlist를 재실행해 최종 채택합니다.
-  # 이 설정이 켜져 있어도 release/promotion은 별도 gate(`strict_pit`, parity, future reference=0)를 닫아야 합니다.
+  # `period_length_days` is interpreted by `period_length_basis`.
+  # Current Magic Split baseline uses trading-day windows:
+  # - 378 trading days ~= about 18 months
+  # - 365 trading days should be treated as exploratory/provisional only
+  period_length_basis: "trading_days"
+  period_length_days: 378
+  # Optional manifest metadata for WFO artifacts.
+  # - `legacy_wfo`: 기존 overlap/mean aggregation 경로를 그대로 사용하며 provisional로 기록합니다.
+  # - `promotion_evaluation`: frozen shortlist 기반 single-anchor non-overlap anchored WFO를 사용합니다.
+  # - `research_start_date_robustness`: frozen shortlist multi-anchor evaluation을 사용합니다.
+  lane_type: "legacy_wfo"
+  # promotion_evaluation에서는 decision_date(후보 고정 기준일)가 필수입니다.
+  decision_date: "2026-03-14"
+  research_data_cutoff: "2021-12-31"
+  promotion_data_cutoff: "2021-12-31"
+  shortlist_hash: null
+  promotion_mode: "frozen_shortlist_single_anchor_eval"
+  promotion_selection_metric: "calmar_ratio"
+  promotion_shortlist_path: null
+  selection_contract:
+    version: "promotion_holdout_selector_v1"
+    hard_gate_version: "promotion_hard_gate_v1"
+    min_promotion_fold_pass_rate: 0.70
+    min_oos_is_calmar_ratio_median: 0.60
+    max_oos_mdd_depth_p95: 0.25
+    per_fold_min_oos_calmar_ratio: 0.0
+    reserve_count: 2
+  research_mode: "frozen_shortlist_multi_anchor_eval"
+  research_selection_metric: "calmar_ratio"
+  research_shortlist_path: null
+  research_anchor_start_dates: []
+  anchor_set_id: "manual_anchor_set"
+  anchor_spacing_rule: "manual_explicit"
+  coverage_normalized: true
+  publication_lag_policy: "unspecified"
+  ticker_universe_snapshot_id: null
+  engine_version_hash: null
+  # Optional holdout window for `holdout_manifest.json`.
+  canonical_promotion_wfo_end: "2024-12-31"
+  canonical_holdout_start: "2025-01-01"
+  canonical_holdout_end: "2025-11-30"
+  holdout_start: "2025-01-01"
+  holdout_end: "2025-11-30"
+  holdout_auto_execute: false
+  # Optional holdout adequacy gate:
+  # 값이 설정되면 holdout adequacy metric이 이 기준을 못 넘을 때 approval-grade를 강등합니다.
+  holdout_adequacy_thresholds:
+    min_trade_count: 20
+    min_closed_trade_count: 10
+    min_distinct_entry_months: 6
+    min_avg_invested_capital_ratio: 0.20
+    max_cash_drag_ratio: 0.80
+  # Optional waiver:
+  # 짧은 holdout 또는 adequacy threshold 미달을 예외 승인하려면 이유를 남깁니다.
+  holdout_waiver_reason: null
+  holdout_contaminated_ranges:
+    - start: "2025-12-01"
+      end: "2026-01-31"
+  # CPU selection quality check(선택 단계 품질 확인, optional):
+  # GPU가 고른 finalist shortlist를 CPU로 다시 돌려 selection 단계 품질을 확인합니다.
+  # 최종 승인 SSOT는 이 필드가 아니라 `final candidate CPU audit(최종 후보 CPU 검산)`입니다.
+  # research lane에서는 보통 `not_applicable`로 기록됩니다.
   cpu_certification_enabled: true
   cpu_certification_top_n: 5
   cpu_certification_metric: "calmar_ratio"

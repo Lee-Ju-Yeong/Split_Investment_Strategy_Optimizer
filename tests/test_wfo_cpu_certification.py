@@ -123,7 +123,7 @@ class TestWfoCpuCertification(unittest.TestCase):
         self.assertEqual(shortlist.iloc[0]["selection_reason"], "gpu_top_n+robust_cluster")
 
     @patch("src.analysis.walk_forward_analyzer.run_cpu_single_backtest")
-    def test_certify_gpu_finalists_with_cpu_promotes_best_cpu_metric(self, mock_run_cpu_single_backtest):
+    def test_certify_gpu_finalists_with_cpu_keeps_gpu_selected_candidate_when_audit_passes(self, mock_run_cpu_single_backtest):
         finalists = pd.DataFrame(
             [
                 {
@@ -183,6 +183,7 @@ class TestWfoCpuCertification(unittest.TestCase):
         selected_params, certification_df = wfo.certify_gpu_finalists_with_cpu(
             self.base_config,
             finalists,
+            selected_params_dict=finalists.iloc[0].to_dict(),
             start_date="2024-01-01",
             end_date="2024-01-31",
             initial_cash=10_000_000,
@@ -190,13 +191,18 @@ class TestWfoCpuCertification(unittest.TestCase):
             top_n_requested=5,
         )
 
-        self.assertEqual(selected_params["max_stocks"], 30)
-        self.assertEqual(selected_params["additional_buy_priority"], "highest_drop")
-        self.assertEqual(selected_params["selection_source"], "cpu_certified_finalist")
+        self.assertEqual(selected_params["max_stocks"], 20)
+        self.assertEqual(selected_params["additional_buy_priority"], "lowest_order")
+        self.assertEqual(selected_params["selection_source"], "gpu_selected_finalist_cpu_audited")
         self.assertEqual(selected_params["cpu_certification_top_n"], 5)
         self.assertEqual(selected_params["cpu_certification_shortlist_size"], 2)
-        self.assertEqual(selected_params["cpu_certification_gpu_rank"], 2)
-        self.assertAlmostEqual(selected_params["cpu_calmar_ratio"], 1.80)
+        self.assertEqual(selected_params["cpu_certification_gpu_rank"], 1)
+        self.assertEqual(selected_params["cpu_audit_outcome"], "pass")
+        self.assertAlmostEqual(selected_params["cpu_calmar_ratio"], 1.40)
+        self.assertEqual(
+            certification_df["is_gpu_selected_candidate"].tolist(),
+            [True, False],
+        )
         self.assertTrue(certification_df["cpu_certified"].all())
 
     @patch("src.analysis.walk_forward_analyzer.run_cpu_single_backtest")
@@ -254,6 +260,79 @@ class TestWfoCpuCertification(unittest.TestCase):
             wfo.certify_gpu_finalists_with_cpu(
                 self.base_config,
                 finalists,
+                selected_params_dict=finalists.iloc[0].to_dict(),
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                initial_cash=10_000_000,
+                metric="calmar_ratio",
+                top_n_requested=5,
+            )
+
+    @patch("src.analysis.walk_forward_analyzer.run_cpu_single_backtest")
+    def test_certify_gpu_finalists_with_cpu_rejects_when_gpu_selected_candidate_fails_audit(
+        self,
+        mock_run_cpu_single_backtest,
+    ):
+        finalists = pd.DataFrame(
+            [
+                {
+                    "gpu_rank": 1,
+                    "gpu_result_index": 10,
+                    "selection_reason": "gpu_top_n",
+                    "max_stocks": 20,
+                    "order_investment_ratio": 0.02,
+                    "additional_buy_drop_rate": 0.04,
+                    "sell_profit_rate": 0.05,
+                    "additional_buy_priority": 0.0,
+                    "stop_loss_rate": -0.15,
+                    "max_splits_limit": 10,
+                    "max_inactivity_period": 90,
+                    "cagr": 0.30,
+                    "mdd": -0.20,
+                    "calmar_ratio": 1.50,
+                },
+                {
+                    "gpu_rank": 2,
+                    "gpu_result_index": 11,
+                    "selection_reason": "robust_cluster",
+                    "max_stocks": 30,
+                    "order_investment_ratio": 0.03,
+                    "additional_buy_drop_rate": 0.05,
+                    "sell_profit_rate": 0.06,
+                    "additional_buy_priority": 1.0,
+                    "stop_loss_rate": -0.10,
+                    "max_splits_limit": 15,
+                    "max_inactivity_period": 60,
+                    "cagr": 0.28,
+                    "mdd": -0.15,
+                    "calmar_ratio": 1.20,
+                },
+            ]
+        )
+
+        def _fake_cpu_run(_config, *, start_date, end_date, params_dict, initial_cash):
+            max_stocks = params_dict["max_stocks"]
+            if max_stocks == 20:
+                return pd.Series([10_000_000, 9_500_000]), {
+                    "success": True,
+                    "metrics": {"calmar_ratio": 0.90, "cagr": 0.10, "mdd": -0.25},
+                    "degraded_run": False,
+                    "promotion_blocked": True,
+                }
+            return pd.Series([10_000_000, 10_500_000]), {
+                "success": True,
+                "metrics": {"calmar_ratio": 1.80, "cagr": 0.26, "mdd": -0.12},
+                "degraded_run": False,
+                "promotion_blocked": False,
+            }
+
+        mock_run_cpu_single_backtest.side_effect = _fake_cpu_run
+
+        with self.assertRaisesRegex(RuntimeError, "GPU-selected finalist failed CPU audit"):
+            wfo.certify_gpu_finalists_with_cpu(
+                self.base_config,
+                finalists,
+                selected_params_dict=finalists.iloc[0].to_dict(),
                 start_date="2024-01-01",
                 end_date="2024-01-31",
                 initial_cash=10_000_000,

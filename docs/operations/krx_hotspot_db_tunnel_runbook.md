@@ -53,6 +53,40 @@ curl -sS -o /tmp/krx_short_probe.out -w "short_selling http=%{http_code}\n" "$EN
 2. `400 LOGOUT`: 세션 맥락 이슈 가능, pykrx 실호출로 최종 판단
 3. `200` + JSON: 네트워크 통과
 
+### 1-4. 인증 세션 주입 smoke (2026-03-13 확인)
+
+2026-02-27 이후 KRX 접근 정책 변경으로, 비인증 상태에서는 `400 LOGOUT`, `403`, 빈 DataFrame, 에러 HTML이 섞여 나올 수 있습니다.
+이 호스트에서는 **비인증 collector preflight는 실패**했고, **로그인 세션을 pykrx에 주입하는 smoke는 성공**했습니다.
+
+따라서 `ShortSellingDaily` 관련 증적을 모을 때는 아래 순서를 권장합니다.
+
+1. 비인증 preflight 결과는 참고만 한다
+2. 실제 접근성 판정은 **로그인 세션 주입 smoke**로 한다
+3. smoke가 실패하면 해당 환경의 공매도 응답은 lag 근거로 쓰지 않는다
+
+실행 스크립트:
+
+```bash
+cd /root/projects/Split_Investment_Strategy_Optimizer
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+  python -u tools/operations/check_pykrx_login_session.py \
+  --date 20260227 --ticker 005930
+```
+
+성공 기준:
+
+1. `login_ok=True`
+2. `ETF ticker list` smoke 정상
+3. `short status` smoke에서 rows가 1건 이상
+
+참고:
+- 로그인 성공 후에도 직접 `getJsonData.cmd` short endpoint는 `{"OutBlock_1":[],"CURRENT_DATETIME":...}` 형태의 빈 JSON이 올 수 있습니다.
+- 현재 환경에서는 **직접 short endpoint probe보다, 로그인 세션 주입 후 pykrx smoke를 더 신뢰할 수 있는 판정 경로**로 취급합니다.
+- 자격증명은 스크립트 prompt 입력 또는 `KRX_LOGIN_ID`, `KRX_LOGIN_PW` 환경변수로 주입합니다. 쉘 히스토리에 직접 남기지 않습니다.
+- 외부 참고:
+  - pykrx issue `#276`: https://github.com/sharebook-kr/pykrx/issues/276
+  - pykrx issue `#278`: https://github.com/sharebook-kr/pykrx/issues/278
+
 ## 2) DB 접근 경로 준비
 
 ### 2-1. 기본 터널 (Linux/macOS 공통)
@@ -156,6 +190,12 @@ SELECT MIN(date), MAX(date) FROM ShortSellingDaily;
   - direct KRX probe: `market_cap http=403`, `short_selling http=403`
   - pykrx 실호출(`rapids-env`): `get_market_ticker_list(20260206/20260224/20260306)=0`, `get_market_cap/get_market_fundamental -> KeyError(empty columns)`, `get_shorting_status_by_date(..., 005930)=shape(0, 0)`, `get_stock_major_changes(005930/000660/035420)=shape(0, 0)`
   - 판정: 서버 egress 기준 차단 미해제. public 문서에는 실 egress IP를 남기지 않고, 로컬 운영 로그에만 기록
+- 인증 세션 주입 smoke 확인 시점: `2026-03-13 23:06 KST`
+  - 로그인 POST: `CD001 정상`
+  - `stock.get_etf_ticker_list(20260227)` 정상 (`etf_count=1072`)
+  - `stock.get_shorting_status_by_date(20260227, 20260227, 005930)` rows=`1`
+  - direct short endpoint with login session: `http_status=200`, body head=`{\"OutBlock_1\":[],\"CURRENT_DATETIME\":...}`
+  - 판정: 이 호스트에서는 **비인증 경로는 불가**, **로그인 세션 주입 후 pykrx smoke는 가능**
 
 민감값을 제외하고 아래 항목만 이슈/로그에 남깁니다.
 

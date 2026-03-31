@@ -36,7 +36,7 @@
 
 ### 1) 환경 구성
 ```bash
-# CPU 환경 (Standard)
+# CPU 환경 (repo-managed standard)
 conda env create -f environment.yml
 conda activate stock_optimizer_env
 
@@ -57,6 +57,7 @@ python -c "from src.db_setup import get_db_connection, create_tables; conn=get_d
 
 ### 3) 주요 실행 명령
 ```bash
+# CPU/일반 런타임 (`stock_optimizer_env`)
 # 데이터 파이프라인 및 지표 계산
 python -m src.main_script
 
@@ -68,21 +69,25 @@ python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
 python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
 python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
 
+# OHLCV 장기 백필
+python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-interval 20
+
 # CPU 백테스트
 python -m src.main_backtest
 
-# GPU 파라미터 최적화
-python -m src.parameter_simulation_gpu
-
-# GPU 시뮬레이션 성능 측정 (`--label` 필수)
-python -m src.issue98_perf_measure --label issue98_baseline --runs 3
-
-# WFO 분석 파이프라인 실행
-python -m src.walk_forward_analyzer
-
-# 테스트 / 웹 UI
-python -m unittest discover -s tests -p 'test_*.py'
+# 웹 UI
 python -m src.app
+
+# GPU/WFO 런타임 (`rapids-env`)
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.debug_gpu_single_run
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.parameter_simulation_gpu
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.issue98_perf_measure --label issue98_baseline --runs 3
+
+# WFO 분석은 GPU shortlist + CPU certification 흐름을 함께 사용
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.walk_forward_analyzer
+
+# 전체 테스트 discovery는 GPU 테스트 모듈 import 때문에 `rapids-env` 권장
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ---

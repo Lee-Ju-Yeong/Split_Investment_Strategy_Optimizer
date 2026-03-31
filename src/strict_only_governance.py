@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 from pathlib import Path
 from statistics import median
@@ -54,6 +55,35 @@ def _artifact_rows(artifact: Mapping[str, object]) -> list[dict]:
     decision = artifact.get("decision_evidence") or {}
     rows = decision.get("rows") if isinstance(decision, Mapping) else []
     return [dict(row) for row in (rows or []) if isinstance(row, Mapping)]
+
+
+def _hash_json_payload(payload: Mapping[str, object]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _final_candidate_payload(manifest: Mapping[str, object]) -> dict:
+    return {
+        "shortlist_candidate_id": _as_int(manifest.get("champion_candidate_id")),
+        "candidate_signature": str(manifest.get("champion_candidate_signature") or ""),
+        "params": dict(manifest.get("champion_params") or {}),
+    }
+
+
+def _freeze_contract_payload(manifest: Mapping[str, object]) -> dict:
+    return {
+        "decision_date": manifest.get("decision_date"),
+        "research_data_cutoff": manifest.get("research_data_cutoff"),
+        "promotion_data_cutoff": manifest.get("promotion_data_cutoff"),
+        "promotion_shortlist_path": manifest.get("promotion_shortlist_path"),
+        "promotion_shortlist_hash": manifest.get("promotion_shortlist_hash"),
+        "promotion_shortlist_mtime_utc": manifest.get("promotion_shortlist_mtime_utc"),
+        "holdout_start": manifest.get("holdout_start"),
+        "holdout_end": manifest.get("holdout_end"),
+        "canonical_promotion_wfo_end": manifest.get("canonical_promotion_wfo_end"),
+        "canonical_holdout_start": manifest.get("canonical_holdout_start"),
+        "canonical_holdout_end": manifest.get("canonical_holdout_end"),
+    }
 
 
 def _artifact_mode(rows: Sequence[Mapping[str, object]]) -> str | None:
@@ -180,13 +210,101 @@ def _artifact_window_key(artifact: Mapping[str, object]) -> str | None:
     return None
 
 
+def _lane_manifest_reasons(index: int, manifest: Mapping[str, object]) -> list[str]:
+    prefix = f"lane_manifest[{index}]"
+    reasons: list[str] = []
+    if not bool(manifest.get("approval_eligible", False)):
+        reasons.append(f"{prefix}.approval_ineligible")
+    if not bool(manifest.get("external_claim_eligible", False)):
+        reasons.append(f"{prefix}.external_claim_ineligible")
+    evidence_tier = str(manifest.get("evidence_tier") or "").strip().lower()
+    if evidence_tier and evidence_tier != "approval_grade":
+        reasons.append(f"{prefix}.evidence_tier={evidence_tier}")
+    for reason in manifest.get("reasons") or []:
+        reasons.append(f"{prefix}.reason={reason}")
+    return reasons
+
+
+def _holdout_manifest_reasons(index: int, manifest: Mapping[str, object]) -> list[str]:
+    prefix = f"holdout_manifest[{index}]"
+    reasons: list[str] = []
+    if not bool(manifest.get("approval_eligible", False)):
+        reasons.append(f"{prefix}.approval_ineligible")
+    if not bool(manifest.get("external_claim_eligible", False)):
+        reasons.append(f"{prefix}.external_claim_ineligible")
+    if not bool(manifest.get("holdout_backtest_executed", False)):
+        reasons.append(f"{prefix}.holdout_backtest_not_executed")
+    before_holdout = manifest.get("promotion_wfo_end_before_holdout")
+    if before_holdout is False:
+        reasons.append(f"{prefix}.promotion_wfo_end_before_holdout=false")
+    if bool(manifest.get("waiver_applied", False)):
+        reasons.append(f"{prefix}.waiver_applied=true")
+    for reason in manifest.get("external_claim_reasons") or []:
+        reasons.append(f"{prefix}.external_claim_reason={reason}")
+    for reason in manifest.get("reasons") or []:
+        reasons.append(f"{prefix}.reason={reason}")
+    return reasons
+
+
+def _final_candidate_manifest_reasons(index: int, manifest: Mapping[str, object]) -> list[str]:
+    prefix = f"final_candidate_manifest[{index}]"
+    reasons: list[str] = []
+    if not bool(manifest.get("champion_hard_gate_pass", False)):
+        reasons.append(f"{prefix}.champion_hard_gate_pass=false")
+    final_candidate_hash = str(manifest.get("final_candidate_hash") or "").strip()
+    if not final_candidate_hash:
+        reasons.append(f"{prefix}.final_candidate_hash_missing")
+    elif _hash_json_payload(_final_candidate_payload(manifest)) != final_candidate_hash:
+        reasons.append(f"{prefix}.final_candidate_hash_mismatch")
+    if not dict(manifest.get("champion_params") or {}):
+        reasons.append(f"{prefix}.champion_params_missing")
+    freeze_contract_hash = str(manifest.get("freeze_contract_hash") or "").strip()
+    if not freeze_contract_hash:
+        reasons.append(f"{prefix}.freeze_contract_hash_missing")
+    elif _hash_json_payload(_freeze_contract_payload(manifest)) != freeze_contract_hash:
+        reasons.append(f"{prefix}.freeze_contract_hash_mismatch")
+    if not bool(manifest.get("freeze_contract_verified", False)):
+        reasons.append(f"{prefix}.freeze_contract_verified=false")
+    if not bool(manifest.get("promotion_shortlist_hash_verified", False)):
+        reasons.append(f"{prefix}.promotion_shortlist_hash_verified=false")
+    if bool(manifest.get("promotion_shortlist_modified_after_decision_date", False)):
+        reasons.append(f"{prefix}.promotion_shortlist_modified_after_decision_date=true")
+    if not bool(manifest.get("canonical_holdout_contract_verified", False)):
+        reasons.append(f"{prefix}.canonical_holdout_contract_verified=false")
+    cpu_audit_required = bool(manifest.get("cpu_audit_required", False))
+    cpu_audit_outcome = str(manifest.get("cpu_audit_outcome") or "").strip().lower()
+    if cpu_audit_required and cpu_audit_outcome != "pass":
+        reasons.append(
+            f"{prefix}.cpu_audit_required_for_final_candidate={cpu_audit_outcome or 'missing'}"
+        )
+    holdout_ready = manifest.get("holdout_ready")
+    if holdout_ready is False:
+        reasons.append(f"{prefix}.holdout_ready=false")
+    holdout_status = str(manifest.get("holdout_execution_status") or "").strip().lower()
+    if holdout_status in {"blocked", "failed"}:
+        reasons.append(f"{prefix}.holdout_execution_status={holdout_status}")
+    for reason in manifest.get("freeze_contract_reasons") or []:
+        reasons.append(f"{prefix}.freeze_contract_reason={reason}")
+    for reason in manifest.get("holdout_readiness_reasons") or []:
+        reasons.append(f"{prefix}.holdout_readiness_reason={reason}")
+    for reason in manifest.get("holdout_execution_reasons") or []:
+        reasons.append(f"{prefix}.holdout_execution_reason={reason}")
+    return reasons
+
+
 def summarize_issue97_observation(
     run_manifests: Sequence[Mapping[str, object]],
     *,
     parity_artifacts: Sequence[Mapping[str, object]] | None = None,
+    lane_manifests: Sequence[Mapping[str, object]] | None = None,
+    holdout_manifests: Sequence[Mapping[str, object]] | None = None,
+    final_candidate_manifests: Sequence[Mapping[str, object]] | None = None,
 ) -> dict:
     manifests = [dict(doc) for doc in run_manifests]
     parity_docs = list(parity_artifacts or [])
+    lane_docs = [dict(doc) for doc in (lane_manifests or [])]
+    holdout_docs = [dict(doc) for doc in (holdout_manifests or [])]
+    final_candidate_docs = [dict(doc) for doc in (final_candidate_manifests or [])]
     empty_rates = []
     tier1_coverages = []
     non_strict_runs = 0
@@ -253,6 +371,12 @@ def summarize_issue97_observation(
             "matched_parity_windows="
             f"{len(matched_parity_window_keys)}<{MIN_MATCHED_PARITY_WINDOWS}"
         )
+    if len(lane_docs) < 1:
+        reasons.append("lane_manifest_count=0<1")
+    if len(holdout_docs) < 1:
+        reasons.append("holdout_manifest_count=0<1")
+    if len(final_candidate_docs) < 1:
+        reasons.append("final_candidate_manifest_count=0<1")
     if non_strict_runs > 0:
         reasons.append(f"non_strict_run_count={non_strict_runs}")
     if failed_runs > 0:
@@ -287,6 +411,12 @@ def summarize_issue97_observation(
         )
     if parity_mismatch_runs > 0:
         reasons.append(f"parity_mismatch_runs={parity_mismatch_runs}")
+    for index, lane_manifest in enumerate(lane_docs):
+        reasons.extend(_lane_manifest_reasons(index, lane_manifest))
+    for index, holdout_manifest in enumerate(holdout_docs):
+        reasons.extend(_holdout_manifest_reasons(index, holdout_manifest))
+    for index, final_candidate_manifest in enumerate(final_candidate_docs):
+        reasons.extend(_final_candidate_manifest_reasons(index, final_candidate_manifest))
     return {
         "approved": len(reasons) == 0,
         "observation_mode": "synthetic_window_pack",
@@ -294,6 +424,9 @@ def summarize_issue97_observation(
         "unique_backtest_windows": int(len(unique_windows)),
         "strict_only_run_count": int(len(manifests) - non_strict_runs),
         "parity_sample_count": int(len(parity_docs)),
+        "lane_manifest_count": int(len(lane_docs)),
+        "holdout_manifest_count": int(len(holdout_docs)),
+        "final_candidate_manifest_count": int(len(final_candidate_docs)),
         "parity_window_count": int(len(parity_window_keys)),
         "matched_parity_windows": int(len(matched_parity_window_keys)),
         "promotion_blocked_runs": int(promotion_blocked_runs),
@@ -343,6 +476,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parity-json", action="append", default=[], help="Path to parity JSON artifact.")
     parser.add_argument("--run-manifest-json", action="append", default=[], help="Path to run_manifest.json.")
     parser.add_argument("--run-manifest-glob", action="append", default=[], help="Glob for run_manifest.json files.")
+    parser.add_argument("--lane-manifest-json", action="append", default=[], help="Path to lane_manifest.json.")
+    parser.add_argument("--holdout-manifest-json", action="append", default=[], help="Path to holdout_manifest.json.")
+    parser.add_argument(
+        "--final-candidate-manifest-json",
+        action="append",
+        default=[],
+        help="Path to final_candidate_manifest.json.",
+    )
     parser.add_argument("--out", default="", help="Optional output JSON path.")
     return parser
 
@@ -358,6 +499,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = summarize_issue97_observation(
             _load_json_documents(manifest_paths),
             parity_artifacts=parity_docs,
+            lane_manifests=_load_json_documents(args.lane_manifest_json),
+            holdout_manifests=_load_json_documents(args.holdout_manifest_json),
+            final_candidate_manifests=_load_json_documents(args.final_candidate_manifest_json),
         )
     rendered = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.out:
