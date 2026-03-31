@@ -438,6 +438,45 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 - `후보 고정`, `최종 후보 봉인`, `holdout 차단`, `기본 행동 충분성 확인`도 코드에 많이 들어왔다.
 - 하지만 아직 `정말 대외 설명 가능한 마지막 승인 보고서`까지는 완전히 닫히지 않았다.
 
+## 11-1. 최신 실행 스냅샷 (2026-03-24)
+기준 실행 폴더:
+- `results/wfo_run_20260323_215211`
+
+이번 실행에서 확인된 것:
+- `promotion WFO`에서 `candidate 6`이 최종 후보(champion)로 선택되었다.
+핵심 심사 기준(이번 실행):
+- `fold 통과율`: `3개 중 2개 통과(2/3)`
+- `MDD P95`: `0.409` (완화 기준 `<= 0.41` 충족)
+- `CPU audit(계산 검산)`은 `pass`로 통과했다.
+- `holdout 자동 실행`도 실제로 수행되었고, 기술적으로는 성공했다(`attempted=true`, `success=true`).
+
+하지만 아직 최종 승인(approval-grade)이 아닌 이유:
+- 현재 holdout 길이가 `221 거래일`이라서
+- 정책 최소치 `504 거래일(약 24개월)`에 못 미친다.
+- 그래서 현재 등급은 `internal_provisional(내부 잠정)`이며
+- `approval_eligible=false`, `external_claim_eligible=false` 상태다.
+
+초심자 한 줄 요약:
+- `엔진은 제대로 동작했고 후보도 골랐지만, 마지막 시험지 길이가 짧아서 아직 공식 합격은 아니다.`
+
+## 11-2. 최신 승인 스냅샷 (2026-03-24, update)
+기준 실행 폴더:
+- `results/wfo_run_20260324_125326`
+
+이번 실행에서 확인된 것:
+- `promotion WFO`에서 `candidate 3`이 최종 후보(champion)로 선택되었다.
+- 하드게이트 통과 후보가 실제로 존재했고(`candidate 3`, `candidate 1`), tie-break 규칙으로 최종 1개가 확정되었다.
+- `CPU audit(계산 검산)`은 `pass`였다.
+- `holdout`은 실제 실행되었고(`attempted=true`, `success=true`) 차단 없이 완료되었다.
+
+최종 판정:
+- `lane_manifest`: `approval_eligible=true`, `external_claim_eligible=true`
+- `holdout_manifest`: `internal_approval_ready`, `approval_eligible=true`, `external_claim_eligible=true`
+- 즉, 이번 run은 현재 계약 기준으로 `approval-grade(승인 등급)` 판정을 받았다.
+
+다만 성과 해석 주의:
+- holdout 지표는 `CAGR 약 1.32%`, `MDD 약 -34.4%`, `Calmar 약 0.038`로, 절차 합격과 투자 매력도는 별개로 해석해야 한다.
+
 ## 12. 아직 남은 핵심 작업
 ### 12-1. 행동지표(behavior metrics, 전략이 실제로 어떻게 움직였는지 보여 주는 지표) 보고서 고도화
 - 지금도 기본 행동지표는 보지만, 이것을 더 설득력 있는 설명용 보고서로 키우는 작업이 남아 있다.
@@ -448,12 +487,9 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 - 를 더 쉽게 보여 주는 비교 보고서가 필요하다.
 
 ### 12-2. approval-grade holdout 마감
-- 현재 정책 목표는 `24개월 이상 holdout`이다.
-- 하지만 지금 저장소 기준 대표 holdout은 아직 짧다.
-- 그래서 지금 상태는:
-  - `내부 검토와 구조 정리는 많이 됐지만`
-  - `완전한 최종 승인 증거라고 부를 마지막 구간은 아직 마감 중`
-- 에 가깝다.
+- 이번 최신 run(`wfo_run_20260324_125326`)에서 현재 계약 기준 `approval-grade`를 달성했다.
+- 즉, `절차 합격` 관점에서는 holdout 마감이 완료된 상태다.
+- 다만 남은 과제는 `성과 품질 기준(절대 수익/위험 기준)`을 정책에 추가할지 여부다.
 
 ## 13. 경영 관점에서 보면 지금 어디까지 왔나
 ### 13-1. 이미 해결한 것
@@ -465,7 +501,7 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 
 ### 13-2. 아직 남은 것
 - 행동지표와 비교 실험(ablation, 일부 조건을 바꿔 보며 설명력을 높이는 실험) 보고서 고도화
-- approval-grade holdout 최종 마감
+- 절차 합격 이후의 성과 품질 기준(예: 최소 Calmar/CAGR) 정책화
 
 ### 13-3. 이 작업의 의미
 - 이건 단순히 성능 숫자를 조금 올리는 작업이 아니다.
@@ -485,3 +521,72 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
 - [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
 - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+
+## 16. approval-grade로 닫는 실행 체크리스트 (2년 holdout, 초심자용)
+아래 순서는 `내 터미널(WSL)`에서 그대로 따라 하기 쉽게 정리한 것이다.
+
+### 16-1. 먼저 확인: 2년 holdout 거래일 수(거래가 실제 있었던 날짜 수)
+```bash
+MYSQL_PWD='@waren2ss' mysql -uroot -h127.0.0.1 stocks -Nse \
+"SELECT COUNT(DISTINCT date) AS trading_days \
+ FROM DailyStockPrice \
+ WHERE date BETWEEN '2024-01-01' AND '2025-12-31';"
+```
+
+해석:
+- 출력 숫자가 `holdout_min_length_days` 이상이어야 `holdout_too_short`를 피할 수 있다.
+- 현재 기본 정책(`trading_days`)은 보통 `504`일을 기준으로 본다.
+
+### 16-2. 실행용 config(이미 생성됨)
+이미 아래 파일이 준비되어 있다:
+- `config/config.issue98_promotion_dual_window_core6_approval_holdout2y_20260324.yaml`
+
+필요하면 이 파일만 열어서 값 점검:
+- `backtest_settings.end_date: '2023-12-31'` (promotion WFO 종료일과 맞춰야 holdout 분리가 성립)
+- `walk_forward_settings.research_data_cutoff: '2023-12-31'`
+- `walk_forward_settings.promotion_data_cutoff: '2023-12-31'`
+- `walk_forward_settings.canonical_promotion_wfo_end: '2023-12-31'`
+- `walk_forward_settings.canonical_holdout_start: '2024-01-01'`
+- `walk_forward_settings.canonical_holdout_end: '2025-12-31'`
+- `walk_forward_settings.holdout_start: '2024-01-01'`
+- `walk_forward_settings.holdout_end: '2025-12-31'`
+- `walk_forward_settings.holdout_min_length_days: 486` (이 DB 기준 2년 거래일 하한)
+- `walk_forward_settings.selection_contract.min_oos_is_calmar_ratio_median: 0.5`
+- `walk_forward_settings.selection_contract.max_oos_mdd_depth_p95: 0.435`
+
+주의:
+- `holdout_contaminated_ranges(오염 구간)`이 holdout과 겹치면 자동 차단될 수 있다.
+- 이 값은 팀 정책(거버넌스, 운영 규칙) 결정 후에만 수정한다.
+
+### 16-3. 실행
+```bash
+MAGICSPLIT_CONFIG_PATH=/root/projects/Split_Investment_Strategy_Optimizer/config/config.issue98_promotion_dual_window_core6_approval_holdout2y_20260324.yaml \
+CONDA_NO_PLUGINS=true conda run -n rapids-env \
+python -m src.walk_forward_analyzer
+```
+
+### 16-4. 실행 직후 확인(가장 중요한 4줄)
+```bash
+LATEST_DIR=$(ls -td results/wfo_run_* | head -n 1)
+echo "$LATEST_DIR"
+sed -n '1,220p' "$LATEST_DIR/final_candidate_manifest.json"
+sed -n '1,220p' "$LATEST_DIR/holdout_manifest.json"
+```
+
+통과 판단(초심자 기준):
+- `final_candidate_manifest.json`
+- `cpu_audit_outcome == "pass"`
+- `holdout_execution_status == "executed"`
+- `holdout_success == true`
+- `holdout_manifest.json`
+- `approval_eligible == true`
+- `external_claim_eligible == true`
+- `reasons`가 비어 있거나, 승인 차단 사유가 없어야 한다.
+
+### 16-5. 실패 시 바로 보는 포인트
+- `holdout_too_short=...`
+- holdout 기간(또는 최소 길이 정책) 재검토 필요
+- `holdout_range_contaminated`
+- holdout 구간과 canary/오염 구간이 겹친 상태
+- `missing_adequacy_fields=...` 또는 adequacy 실패
+- 거래/자본 투입 충분성 지표가 비어 있거나 기준 미달
