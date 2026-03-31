@@ -105,6 +105,7 @@ class TestMainBacktestArtifactMode(unittest.TestCase):
         self.assertIsNone(result["plot_file_path"])
         self.assertIsNone(result["trade_file_path"])
         self.assertEqual(len(result["daily_values"]), 2)
+        self.assertEqual(len(result["daily_snapshots"]), 2)
         mock_write_manifest.assert_not_called()
         mock_data_handler.assert_called_once()
         mock_strategy.assert_called_once()

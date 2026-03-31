@@ -17,7 +17,7 @@
 
 ## 2. Quick Commands
 
-> Last Verified: 2026-03-10
+> Last Verified: 2026-03-18
 > 엔트리포인트/CLI 옵션 변경 시 이 섹션을 즉시 갱신합니다.
 
 ```bash
@@ -32,6 +32,7 @@ cp config/config.example.yaml config/config.yaml  # 후 DB 정보 수정
 # DB 스키마 반영
 python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"
 
+# CPU/일반 런타임 (`stock_optimizer_env`)
 # 데이터 파이프라인 (Legacy/General)
 python -m src.main_script
 
@@ -48,21 +49,20 @@ python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-inte
 
 # 백테스팅
 python -m src.main_backtest        # CPU 백테스트 (Source of Truth)
-python -m src.debug_gpu_single_run # GPU 단일 파라미터 백테스트
-
-# 파라미터 최적화 및 성능 측정
-python -m src.parameter_simulation_gpu     # GPU 대규모 파라미터 최적화
-python -m src.issue98_perf_measure --label issue98_baseline --runs 3  # GPU 시뮬레이션 성능 측정 (Throughput)
-
-# Walk-Forward Optimization
-python -m src.walk_forward_analyzer        # WFO 전체 파이프라인
-
-# 테스트
-python -m unittest discover -s tests -p 'test_*.py'  # 전체 테스트
-python -m unittest tests.test_portfolio              # 단일 모듈 테스트
 
 # 웹 UI
 python -m src.app                          # Flask (localhost:5000)
+
+# GPU/WFO 런타임 (`rapids-env`)
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.debug_gpu_single_run
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.parameter_simulation_gpu
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.issue98_perf_measure --label issue98_baseline --runs 3
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.walk_forward_analyzer
+python -m src.analysis.shortlist_derivation derive-shortlist --bundle-manifest <PATH/window_bundle_manifest.json> --out-dir <PATH/out_dir>
+
+# 테스트
+CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests -p 'test_*.py'  # 전체 테스트 discovery
+CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest tests.test_portfolio       # CPU 단일 모듈 테스트
 ```
 
 ---
@@ -86,6 +86,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `main_backtest.py`: CPU 백테스트 실행 (결과 검증 기준)
 - `parameter_simulation_gpu.py`: GPU 대규모 파라미터 최적화 (Engine Wrapper)
 - `walk_forward_analyzer.py`: WFO 전체 프로세스 제어
+- `analysis/shortlist_derivation.py`: N-window standalone simulation 결과를 frozen shortlist + provenance artifact로 압축
 - `issue98_perf_measure.py`: GPU 시뮬레이션 Throughput 측정 및 프로파일링
 
 **CPU Backtester (OOP, Single-threaded):**

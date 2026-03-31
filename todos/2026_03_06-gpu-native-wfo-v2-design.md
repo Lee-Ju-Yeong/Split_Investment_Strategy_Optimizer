@@ -425,4 +425,4 @@ fold manifest
 - `TODO.md`
 - `todos/2026_03_06-performance-stability-review.md`
 - `todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md`
-- `todos/2026_02_17-issue98-gpu-throughput-refactor.md`
+- `todos/done_2026_02_17-issue98-gpu-throughput-refactor.md`

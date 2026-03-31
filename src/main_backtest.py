@@ -400,6 +400,7 @@ def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) ->
             "run_manifest_path": run_manifest_path.replace('\\', '/') if run_manifest_path else None,
             "plot_file_path": plot_file_path,
             "trade_file_path": trade_filepath_for_response,
+            "daily_snapshots": history_df.reset_index().to_dict("records"),
             "daily_values": daily_values_for_response.reset_index().rename(columns={'date': 'x', 'total_value': 'y'}).to_dict('records'),
             "final_positions": final_positions_list,
             "trade_history": trade_history_list

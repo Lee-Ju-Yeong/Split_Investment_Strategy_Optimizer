@@ -128,7 +128,7 @@
 ## 9. References
 - GitHub issue: `#104`
 - GitHub issue URL: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/104`
-- previous tranche: `todos/2026_02_17-issue98-gpu-throughput-refactor.md`
+- previous tranche: `todos/done_2026_02_17-issue98-gpu-throughput-refactor.md`
 - current branch: `feature/issue98-followup-hotpath`
 
 ## 10. Working Log
