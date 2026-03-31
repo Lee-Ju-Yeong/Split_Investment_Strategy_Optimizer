@@ -62,6 +62,13 @@ DEFAULT_MAX_RANK_PERCENTILE = 15.0
 DEFAULT_OPTIONAL_FAIL_BUDGET = 0
 DEFAULT_SHORTLIST_SIZE = 10
 APPROVAL_COMPATIBLE_MAX_WINDOWS = 3
+DEFAULT_EXACT_DUPLICATE_RESULT_METRICS = (
+    "final_value",
+    "cagr",
+    "mdd",
+    "calmar_ratio",
+)
+SUPPORTED_DUPLICATE_RESOLUTION_RULES = {"min", "max"}
 
 
 @dataclass(frozen=True)
@@ -154,12 +161,10 @@ def _candidate_signature(row: dict[str, Any]) -> str:
 def _family_signature(
     row: dict[str, Any],
     *,
-    excluded_parameters: tuple[str, ...],
+    family_parameters: tuple[str, ...],
 ) -> str:
     parts = []
-    for key in PARAMETER_KEYS:
-        if key in excluded_parameters:
-            continue
+    for key in family_parameters:
         parts.append(f"{key}={_normalize_param_value(key, row.get(key))}")
     return "|".join(parts)
 
@@ -201,6 +206,107 @@ def _require_selection_metric(raw_value: Any) -> str:
             + ", ".join(SUPPORTED_SELECTION_METRICS)
         )
     return metric
+
+
+def _normalize_family_parameter_keys(raw_values: Any, *, field_name: str) -> tuple[str, ...]:
+    values = list(raw_values or [])
+    normalized_keys: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        key = str(raw_value or "").strip()
+        if key not in PARAMETER_KEYS:
+            raise ValueError(
+                f"{field_name} contains unsupported parameter: {key}. "
+                f"Supported keys: {', '.join(PARAMETER_KEYS)}"
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_keys.append(key)
+    return tuple(key for key in PARAMETER_KEYS if key in normalized_keys)
+
+
+def _resolve_family_grouping(selection_contract: dict[str, Any]) -> dict[str, Any]:
+    has_included = "family_included_parameters" in selection_contract
+    has_excluded = "family_excluded_parameters" in selection_contract
+    if has_included and has_excluded:
+        raise ValueError(
+            "selection_contract cannot define both family_included_parameters "
+            "and family_excluded_parameters."
+        )
+
+    if has_included:
+        included_parameters = _normalize_family_parameter_keys(
+            selection_contract.get("family_included_parameters"),
+            field_name="family_included_parameters",
+        )
+        if not included_parameters:
+            raise ValueError("family_included_parameters must not be empty.")
+        return {
+            "mode": "included_parameters",
+            "family_parameters": included_parameters,
+            "included_parameters": included_parameters,
+            "excluded_parameters": tuple(
+                key for key in PARAMETER_KEYS if key not in included_parameters
+            ),
+        }
+
+    excluded_parameters = _normalize_family_parameter_keys(
+        selection_contract.get("family_excluded_parameters", DEFAULT_FAMILY_EXCLUDED_PARAMETERS),
+        field_name="family_excluded_parameters",
+    )
+    family_parameters = tuple(key for key in PARAMETER_KEYS if key not in excluded_parameters)
+    if not family_parameters:
+        raise ValueError("family_excluded_parameters cannot exclude every parameter.")
+    return {
+        "mode": "excluded_parameters",
+        "family_parameters": family_parameters,
+        "included_parameters": family_parameters,
+        "excluded_parameters": excluded_parameters,
+    }
+
+
+def _resolve_exact_duplicate_resolution(selection_contract: dict[str, Any]) -> dict[str, Any]:
+    settings = dict(selection_contract.get("exact_duplicate_resolution") or {})
+    enabled = bool(settings.get("enabled", False))
+    metric_keys = tuple(
+        str(item).strip()
+        for item in settings.get(
+            "result_metric_keys",
+            DEFAULT_EXACT_DUPLICATE_RESULT_METRICS,
+        )
+        if str(item).strip()
+    )
+    if not metric_keys:
+        raise ValueError("exact_duplicate_resolution.result_metric_keys must not be empty.")
+
+    raw_rules = dict(settings.get("variable_rules") or {})
+    variable_rules: dict[str, str] = {}
+    for key, raw_value in raw_rules.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key not in PARAMETER_KEYS:
+            raise ValueError(
+                "exact_duplicate_resolution.variable_rules contains unsupported parameter: "
+                f"{normalized_key}"
+            )
+        normalized_rule = str(raw_value or "").strip().lower()
+        if normalized_rule not in SUPPORTED_DUPLICATE_RESOLUTION_RULES:
+            raise ValueError(
+                "exact_duplicate_resolution.variable_rules values must be one of: "
+                + ", ".join(sorted(SUPPORTED_DUPLICATE_RESOLUTION_RULES))
+            )
+        variable_rules[normalized_key] = normalized_rule
+
+    if enabled and not variable_rules:
+        raise ValueError(
+            "exact_duplicate_resolution.enabled=true requires at least one variable_rules entry."
+        )
+
+    return {
+        "enabled": enabled,
+        "result_metric_keys": metric_keys,
+        "variable_rules": variable_rules,
+    }
 
 
 def _load_window_specs(bundle_manifest: dict[str, Any], *, manifest_path: Path) -> list[WindowSpec]:
@@ -336,6 +442,47 @@ def _window_observation_for_candidate(
     )
 
 
+def _candidate_metric_weight_pairs(
+    prepared_windows: list[PreparedWindow],
+    observations: list[WindowObservation],
+    metric: str,
+) -> list[tuple[float, float]]:
+    pairs: list[tuple[float, float]] = []
+    for prepared_window, observation in zip(prepared_windows, observations):
+        if observation.row is None:
+            continue
+        pairs.append((_metric_value(observation.row, metric), prepared_window.spec.weight))
+    return pairs
+
+
+def _passes_aggregate_thresholds(
+    *,
+    prepared_windows: list[PreparedWindow],
+    observations: list[WindowObservation],
+    thresholds: dict[str, float],
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    for key, raw_threshold in thresholds.items():
+        threshold = float(raw_threshold)
+        if key.endswith("_mean_min"):
+            metric = key[:-9]
+            pairs = _candidate_metric_weight_pairs(prepared_windows, observations, metric)
+            if not pairs or _weighted_mean(pairs) < threshold:
+                reasons.append(f"{metric}_mean_min")
+            continue
+        if key.endswith("_mean_max"):
+            metric = key[:-9]
+            pairs = _candidate_metric_weight_pairs(prepared_windows, observations, metric)
+            if not pairs or _weighted_mean(pairs) > threshold:
+                reasons.append(f"{metric}_mean_max")
+            continue
+        raise ValueError(
+            "aggregate_minimum_criteria keys must end with _mean_min or _mean_max. "
+            f"Received: {key}"
+        )
+    return (not reasons), reasons
+
+
 def _weighted_mean(pairs: list[tuple[float, float]]) -> float:
     if not pairs:
         return 0.0
@@ -370,6 +517,135 @@ def _robust_score(observations: list[tuple[WindowSpec, WindowObservation]]) -> t
         "selection_score_std": std_selection,
         "mean_cagr_score": mean_cagr,
         "mean_mdd_score": mean_mdd,
+    }
+
+
+def _candidate_result_profile(
+    candidate: dict[str, Any],
+    *,
+    result_metric_keys: tuple[str, ...],
+) -> tuple[tuple[Any, ...], ...]:
+    observations = sorted(
+        candidate["window_observations"],
+        key=lambda item: item.window_id,
+    )
+    profile: list[tuple[Any, ...]] = []
+    for observation in observations:
+        if observation.row is None:
+            profile.append((observation.window_id, None))
+            continue
+        profile.append(
+            tuple([observation.window_id] + [observation.row.get(key) for key in result_metric_keys])
+        )
+    return tuple(profile)
+
+
+def _duplicate_group_key(
+    candidate: dict[str, Any],
+    *,
+    varying_key: str,
+    result_metric_keys: tuple[str, ...],
+) -> tuple[Any, ...]:
+    fixed_params = tuple(
+        (key, _normalize_param_value(key, candidate["params"].get(key)))
+        for key in PARAMETER_KEYS
+        if key != varying_key
+    )
+    return (
+        varying_key,
+        fixed_params,
+        _candidate_result_profile(candidate, result_metric_keys=result_metric_keys),
+    )
+
+
+def _select_duplicate_representative(
+    candidates: list[dict[str, Any]],
+    *,
+    varying_key: str,
+    rule: str,
+) -> dict[str, Any]:
+    if rule == "min":
+        return min(
+            candidates,
+            key=lambda item: (
+                _parameter_as_numeric(varying_key, item["params"].get(varying_key)),
+                -float(item["robust_score"]),
+                item["candidate_signature"],
+            ),
+        )
+    return min(
+        candidates,
+        key=lambda item: (
+            -_parameter_as_numeric(varying_key, item["params"].get(varying_key)),
+            -float(item["robust_score"]),
+            item["candidate_signature"],
+        ),
+    )
+
+
+def _compress_exact_duplicates(
+    candidates: list[dict[str, Any]],
+    *,
+    resolution_settings: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not resolution_settings["enabled"]:
+        return candidates, {
+            "enabled": False,
+            "pre_count": len(candidates),
+            "post_count": len(candidates),
+            "removed_count": 0,
+            "resolved_groups": [],
+        }
+
+    current_candidates = list(candidates)
+    resolved_groups: list[dict[str, Any]] = []
+    for varying_key, rule in resolution_settings["variable_rules"].items():
+        grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for candidate in current_candidates:
+            key = _duplicate_group_key(
+                candidate,
+                varying_key=varying_key,
+                result_metric_keys=resolution_settings["result_metric_keys"],
+            )
+            grouped.setdefault(key, []).append(candidate)
+
+        next_candidates: list[dict[str, Any]] = []
+        for group_candidates in grouped.values():
+            if len(group_candidates) == 1:
+                next_candidates.extend(group_candidates)
+                continue
+
+            representative = _select_duplicate_representative(
+                group_candidates,
+                varying_key=varying_key,
+                rule=rule,
+            )
+            removed_candidates = [
+                candidate
+                for candidate in group_candidates
+                if candidate["candidate_signature"] != representative["candidate_signature"]
+            ]
+            resolved_groups.append(
+                {
+                    "varying_key": varying_key,
+                    "rule": rule,
+                    "kept_candidate_signature": representative["candidate_signature"],
+                    "removed_candidate_signatures": [
+                        candidate["candidate_signature"] for candidate in removed_candidates
+                    ],
+                }
+            )
+            next_candidates.append(representative)
+        current_candidates = next_candidates
+
+    return current_candidates, {
+        "enabled": True,
+        "pre_count": len(candidates),
+        "post_count": len(current_candidates),
+        "removed_count": len(candidates) - len(current_candidates),
+        "resolved_groups": resolved_groups,
+        "result_metric_keys": list(resolution_settings["result_metric_keys"]),
+        "variable_rules": dict(resolution_settings["variable_rules"]),
     }
 
 
@@ -490,6 +766,9 @@ def _render_summary(
     optional_fail_budget: int,
     selection_metric: str,
     max_rank_percentile: float,
+    family_grouping: dict[str, Any],
+    aggregate_thresholds: dict[str, float],
+    exact_duplicate_summary: dict[str, Any],
 ) -> str:
     lines = [
         "# N-Window Shortlist Derivation Summary",
@@ -500,6 +779,8 @@ def _render_summary(
         f"- Selection metric: `{selection_metric}`",
         f"- Hard gate max rank percentile: `{max_rank_percentile}`",
         f"- Optional fail budget: `{optional_fail_budget}`",
+        f"- Family grouping mode: `{family_grouping['mode']}`",
+        f"- Family grouping parameters: `{', '.join(family_grouping['family_parameters'])}`",
         "",
         "## Window Roles",
         "",
@@ -510,6 +791,30 @@ def _render_summary(
             f"`{window.window_id}` role=`{window.window_role}` "
             f"rows=`{window.row_count}` csv=`{window.csv_path}`"
         )
+    if aggregate_thresholds:
+        lines.extend(
+            [
+                "",
+                "## Aggregate Gates",
+                "",
+            ]
+        )
+        for key, value in aggregate_thresholds.items():
+            lines.append(f"- `{key}` = `{value}`")
+    if exact_duplicate_summary.get("enabled"):
+        lines.extend(
+            [
+                "",
+                "## Exact Duplicate Compression",
+                "",
+                f"- Pre-count: `{exact_duplicate_summary['pre_count']}`",
+                f"- Post-count: `{exact_duplicate_summary['post_count']}`",
+                f"- Removed: `{exact_duplicate_summary['removed_count']}`",
+                f"- Result metrics: `{', '.join(exact_duplicate_summary['result_metric_keys'])}`",
+            ]
+        )
+        for key, rule in exact_duplicate_summary["variable_rules"].items():
+            lines.append(f"- `{key}` rule=`{rule}`")
     lines.extend(
         [
             "",
@@ -556,15 +861,15 @@ def derive_shortlist(
 
     governance = dict(bundle_manifest.get("governance_gates") or {})
     thresholds = dict(governance.get("minimum_criteria") or {})
+    aggregate_thresholds = dict(governance.get("aggregate_minimum_criteria") or {})
     max_rank_percentile = float(governance.get("max_rank_percentile", DEFAULT_MAX_RANK_PERCENTILE))
     optional_fail_budget = int(governance.get("optional_fail_budget", DEFAULT_OPTIONAL_FAIL_BUDGET))
 
     selection_contract = dict(bundle_manifest.get("selection_contract") or {})
     selection_metric = _require_selection_metric(selection_contract.get("selection_metric"))
     shortlist_size = int(selection_contract.get("shortlist_size", DEFAULT_SHORTLIST_SIZE))
-    excluded_parameters = tuple(
-        selection_contract.get("family_excluded_parameters") or DEFAULT_FAMILY_EXCLUDED_PARAMETERS
-    )
+    family_grouping = _resolve_family_grouping(selection_contract)
+    exact_duplicate_resolution = _resolve_exact_duplicate_resolution(selection_contract)
 
     prepared_windows: list[PreparedWindow] = []
     for spec in window_specs:
@@ -610,6 +915,13 @@ def derive_shortlist(
         ]
         if mandatory_failed or len(optional_failed) > optional_fail_budget:
             continue
+        aggregate_pass, _ = _passes_aggregate_thresholds(
+            prepared_windows=prepared_windows,
+            observations=observations,
+            thresholds=aggregate_thresholds,
+        )
+        if not aggregate_pass:
+            continue
 
         first_row = next((obs.row for obs in observations if obs.row is not None), None)
         if first_row is None:
@@ -623,7 +935,7 @@ def derive_shortlist(
                 "candidate_signature": signature,
                 "family_signature": _family_signature(
                     first_row,
-                    excluded_parameters=excluded_parameters,
+                    family_parameters=family_grouping["family_parameters"],
                 ),
                 "params": params,
                 "robust_score": robust_score,
@@ -634,6 +946,11 @@ def derive_shortlist(
                 "failed_window_count": sum(1 for obs in observations if not obs.passed_gate),
             }
         )
+
+    candidate_records, exact_duplicate_summary = _compress_exact_duplicates(
+        candidate_records,
+        resolution_settings=exact_duplicate_resolution,
+    )
 
     family_groups: dict[str, list[dict[str, Any]]] = {}
     for candidate in candidate_records:
@@ -710,6 +1027,12 @@ def derive_shortlist(
         "search_space_hash": _hash_json_sha256(sorted(all_signatures)),
         "runtime_budget": bundle_manifest.get("runtime_budget"),
         "selection_metric": selection_metric,
+        "aggregate_minimum_criteria": aggregate_thresholds,
+        "family_grouping_mode": family_grouping["mode"],
+        "family_grouping_parameters": list(family_grouping["family_parameters"]),
+        "family_excluded_parameters": list(family_grouping["excluded_parameters"]),
+        "family_included_parameters": list(family_grouping["included_parameters"]),
+        "exact_duplicate_resolution": exact_duplicate_summary,
         "aggregation_rule_version": DEFAULT_AGGREGATION_RULE_VERSION,
         "tie_break_rule_version": DEFAULT_TIE_BREAK_RULE_VERSION,
         "shortlist_hash": shortlist_hash,
@@ -737,6 +1060,10 @@ def derive_shortlist(
         "max_rank_percentile": max_rank_percentile,
         "optional_fail_budget": optional_fail_budget,
         "minimum_criteria": thresholds,
+        "aggregate_minimum_criteria": aggregate_thresholds,
+        "exact_duplicate_resolution": exact_duplicate_summary,
+        "family_grouping_mode": family_grouping["mode"],
+        "family_grouping_parameters": list(family_grouping["family_parameters"]),
         "candidate_ranking": candidate_ranking,
     }
 
@@ -759,6 +1086,9 @@ def derive_shortlist(
             optional_fail_budget=optional_fail_budget,
             selection_metric=selection_metric,
             max_rank_percentile=max_rank_percentile,
+            family_grouping=family_grouping,
+            aggregate_thresholds=aggregate_thresholds,
+            exact_duplicate_summary=exact_duplicate_summary,
         )
         + "\n",
         encoding="utf-8",
