@@ -86,10 +86,13 @@ def _coerce_datetime_utc(value):
     if value is None or str(value).strip() == "":
         return None
     raw = str(value).strip()
-    try:
-        resolved = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
         resolved = datetime.combine(_coerce_date(raw), time.max)
+    else:
+        try:
+            resolved = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            resolved = datetime.combine(_coerce_date(raw), time.max)
     if resolved.tzinfo is None:
         return resolved.replace(tzinfo=timezone.utc)
     return resolved.astimezone(timezone.utc)
@@ -100,7 +103,11 @@ def _require_decision_date(value, *, context_label: str) -> str:
         raise ValueError(
             f"{context_label} requires walk_forward_settings.decision_date."
         )
-    return _coerce_date(value).isoformat()
+    raw = str(value).strip()
+    _coerce_datetime_utc(raw)
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        return _coerce_date(raw).isoformat()
+    return raw
 
 
 def _inclusive_day_count(start_date, end_date) -> int:
@@ -517,8 +524,14 @@ def _build_unconfigured_holdout_manifest(
     contaminated_ranges=None,
     adequacy_thresholds=None,
     waiver_reason: str | None = None,
+    min_length_days: int | None = None,
     length_basis: str = "calendar_days",
 ) -> dict:
+    resolved_min_length_days = (
+        int(_default_holdout_min_length_days(length_basis))
+        if min_length_days is None
+        else int(min_length_days)
+    )
     return {
         "holdout_start": None,
         "holdout_end": None,
@@ -532,7 +545,7 @@ def _build_unconfigured_holdout_manifest(
         "internal_holdout_class": "unconfigured",
         "holdout_length_days": None,
         "holdout_length_basis": str(length_basis),
-        "holdout_min_length_days": int(_default_holdout_min_length_days(length_basis)),
+        "holdout_min_length_days": int(resolved_min_length_days),
         "approval_eligible": False,
         "external_claim_eligible": False,
         "promotion_wfo_end_before_holdout": None,
@@ -617,6 +630,14 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
         or wfo_settings.get("parity_canary_excluded_ranges")
         or list(_DEFAULT_PARITY_CANARY_EXCLUDED_RANGES)
     )
+    raw_min_length_days = wfo_settings.get("holdout_min_length_days")
+    min_length_days = None
+    if raw_min_length_days is not None and str(raw_min_length_days).strip() != "":
+        min_length_days = int(raw_min_length_days)
+        if min_length_days <= 0:
+            raise ValueError(
+                "walk_forward_settings.holdout_min_length_days must be a positive integer."
+            )
     return {
         "holdout_start": wfo_settings.get("holdout_start")
         or wfo_settings.get("internal_provisional_holdout_start"),
@@ -641,6 +662,7 @@ def _resolve_holdout_runtime_settings(wfo_settings: dict) -> dict:
         or None,
         "contaminated_ranges": contaminated_ranges,
         "auto_execute": bool(wfo_settings.get("holdout_auto_execute", False)),
+        "min_length_days": min_length_days,
         "adequacy_thresholds": _normalize_holdout_adequacy_thresholds(
             wfo_settings.get("holdout_adequacy_thresholds")
         ),
@@ -2983,6 +3005,7 @@ def _run_research_start_date_robustness(
             adequacy_metrics={},
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            min_length_days=holdout_settings["min_length_days"],
             holdout_backtest_attempted=False,
             holdout_backtest_success=False,
             holdout_backtest_blocked=False,
@@ -2995,6 +3018,7 @@ def _run_research_start_date_robustness(
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            min_length_days=holdout_settings["min_length_days"],
             length_basis=length_basis,
         )
 
@@ -3494,6 +3518,7 @@ def run_walk_forward_analysis():
             adequacy_metrics=holdout_adequacy_metrics,
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            min_length_days=holdout_settings["min_length_days"],
             holdout_backtest_attempted=bool(holdout_execution and holdout_execution.get("attempted")),
             holdout_backtest_success=bool(holdout_execution and holdout_execution.get("success")),
             holdout_backtest_blocked=bool(holdout_execution and holdout_execution.get("blocked")),
@@ -3523,6 +3548,7 @@ def run_walk_forward_analysis():
             contaminated_ranges=holdout_settings["contaminated_ranges"],
             adequacy_thresholds=holdout_settings["adequacy_thresholds"],
             waiver_reason=holdout_settings["waiver_reason"],
+            min_length_days=holdout_settings["min_length_days"],
             length_basis=length_basis,
         )
 
