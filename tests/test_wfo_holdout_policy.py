@@ -13,6 +13,31 @@ from src.analysis import walk_forward_analyzer as wfo
 
 
 class TestWfoHoldoutPolicy(unittest.TestCase):
+    def test_resolve_holdout_runtime_settings_reads_min_length_override(self):
+        settings = wfo._resolve_holdout_runtime_settings(
+            {
+                "holdout_start": "2024-01-01",
+                "holdout_end": "2025-12-31",
+                "holdout_min_length_days": "486",
+                "holdout_contaminated_ranges": [
+                    {"start": "2026-01-01", "end": "2026-01-31"}
+                ],
+            }
+        )
+
+        self.assertEqual(settings["min_length_days"], 486)
+
+    def test_resolve_holdout_runtime_settings_rejects_non_positive_min_length_override(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "holdout_min_length_days must be a positive integer",
+        ):
+            wfo._resolve_holdout_runtime_settings(
+                {
+                    "holdout_min_length_days": 0,
+                }
+            )
+
     @patch("src.data_handler.DataHandler")
     def test_load_runtime_trading_dates_requires_daily_stock_price_when_trading_days(self, mock_handler_cls):
         mock_handler = mock_handler_cls.return_value
@@ -695,6 +720,72 @@ class TestWfoHoldoutPolicy(unittest.TestCase):
         self.assertIn(
             "promotion_shortlist_modified_after_decision_date",
             manifest["freeze_contract_reasons"],
+        )
+
+    def test_build_final_candidate_manifest_allows_same_day_shortlist_when_decision_date_is_date_only(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shortlist_path = Path(tmp_dir, "promotion_shortlist.csv")
+            shortlist_path.write_text(
+                "max_stocks,order_investment_ratio,additional_buy_drop_rate,sell_profit_rate,additional_buy_priority,stop_loss_rate,max_splits_limit,max_inactivity_period\n"
+                "30,0.03,0.05,0.06,1,-0.10,15,60\n",
+                encoding="utf-8",
+            )
+            same_day_ts = pd.Timestamp("2026-03-14T15:30:00Z").timestamp()
+            os.utime(shortlist_path, (same_day_ts, same_day_ts))
+            summary_df = pd.DataFrame(
+                [
+                    {
+                        "selection_rank": 1,
+                        "shortlist_candidate_id": 1,
+                        "candidate_signature": "max_stocks=30",
+                        "hard_gate_pass": True,
+                        "hard_gate_fail_reasons": "",
+                        "robust_score": 0.42,
+                        "promotion_fold_pass_rate": 1.0,
+                        "promotion_oos_calmar_median": 0.8,
+                        "promotion_oos_mdd_depth_worst": 0.1,
+                        "promotion_oos_cagr_median": 0.2,
+                        "max_stocks": 30,
+                        "order_investment_ratio": 0.03,
+                        "additional_buy_drop_rate": 0.05,
+                        "sell_profit_rate": 0.06,
+                        "additional_buy_priority": "highest_drop",
+                        "stop_loss_rate": -0.10,
+                        "max_splits_limit": 15,
+                        "max_inactivity_period": 60,
+                    }
+                ]
+            )
+
+            manifest = wfo._build_final_candidate_manifest(
+                summary_df,
+                selection_settings=wfo._resolve_selection_contract_settings({}),
+                shortlist_path=shortlist_path.as_posix(),
+                shortlist_hash=wfo._hash_file_sha256(shortlist_path.as_posix()),
+                decision_date="2026-03-14",
+                research_data_cutoff="2024-12-31",
+                promotion_data_cutoff="2024-12-31",
+                holdout_settings={
+                    "holdout_start": "2025-01-01",
+                    "holdout_end": "2025-11-30",
+                    "canonical_promotion_wfo_end": "2024-12-31",
+                    "canonical_holdout_start": "2025-01-01",
+                    "canonical_holdout_end": "2025-11-30",
+                },
+                engine_version_hash="engine123",
+                cpu_audit_required=True,
+            )
+
+        self.assertTrue(manifest["freeze_contract_verified"])
+        self.assertFalse(manifest["promotion_shortlist_modified_after_decision_date"])
+
+    def test_require_decision_date_preserves_timestamp_precision(self):
+        self.assertEqual(
+            wfo._require_decision_date(
+                "2026-03-14T09:30:00+09:00",
+                context_label="promotion freeze contract",
+            ),
+            "2026-03-14T09:30:00+09:00",
         )
 
     def test_compute_robust_score_penalizes_variance(self):

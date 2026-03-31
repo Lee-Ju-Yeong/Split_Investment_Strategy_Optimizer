@@ -164,8 +164,12 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - 확장 메모:
   - 필요하면 여러 standalone window를 묶은 `N-window derivation(여러 기간을 함께 보는 후보 압축)`을 discovery-only source로 붙일 수 있다.
   - 단, 이것은 approval workflow 자체가 아니라 upstream shortlist source다.
+  - 기본값은 `grid-based family grouping(파라미터 축 기반 family 묶기)`이다.
+  - `cluster_v1` 같은 clustering 모드는 허용하더라도 `discovery-only compare mode(연구용 비교 모드)`로만 붙인다.
+  - clustering을 쓴다고 해도 최종 freeze 후보는 반드시 `actual row-based medoid(중심에 가장 가까운 실제 행)`여야 한다.
   - 상세 계약은 아래 문서를 따른다.
     - [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
+    - [Cluster V1 shortlist diversification PoC](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_24-cluster-v1-shortlist-diversification-poc.md)
 - 산출물:
   - GPU simulation 결과
   - 후보군
@@ -215,6 +219,7 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 - 실행 전제:
   - `promotion_shortlist_path`로 freeze된 후보 CSV/JSON을 넘긴다.
   - shortlist derivation이 N-window source에서 왔다면 `shortlist_source_manifest.json`도 같이 검증할 수 있어야 한다.
+  - promotion lane은 `cluster centroid(가상의 평균 파라미터)`나 clustering 재실행 결과를 직접 소비하지 않는다.
   - promotion lane은 이 shortlist(압축된 후보 목록) 밖의 새 후보를 다시 찾지 않는다.
 - 산출물:
   - fold별 결과
@@ -232,6 +237,21 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `promotion_oos_is_calmar_ratio_median >= 0.60`
   - `promotion_fold_pass_rate >= 70%`
   - `promotion_oos_mdd_depth_p95 <= 25%`
+ - fold 기준 표기 규칙(중요):
+  - 운영/감사용 문서에는 `0.6667` 같은 반올림값 대신 정수 규칙을 함께 적는다.
+  - 예:
+    - `fold_count=3`일 때 `promotion_fold_pass_rate >= 2/3`는 `pass_count >= 2`로 기록
+    - `fold_count=10`일 때 `promotion_fold_pass_rate >= 0.70`는 `pass_count >= 7`로 기록
+  - 이유:
+    - `0.6667`은 `2/3`보다 미세하게 커서, 구현에서 의도치 않은 탈락이 생길 수 있다.
+ - policy variant 재판정 규칙:
+  - 기존 run 결과(`promotion_candidate_summary.csv`)를 다시 읽어 임계값만 바꿔 판정하는 것은 허용한다.
+  - 단, 이 방식은 `read-only re-score`로만 취급하고 원본 run verdict를 덮어쓰지 않는다.
+  - 권장 라벨:
+    - `approval_canonical` (공식 승인용 원본 기준)
+    - `policy_variant_rescore` (임계값 변경 가정 재판정)
+    - `research_compare` (비교 실험용)
+    - `blocked_incomplete_evidence` (CPU audit/holdout 미완료)
  - robust score 공식식:
   - `robust_score = (promotion_oos_calmar_mean - 0.50 * promotion_oos_calmar_std) * log1p(promotion_fold_count)`
   - 뜻:
