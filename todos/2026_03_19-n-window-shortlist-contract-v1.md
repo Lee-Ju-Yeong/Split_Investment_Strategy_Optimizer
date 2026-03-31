@@ -20,6 +20,8 @@
 - 현재 방향은 `execute`다.
 - 단, 이 문서가 여는 범위는 `discovery-only shortlist source(연구용 후보 압축 입력)`까지다.
 - `research WFO`, `promotion WFO`, `CPU audit`, `holdout`의 공식 approval workflow는 바꾸지 않는다.
+- 기본값(default)은 `grid-based family grouping(파라미터 축 기반 그룹핑)` 유지다.
+- `clustering`은 필요하더라도 `optional discovery mode(선택형 연구 모드)`로만 추가한다.
 
 ### Next action
 - `window_bundle_manifest.json` / `shortlist_source_manifest.json` 스키마를 고정하고, `src/analysis/shortlist_derivation.py` 같은 별도 오케스트레이터를 추가한다.
@@ -28,7 +30,11 @@
 - `N-window scoring/gating`은 일반화해도 된다.
 - 하지만 `window search(어떤 창 조합이 유리한지 자동으로 찾는 기능)`는 금지한다.
 - 입력 window는 반드시 `window_bundle_manifest.json`으로 명시적으로 고정한다.
+- 기본 shortlist 압축 방식은 `explicit family grouping(명시적 family key)`를 유지한다.
+- `cluster_v1` 같은 clustering 모드는 `discovery-only compare mode(연구용 비교 모드)`로만 허용한다.
 - 최종 shortlist는 `cluster centroid(가상의 평균 파라미터)`가 아니라 `실제로 CSV에 존재하는 row(actual row)`만 freeze한다.
+- clustering을 쓰더라도 `parameter-only feature space(파라미터만 쓰는 군집 공간)`를 기본으로 하고, upstream에서는 metric을 cluster feature로 넣지 않는다.
+- clustering을 쓰더라도 `k auto-search(군집 개수 자동 탐색)`는 금지하고, `seed`, `k`, `distance metric`을 manifest로 고정한다.
 - `mandatory windows는 all-pass`, `optional windows는 small fail budget`을 허용한다.
 - `standalone discovery artifact`는 끝까지 `research-only`로 취급하며, 그 자체를 approval evidence로 쓰면 안 된다.
 
@@ -36,11 +42,13 @@
 ### 2-1. 허용하는 것
 - 여러 standalone CSV를 함께 읽어 `family dedupe(비슷한 후보 묶기)`를 수행하는 것
 - `hard gate -> robust ranking -> plateau diversified representatives` 순서로 후보를 줄이는 것
+- `grid family grouping`을 기본으로 유지한 상태에서, `cluster_v1`를 비교 실험용으로 추가하는 것
 - `window_bundle_manifest.json`, `shortlist_source_manifest.json`, `shortlist_candidates.csv/json`를 남기는 것
 - `same-cutoff A/B` 검증을 위해 `1-window vs N-window derivation`을 비교하는 것
 
 ### 2-2. 금지하는 것
 - 스크립트가 `window 조합`, `window weight`, `shortlist_size`, `selection_metric`, `aggregation rule`을 자동 탐색하는 것
+- 스크립트가 `cluster count(k)`, `feature weight`, `seed`, `distance metric`을 자동 탐색하는 것
 - `promotion OOS`, `holdout`, `explanation report`, `ablation report`, `composite curve`를 shortlist selector 입력으로 쓰는 것
 - centroid를 실제 freeze candidate로 승격하는 것
 - promotion lane 안에서 shortlist 밖의 새 후보를 다시 찾는 것
@@ -93,9 +101,23 @@
 ### 5-1. Family dedupe
 - raw top-k를 그대로 쓰지 않는다.
 - `stop_loss_rate`처럼 식별력이 약한 축은 family key에서 제외할 수 있다.
+- 또는 `family_included_parameters`처럼 어떤 축만 family key로 쓸지 명시적으로 잠글 수 있다.
 - 대신 final freeze 시점에는 대표 row를 1개만 복원한다.
 
-### 5-2. Representative 선택
+### 5-2. Optional clustering mode
+- `cluster_v1`는 기본값이 아니다.
+- `cluster_v1`는 아래 조건을 모두 만족할 때만 허용한다.
+  - 위치는 `shortlist derivation` 내부에만 둔다.
+  - 목적은 `family diversification(후보 성격 다양화)`까지만 허용한다.
+  - `promotion lane`, `CPU audit`, `holdout` 안으로 selector 로직을 넘기지 않는다.
+  - cluster feature는 기본적으로 `parameter-only`여야 한다.
+  - `metric-based cluster feature`는 v1에서 금지한다.
+  - `k`, `seed`, `distance metric`, `representative rule`은 manifest에서 명시적으로 고정한다.
+- 해석:
+  - 이 모드는 `더 좋은 1등을 자동 탐색하는 selector`가 아니라,
+  - `비슷한 후보끼리 너무 몰리지 않게 압축하는 compare mode`다.
+
+### 5-3. Representative 선택
 - `cluster centroid`는 분석용으로만 허용한다.
 - 최종 freeze는 아래만 허용한다.
   - `actual row-based medoid`
@@ -123,6 +145,11 @@
 - `holdout_end`
 - `window_policy_id`
 - `window_overlap_policy`
+- `selection_contract`
+- 선택형:
+  - `family_excluded_parameters`
+  - `family_included_parameters`
+  - `cluster_contract`
 - `windows[]`
   - `window_id`
   - `csv_path`
@@ -141,6 +168,18 @@
 - `search_space_hash`
 - `runtime_budget`
 - `selection_metric`
+- `family_grouping_mode`
+- `family_grouping_parameters`
+- 선택형:
+  - `cluster_contract_version`
+  - `cluster_feature_keys`
+  - `cluster_feature_weights`
+  - `cluster_distance_metric`
+  - `cluster_count_mode`
+  - `cluster_count_k`
+  - `cluster_random_seed`
+  - `representative_selection_rule`
+  - `cluster_assignment_hash`
 - `aggregation_rule_version`
 - `tie_break_rule_version`
 - `shortlist_hash`
@@ -193,6 +232,37 @@
 }
 ```
 
+### 6-5. optional `cluster_contract` 예시
+```json
+{
+  "selection_contract": {
+    "selection_metric": "calmar_ratio",
+    "shortlist_size": 6,
+    "cluster_contract": {
+      "enabled": true,
+      "cluster_contract_version": "cluster_v1",
+      "cluster_feature_keys": [
+        "order_investment_ratio",
+        "additional_buy_drop_rate",
+        "sell_profit_rate",
+        "max_inactivity_period"
+      ],
+      "cluster_feature_weights": {
+        "order_investment_ratio": 1.0,
+        "additional_buy_drop_rate": 1.0,
+        "sell_profit_rate": 1.0,
+        "max_inactivity_period": 1.0
+      },
+      "cluster_distance_metric": "weighted_l1",
+      "cluster_count_mode": "fixed_k",
+      "cluster_count_k": 6,
+      "cluster_random_seed": 42,
+      "representative_selection_rule": "actual_row_medoid"
+    }
+  }
+}
+```
+
 ## 7. 구현 방향
 ### 7-1. 파일 경계
 - 기존 [issue98_combo_mining_report.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/issue98_combo_mining_report.py)는 `single-window reporter`로 유지한다.
@@ -215,6 +285,7 @@ python -m src.analysis.shortlist_derivation derive-shortlist \
 - `--left-csv`, `--right-csv` 같은 dual 전용 플래그는 만들지 않는다.
 - repeatable input 또는 manifest input만 허용한다.
 - 조합 자동탐색 옵션은 v1에서 열지 않는다.
+- `cluster_v1`를 쓰더라도 CLI에서 `--auto-k`, `--auto-feature-search` 같은 옵션은 열지 않는다.
 
 ## 8. 검증 계약
 - `same-cutoff A/B`로 기존 derivation과 새 derivation을 비교한다.
@@ -224,6 +295,10 @@ python -m src.analysis.shortlist_derivation derive-shortlist \
   - `promotion pass yield`
   - `CPU audit outcome`
   - `holdout outcome`
+- clustering 비교 실험은 최소 3-arm으로 본다.
+  - `current family grouping`
+  - `family_included_parameters`
+  - `cluster_v1`
 - `approval-compatible` 모드는 아래가 깨지면 reject다.
   - source manifest 누락
   - hash mismatch
@@ -238,5 +313,6 @@ python -m src.analysis.shortlist_derivation derive-shortlist \
 
 ## 10. 관련 문서
 - [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
+- [Cluster V1 shortlist diversification PoC](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_24-cluster-v1-shortlist-diversification-poc.md)
 - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
 - [Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
