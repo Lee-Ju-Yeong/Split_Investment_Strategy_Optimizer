@@ -19,7 +19,7 @@
 | [Issue #68: Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md) | implementation | 부분 구현·후속 확인 |
 | [Issue #72: Ticker Continuity & Position Inheritance](2026_02_09-issue72-ticker-continuity-position-inheritance.md) | implementation | 부분 구현·후속 확인 |
 | [Reference Note: 로컬 DB 없이 진행 가능한 작업](2026_02_14-notebook-no-local-db-dev.md) | reference | 참고·후속 연결 |
-| [테스트 인터페이스 갱신 (test_integration.py) (Issue #59)](2026_02_15-issue59-tests-split-no-db-gpu.md) | implementation | 부분 완료·DB 검증 미완료 |
+| [테스트 인터페이스 갱신 (test_integration.py) (Issue #59)](done_2026_02_15-issue59-tests-split-no-db-gpu.md) | implementation | 완료·격리 DB 검증 |
 | [Issue #101: Tier1 선택 편향 완화와 분포 기반 강건 최적화](2026_02_22-issue101-feat-tier1.md) | research | 연구·제안 |
 | [Reference Backlog: Issue #71 Carryover](2026_03_01-issue71-carryover-non71-backlog.md) | reference | 참고·후속 연결 |
 | [GPU-native WFO v2 Design Note](2026_03_06-gpu-native-wfo-v2-design.md) | research | 연구·제안 |

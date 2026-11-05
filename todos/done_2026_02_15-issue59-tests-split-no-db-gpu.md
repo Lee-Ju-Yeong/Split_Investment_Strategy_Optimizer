@@ -1,6 +1,23 @@
 # 테스트 인터페이스 갱신 (test_integration.py) (Issue #59)
 
-> **문서 상태 대조: 2026-11-06.** **부분 완료 / 실제 DB 검증 미완료.** 아래는 2월의 인터페이스 수정·무DB 건너뜀 확인 기록입니다. 현재 호출 인자 불일치가 연결 실패와 함께 SkipTest로 처리됩니다. 원래 완료 조건은 충족되지 않았으므로 done_를 제거했습니다. [이번 보수·검증 계약](2026_11_06-project-maintenance-execution.md#db)을 따르며 운영 DB에는 연결하지 않습니다.
+- Status: 완료 — 2026-11-06 격리 MySQL 실제 검증
+- Type: implementation
+- Evidence: [PR #112](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/112), [실제 DB 실행](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42119887317), [실행 계약](2026_11_06-project-maintenance-execution.md#db).
+
+> 아래 2월 기록은 당시 인터페이스 수정과 무DB 건너뜀 확인입니다. 11월 대조에서 실제 DB 미검증을 발견해 일시적으로 완료 표시를 해제했고, 테스트 전용 연결과 합성 자료로 보수했습니다. 과거의 설정·연결 오류를 건너뛰던 방안은 현재 적용하지 않습니다. DB 실행을 지정하지 않았을 때만 명시적으로 건너뛰며, 지정한 뒤의 오류는 실패합니다.
+
+## 2026-11-06 실제 검증 결과
+
+- 후보 `a2cf8a993d80812620ebd30d6d0e1ca3fa71c1d9`, 실제 checkout `633f94ff833316519ee0dd1356c6b573ee8bc31c`(PR 임시 병합 커밋).
+- 무료 ubuntu-24.04, Python 3.12.16, MySQL 8.4.13. 전용 환경의 pip check 통과.
+- 실제 SQL 후보 조회·DataHandler·CPU 엔진·포트폴리오·체결 처리: **3개 통과, 실패·오류·건너뜀 0**. 매도→신규→추가 호출과 거래일 인덱스·회사명·수정주가 열 감지·일별 기록 확인.
+- 매수: 10주·수수료 15원·잔여 현금 899,985원. 미매수: 거래 0·현금 유지. 수정주가 누락: 해당 종목·날짜의 기대 오류 확인.
+- 연결 제한·실패 전파 검사 **14개 통과**. 실제 계정·DB·빈 스키마를 읽기로 확인한 뒤에만 변경 SQL 허용. 제품 DB API·스키마 변경 없음.
+- 기존 CPU 34개·예제, 도구 자체 22개는 별도 실행에서 통과. gpt-6.1-sol/xhigh 읽기 전용 검토에서 차단 결함 없음.
+- 시험용 전략·합성 자료 범위이며 운영 DB·실제 전략 전체·GPU 검증은 포함하지 않습니다. 실행 명령과 준비 조건은 [DB 안내](../docs/testing-mysql.md)에 있습니다. 최종 후보·main 결과는 위 PR과 [전체 실행 기록](2026_11_06-project-maintenance-execution.md)에서 확인합니다.
+
+## 2월 변경 기록(보존)
+
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59`
 - 목표: `tests/test_integration.py`를 최신 Strategy/Execution 인터페이스에 맞게 정비
 - 범위:
