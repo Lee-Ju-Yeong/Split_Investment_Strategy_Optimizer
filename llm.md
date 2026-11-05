@@ -24,10 +24,8 @@
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-review.txt
-python -m examples.short_selling_lag_demo
-python -m unittest discover -s tests -p 'test_portfolio.py' -v
-python -m unittest discover -s tests -p 'test_short_selling_collector.py' -v
-python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
+python -m pip check
+python tools/ci/run_cpu_checks.py
 ```
 
 - [작은 예제와 검사 안내](tests/README.md): 외부 계정·DB·GPU 없이 확인합니다.
@@ -35,6 +33,7 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 - `environment.yml`의 Python 3.9와 현재 일부 코드 문법은 맞지 않습니다. 이 파일만으로 전체 실행 환경이 재현된다고 가정하지 않습니다.
 - `rapids-env`는 별도로 준비한 환경 이름입니다. 확인용 의존성 파일로 생성되지 않습니다.
 - 전체 테스트에는 DB·GPU 조건이 있습니다. 위 세 모듈의 통과를 전체 테스트 통과로 기록하지 않습니다.
+- `CPU checks` CI는 같은 명령 전에 검사 도구 자체 검사를 실행합니다. PR과 main 실행의 범위·제외 항목은 [테스트 안내](tests/README.md)를 따릅니다.
 
 ---
 
