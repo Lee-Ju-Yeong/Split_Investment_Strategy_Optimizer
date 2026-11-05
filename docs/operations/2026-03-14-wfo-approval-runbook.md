@@ -1,5 +1,7 @@
 # WFO(Walk-Forward Optimization, 과거로 공부하고 미래 구간으로 시험 보는 검증 방식) Approval Workflow(승인 절차) Runbook(운영 안내서)
 
+> **작성 당시의 절차·판단·검증 기록입니다.** 본문의 성공·진행·예정 표현은 당시 환경과 범위에 한정됩니다. 현재 구현과 남은 확인은 [프로젝트 상태](../../TODO.md), 실행 환경은 [전체 실행 안내](../running.md)를 확인합니다. 이번 안내 정비에서는 운영 작업을 재실행하지 않았습니다.
+
 > 작성일: 2026-03-14
 > 상태: Draft
 > 범위: Magic Split 전략의 `parameter simulation(후보를 넓게 찾는 단계) -> research WFO(연구용 검증) -> shortlist freeze(후보 고정) -> promotion WFO(승인 심사용 검증) -> CPU audit(CPU 기준 검산) -> holdout(끝까지 남겨 둔 최종 시험 구간)` 운영 순서
@@ -168,8 +170,8 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
   - `cluster_v1` 같은 clustering 모드는 허용하더라도 `discovery-only compare mode(연구용 비교 모드)`로만 붙인다.
   - clustering을 쓴다고 해도 최종 freeze 후보는 반드시 `actual row-based medoid(중심에 가장 가까운 실제 행)`여야 한다.
   - 상세 계약은 아래 문서를 따른다.
-    - [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
-    - [Cluster V1 shortlist diversification PoC](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_24-cluster-v1-shortlist-diversification-poc.md)
+    - [N-window shortlist contract v1](../../todos/2026_03_19-n-window-shortlist-contract-v1.md)
+    - [Cluster V1 shortlist diversification PoC](../../todos/2026_03_24-cluster-v1-shortlist-diversification-poc.md)
 - 산출물:
   - GPU simulation 결과
   - 후보군
@@ -438,8 +440,8 @@ CONDA_NO_PLUGINS=true conda run -n rapids-env \
 3. 이 전략에서는 `미청산 비율` 하나보다 `자본 배치 적정성`과 `실제 회전/청산 커버리지`가 더 중요하다.
 
 ## 12. 관련 문서
-- [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
-- [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
-- [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
-- [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
-- [Hybrid Release Gate Board](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-06-hybrid-release-gate-board.md)
+- [WFO / OOS Lane 임시 합의안](../../todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+- [WFO shortlist derivation review](../../todos/2026_03_16-wfo-shortlist-derivation-review.md)
+- [N-window shortlist contract v1](../../todos/2026_03_19-n-window-shortlist-contract-v1.md)
+- [Issue #68: Robust WFO / Ablation](../../todos/2026_02_09-issue68-robust-wfo-ablation.md)
+- [Hybrid Release Gate Board](2026-03-06-hybrid-release-gate-board.md)

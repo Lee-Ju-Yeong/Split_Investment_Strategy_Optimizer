@@ -98,9 +98,9 @@
 
 ## 9. Source Notes
 - 내부 근거:
-  - [TODO.md](/root/projects/Split_Investment_Strategy_Optimizer/TODO.md)
-  - [로드맵/사업화 점검 메모](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_10-roadmap-commercialization-checkpoint.md)
-  - [Hybrid Release Gate Board](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-06-hybrid-release-gate-board.md)
+  - [TODO.md](../TODO.md)
+  - [로드맵/사업화 점검 메모](2026_03_10-roadmap-commercialization-checkpoint.md)
+  - [Hybrid Release Gate Board](../docs/operations/2026-03-06-hybrid-release-gate-board.md)
 - 외부 근거:
   - FSC Korea Fintech Week 2025: <https://www.fsc.go.kr/eng/pr010101/85503>
   - FSC 금융권 AI 플랫폼 공개 (2025-12-22): <https://www.fsc.go.kr/no010101/85908>
