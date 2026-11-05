@@ -1,5 +1,7 @@
 # Issue #68: Robust WFO / Ablation
 
+> **2026-11-06 공개 코드 대조:** PR [#106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)에 후보 고정·기간별 평가·CPU 최종 검산·holdout 보호·N-window 후보 추출의 주요 경로가 반영됐습니다. 아래는 설계와 구현 경과입니다. 최종 전략 승인·대외 성과까지 완료됐다는 의미는 아닙니다.
+
 > Type: `implementation`
 > Status: `in_progress`
 > Priority: `P2`
@@ -42,7 +44,7 @@
   - 추가 숙의 결과, 이 전략의 분할 진입 특성상 `1년 미만 holdout`은 최종 승인용으로 약하다는 쪽으로 기울었다.
   - 따라서 구현 목표는 `approval-grade holdout >= 24개월`을 기본값으로 두고, 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급하는 것이다.
 - Next action:
-  - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)을 기준으로 구현 규칙을 코드에 옮긴다.
+  - PR #106의 구현과 아래 검증 기록을 대조해 남은 평가·승인 조건을 확인한다. [WFO / OOS Lane 임시 합의안](2026_03_12-wfo-oos-lane-provisional-review.md)은 설계 배경으로 보존한다.
 
 ## 1. 초심자용 한 페이지 설명
 ### 1-1. 이 문서를 한 줄로
@@ -325,9 +327,9 @@
 - `#101`은 분포 기반 파라미터 선택 프레임 자체를 다룬다.
 - `#68`은 현재 공식 경로 위에서 `robust score`와 verification layer를 강화하는 문서다.
 - 초심자용 설계 메모:
-  - [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+  - [WFO / OOS Lane 임시 합의안](2026_03_12-wfo-oos-lane-provisional-review.md)
 - 운영용 단계별 안내:
-  - [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
+  - [WFO Approval Workflow Runbook](../docs/operations/2026-03-14-wfo-approval-runbook.md)
 - 현재 세션에서 잠긴 핵심:
   - research lane 데이터는 `후보 발굴/필터링`에는 쓸 수 있지만 `final untouched OOS`라고 부를 수는 없다.
   - CPU certification의 목표는 `rerank`보다 `audit/pass-fail`에 가깝게 잠근다.

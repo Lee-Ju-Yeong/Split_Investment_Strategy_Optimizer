@@ -1,4 +1,6 @@
 # llm-context/04_wfo_analysis.md
+
+> **과거 설계 자료입니다.** 본문은 작성 당시의 설명을 보존합니다. SQLite 사용·완료 상태·AI 역할 표현을 현재 구현이나 작성자의 경력으로 해석하지 않습니다. 현재 안내는 [이 폴더 안내](README.md), [프로젝트 상태](../TODO.md)를 확인합니다.
 # === YAML Front Matter: The Control Panel ===
 # 이 파일의 메타데이터를 정의합니다.
 

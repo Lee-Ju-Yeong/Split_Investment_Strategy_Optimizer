@@ -1,116 +1,78 @@
-# 매직스플릿 투자 전략 최적화 (Split Investment Strategy Optimizer)
+# 국내 주식 분할투자 시뮬레이터
 
-**매직스플릿(Magic Split) 분할 투자 전략**의 백테스팅 및 GPU 기반 파라미터 최적화 시스템입니다. 한국 주식 시장의 방대한 데이터를 활용하여 과최적화를 방지하고, Walk-Forward Optimization(WFO)을 통해 실제 시장에서 작동하는 강건한 파라미터를 도출하는 것을 목표로 합니다.
+**Split Investment Strategy Optimizer**
 
----
+주식을 여러 차례 나누어 사고파는 분할투자 전략을 국내 주식의 과거 데이터로 시험하고, 매수·매도 조건을 비교하는 개인 프로젝트입니다.
 
-## 🚀 프로젝트 핵심 가치
+Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시뮬레이션을 결과 검증의 기준으로 삼고, GPU로 여러 설정 조합을 병렬 계산합니다. 이후 기간을 나누어 특정 과거 구간에서만 좋은 결과가 나온 것은 아닌지 검토합니다.
 
-- **CPU=SSOT (Source of Truth)**: 모든 전략 승격 판단은 CPU 백테스터를 기준으로 하며, GPU 경로는 parity evidence로 검증합니다.
-- **Strict PIT-Oriented Runtime**: 핵심 runtime은 엄격한 시점별 유니버스와 수정주가 gate를 사용하며, lag-sensitive 데이터 정책은 별도 gate로 관리합니다.
-- **GPU Throughput Refactor**: 대규모 파라미터 탐색을 더 빠르게 만들기 위해 벡터화 hot path와 측정 도구를 지속적으로 개선하고 있습니다.
-- **Cluster-Oriented Design**: k3s/Kubernetes 기반 GPU job 운영은 연구 및 인프라 로드맵으로 관리하고 있습니다.
+**직접 맡은 범위:** 프로젝트의 설계·구현·테스트·운영을 주도했습니다. 아래 사례에서 실제 코드와 테스트, 변경 이유를 확인할 수 있습니다.
 
----
+## 먼저 볼 구현 사례
 
-## 📅 현재 상태 (2026-03 기준)
+| 사례 | 해결한 문제 | 확인할 내용 |
+| --- | --- | --- |
+| [수집 중 일부 실패 처리](docs/engineering-evidence.md#collection) | 긴 수집 작업 중 일부 요청이 실패하는 상황 | 성공한 데이터 보존, 실패 집계, 재실행 범위 관리 |
+| [GPU 계산 시간 개선](docs/engineering-evidence.md#gpu) | 반복 계산에서 시간이 많이 걸리는 구간 | 구간별 측정, 개선 전후 비교, CPU 결과와의 일치 검사 |
+| [데이터 반영 시점 검증](docs/engineering-evidence.md#availability) | 당시 알 수 없던 정보가 과거 계산에 들어가는 문제 | 지연 반영 규칙, 회귀 테스트, 변경 영향 분석 |
 
-- **거버넌스 확정 (Issue #97)**: 운영 및 승격용 런타임 정책(Strict-only)을 확정하여 전략의 신뢰성을 확보했습니다.
-- **GPU 성능 개선 진행 (Issue #98)**: 랭킹 텐서 사전 계산 및 실행 루프 최적화를 중심으로 시뮬레이션 처리량(Throughput)을 계속 측정하고 개선하고 있습니다.
-- **데이터 인프라 운영 중**: 상폐 종목을 포함한 Historical Universe(PIT), 재무/수급/Tier 사전 계산 배치를 운영하고 있습니다.
-- **인프라 현대화**: 로컬 PC를 넘어 k3s 클러스터 기반의 서버급 GPU 자원 활용 연구가 진행 중입니다.
+각 사례는 **문제 → 구현 → 테스트 → PR·측정 기록** 순서로 읽을 수 있습니다.
 
----
+## 데이터와 계산 흐름
 
-## 🛠 아키텍처 (5-Stage Pipeline)
+**데이터 수집 → MySQL 저장 → 당시 사용할 수 있었던 데이터로 입력 구성**
 
-1.  **Data Pipeline**: pykrx 기반 OHLCV 및 기술적 지표 ETL (`src/main_script.py`)
-2.  **Batch Precompute**: PIT 유니버스, 재무/수급, 종목 Tier 사전 계산 (`src/pipeline_batch.py`)
-3.  **CPU Backtester**: OOP 기반의 정밀한 시뮬레이션 및 결과 검증 (`src/main_backtest.py`)
-4.  **GPU Optimizer**: 다차원 배열(State Arrays) 기반의 대규모 파라미터 시뮬레이션 (`src/parameter_simulation_gpu.py`)
-5.  **WFO Analysis**: Walk-Forward Optimization을 통한 전략 강건성 검증 (`src/walk_forward_analyzer.py`)
+- **수집·저장:** 가격·거래량, 재무·수급·공매도 데이터와 과거 상장 종목 이력을 수집합니다. 종목별 지표를 미리 계산해 반복 조회 비용을 줄입니다.
+- **CPU:** 매매 과정과 현금·보유 상태를 계산하는 기준 구현입니다.
+- **GPU:** 많은 설정 조합을 병렬 계산하는 탐색 구현입니다.
+- **검증:** CPU·GPU 결과를 비교하고, 기간을 나누어 후보를 평가합니다. 그날 알 수 없었던 정보를 미리 사용하는 오류를 막는 규칙과 테스트를 둡니다.
 
----
+프로젝트 범위는 과거 데이터 시뮬레이션과 검증입니다. 완료된 구현, 당시 측정 결과, 후속 연구는 구분해서 기록합니다.
 
-## ⚙️ 빠른 시작
+## 직접 확인하기
 
-### 1) 환경 구성
+외부 계정·DB·GPU 없이 실행할 수 있는 기존 테스트와 가상 데이터 예제를 제공합니다. 패키지 설치에는 인터넷이 필요합니다.
+
 ```bash
-# CPU 환경 (repo-managed standard)
-conda env create -f environment.yml
-conda activate stock_optimizer_env
-
-# GPU 환경 (RAPIDS/CUDA 필수, 별도 수동 준비)
-conda activate rapids-env
+# Python 3.12, 저장소 루트에서 실행
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-review.txt
+python -m examples.short_selling_lag_demo
 ```
 
-`rapids-env`는 이 저장소의 `environment.yml`로 생성되지 않습니다. CUDA/RAPIDS가 설치된 호스트에서 별도로 준비된 GPU 환경을 사용합니다.
+예제는 **1월 2일 기준 데이터가 세 거래일 뒤인 1월 5일에 반영되는 과정**을 보여줍니다. 실제 수익률이나 전체 시뮬레이션 결과는 계산하지 않습니다.
 
-### 2) 설정 및 DB 초기화
-```bash
-# 설정 파일 복사 및 수정
-cp config/config.example.yaml config/config.yaml
+- [처음 설치하기·예상 출력·기존 테스트 실행](tests/README.md)
+- [전체 실행에 필요한 환경과 설정](docs/running.md)
+- [문서 안내](docs/README.md)
+- [진행 상태와 개발 기록](TODO.md)
 
-# DB 스키마 생성
-python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"
-```
+## 구현 상태와 확인 범위
 
-### 3) 주요 실행 명령
-```bash
-# CPU/일반 런타임 (`stock_optimizer_env`)
-# 데이터 파이프라인 및 지표 계산
-python -m src.main_script
+공개 코드 기준은 2026-03-31 병합된 [PR #106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)이며, 아래 안내는 2026-11-06에 정리했습니다.
 
-# 재무·수급·Tier 배치
-python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
-python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
+| 항목 | 확인된 상태 | 남은 확인·연구 |
+| --- | --- | --- |
+| 수집 재개·부분 실패 처리 | [PR #100](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/100)에 구현·테스트 반영 | 현재 외부 데이터 제공처의 접속 조건은 실행 환경에서 확인 필요 |
+| GPU 계산 시간 개선 | [PR #103](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/103), [PR #105](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/105) 완료 | 공개 수치는 당시 특정 입력의 측정 기록이며 이번에 GPU 재측정하지 않음 |
+| 공매도 지연 반영 | 임시 3거래일 정책·회귀 테스트·영향 비교 도구 구현 | 장기 데이터 재계산 전체 완료는 공개 기록으로 확인되지 않음 |
+| 기간을 나눈 전략 검증(WFO) | 후보 목록 고정, CPU 검산, 최종 평가 전 조건 검사, 후보 압축 도구 구현 | 구현 완료와 전략의 최종 승인·실전 유효성은 별도 판단 |
+| 군집화·k3s/GPU 작업 운영 | 연구·설계 문서 보유 | 기본 운영 기능이나 배포 완료 성과로 소개하지 않음 |
 
-# PIT 유니버스 배치
-python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
-python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
+현재 GitHub Actions는 **비밀정보 검사(Secret Scan)**와 **문서 사이트 배포(Pages)**를 수행합니다. 제품 전체 테스트를 자동 수행하는 구성은 아닙니다. 이번에 실제 실행한 CPU 검사 범위는 [테스트 안내](tests/README.md)에 구분해 적었습니다.
 
-# OHLCV 장기 백필
-python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-interval 20
+## 코드 찾아보기
 
-# CPU 백테스트
-python -m src.main_backtest
+| 관심 있는 부분 | 시작점 |
+| --- | --- |
+| 수집 실패·재실행 처리 | [공매도 수집기](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/src/short_selling_collector.py) |
+| 데이터 저장 구조 | [스키마 설명](docs/database/schema.md) |
+| CPU 매매·자산 상태 | [CPU 구현](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/tree/main/src/backtest/cpu) |
+| GPU 병렬 계산 | [GPU 엔진](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/src/backtest/gpu/engine.py) · [매매 계산](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/src/backtest/gpu/logic.py) |
+| 후보 평가·결과 추적 | [분석 도구](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/tree/main/src/analysis) |
+| 기존 동작을 확인하는 검사 | [tests](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/tree/main/tests) |
 
-# 웹 UI
-python -m src.app
+`src/pipeline_batch.py` 같은 최상위 실행 파일은 기존 명령을 유지하기 위한 진입점입니다. 실제 구현 위치는 [경로 안내](docs/refactoring/issue69-import-path-mapping.md)에서 확인할 수 있습니다. `notebook/`과 `llm-context/`는 과거 연구·설계 자료이며, 현재 실행 순서는 위 안내를 따릅니다.
 
-# GPU/WFO 런타임 (`rapids-env`)
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.debug_gpu_single_run
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.parameter_simulation_gpu
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.issue98_perf_measure --label issue98_baseline --runs 3
-
-# WFO 분석은 GPU shortlist + CPU certification 흐름을 함께 사용
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.walk_forward_analyzer
-
-# 전체 테스트 discovery는 GPU 테스트 모듈 import 때문에 `rapids-env` 권장
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests -p 'test_*.py'
-```
-
----
-
-## 📋 현재 포커스
-
-최신 우선순위와 상태는 `TODO.md`를 단일 소스(SSOT)로 관리합니다. README에는 현재 읽기 시작할 때 필요한 포커스만 요약합니다.
-
-### 지금 먼저 볼 것
-- `ShortSellingDaily publication lag`: PIT 리스크가 남아 있어 정책 확정이 먼저 필요합니다.
-- `#98 GPU throughput refactor`: canonical baseline 재측정과 다음 hot-path 판단이 진행 중입니다.
-- `#68 Robust WFO / Ablation`: 공식 스코어링 로직을 고정하는 다음 단계입니다.
-
-### 참고
-- `#72`, `#101`, `GPU-native WFO v2` 같은 backlog/research 항목은 README에서 고정 우선순위를 다시 쓰지 않고 `TODO.md`에서만 추적합니다.
-
----
-
-## 📚 주요 문서
-- **전략 원칙**: [MAGIC_SPLIT_STRATEGY_PRINCIPLES.md](docs/MAGIC_SPLIT_STRATEGY_PRINCIPLES.md)
-- **DB 스키마**: [schema.md](docs/database/schema.md)
-- **테스트 가이드**: [tests/README.md](tests/README.md)
-- **작업 백로그**: [TODO.md](TODO.md)
-
----
-**Maintainer**: 퀀트-J (Senior Quant System Developer)
+[문서 사이트](https://lee-ju-yeong.github.io/Split_Investment_Strategy_Optimizer/)는 이 저장소 문서를 게시합니다. 유지보수자: [Lee-Ju-Yeong](https://github.com/Lee-Ju-Yeong).

@@ -1,7 +1,9 @@
 # N-Window Shortlist Contract v1
 
+> **2026-11-06 공개 코드 대조:** PR [#106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)에 `src/analysis/shortlist_derivation.py`와 관련 검사가 반영됐습니다. 아래 계약의 기본 후보 추출은 구현됐고, 선택적 `cluster_v1` 확장은 별도 연구 제안입니다. 후보 추출 구현은 전략 승인 완료를 뜻하지 않습니다.
+
 > Type: `research`
-> Status: `proposed`
+> Status: `base implementation merged; optional clustering proposed`
 > Priority: `P1`
 > Last updated: `2026-03-19`
 > Related issues: `#68`, `#98`
@@ -24,7 +26,7 @@
 - `clustering`은 필요하더라도 `optional discovery mode(선택형 연구 모드)`로만 추가한다.
 
 ### Next action
-- `window_bundle_manifest.json` / `shortlist_source_manifest.json` 스키마를 고정하고, `src/analysis/shortlist_derivation.py` 같은 별도 오케스트레이터를 추가한다.
+- PR #106에 반영된 `src/analysis/shortlist_derivation.py`와 스키마 검사를 기준으로 후속 검증 범위를 판단한다. 아래 구현 순서는 당시 계획으로 보존한다.
 
 ## 1. 한 페이지 결론
 - `N-window scoring/gating`은 일반화해도 된다.
@@ -265,7 +267,7 @@
 
 ## 7. 구현 방향
 ### 7-1. 파일 경계
-- 기존 [issue98_combo_mining_report.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/issue98_combo_mining_report.py)는 `single-window reporter`로 유지한다.
+- 기존 [issue98_combo_mining_report.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/analysis/issue98_combo_mining_report.py)는 `single-window reporter`로 유지한다.
 - 신규 오케스트레이터 예시:
   - `src/analysis/shortlist_derivation.py`
 
@@ -312,7 +314,7 @@ python -m src.analysis.shortlist_derivation derive-shortlist \
 4. `strict_only_governance`에 provenance 검사 규칙을 추가한다.
 
 ## 10. 관련 문서
-- [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
-- [Cluster V1 shortlist diversification PoC](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_24-cluster-v1-shortlist-diversification-poc.md)
-- [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
-- [Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
+- [WFO shortlist derivation review](2026_03_16-wfo-shortlist-derivation-review.md)
+- [Cluster V1 shortlist diversification PoC](2026_03_24-cluster-v1-shortlist-diversification-poc.md)
+- [WFO Approval Workflow Runbook](../docs/operations/2026-03-14-wfo-approval-runbook.md)
+- [Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md)

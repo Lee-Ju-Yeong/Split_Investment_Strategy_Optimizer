@@ -388,11 +388,11 @@
 - 현재 WFO 구현은 아직 이 문서의 철학을 그대로 강제하지 않는다.
 - 특히 아래가 남아 있다.
   - overlap 경로 허용
-    - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:542)
+    - [walk_forward_analyzer.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/analysis/walk_forward_analyzer.py)
   - OOS 초기자금 carry-over
-    - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:662)
+    - [walk_forward_analyzer.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/analysis/walk_forward_analyzer.py)
   - 중복 OOS 날짜 평균 합성 curve
-    - [walk_forward_analyzer.py](/root/projects/Split_Investment_Strategy_Optimizer/src/analysis/walk_forward_analyzer.py:691)
+    - [walk_forward_analyzer.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/analysis/walk_forward_analyzer.py)
   - CPU audit 결과가 downstream governance gate까지 아직 닫히지 않음
     - `pass/fail` 성격은 1차 반영됐지만, release gate 연결은 남아 있음
 - 따라서 이 문서는 `즉시 운영 승인`이 아니라 `공식 구현 전에 맞춰 둘 설계 메모`다.
@@ -408,8 +408,8 @@
 8. `lane_manifest.json`, `holdout_manifest.json`, `anchor_manifest.json` 포맷을 구현에 연결한다.
 
 ## 11. 참고 문서
-- [#68 Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
-- [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
-- [WFO shortlist derivation review](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_16-wfo-shortlist-derivation-review.md)
-- [#98 GPU Throughput Refactor](/root/projects/Split_Investment_Strategy_Optimizer/todos/done_2026_02_17-issue98-gpu-throughput-refactor.md)
-- [WFO analysis context](/root/projects/Split_Investment_Strategy_Optimizer/llm-context/04_wfo_analysis.md)
+- [#68 Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md)
+- [WFO Approval Workflow Runbook](../docs/operations/2026-03-14-wfo-approval-runbook.md)
+- [WFO shortlist derivation review](2026_03_16-wfo-shortlist-derivation-review.md)
+- [#98 GPU Throughput Refactor](done_2026_02_17-issue98-gpu-throughput-refactor.md)
+- [WFO analysis context](../llm-context/04_wfo_analysis.md)

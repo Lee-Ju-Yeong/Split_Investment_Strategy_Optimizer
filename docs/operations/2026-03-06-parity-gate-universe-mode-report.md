@@ -1,5 +1,7 @@
 # Parity Gate Report by Universe Mode (2026-03-06)
 
+> **작성 당시의 절차·판단·검증 기록입니다.** 본문의 성공·진행·예정 표현은 당시 환경과 범위에 한정됩니다. 현재 구현과 남은 확인은 [프로젝트 상태](../../TODO.md), 실행 환경은 [전체 실행 안내](../running.md)를 확인합니다. 이번 안내 정비에서는 운영 작업을 재실행하지 않았습니다.
+
 ## 목적
 - `strict_pit`와 `optimistic_survivor`를 분리 트랙으로 검증하고, CPU-GPU parity 게이트 증적을 남긴다.
 

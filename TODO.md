@@ -1,8 +1,10 @@
 # Project Status Dashboard
 
-> Last updated: 2026-03-19
-> Role: 이 파일은 현재 진행 중인 일을 빠르게 파악하는 관제판입니다.
+> Last updated: 2026-11-06 (공개 코드·기록 대조)
+> Role: 공개 코드에서 확인한 구현, 남은 검증, 연구 계획을 구분합니다. 과거 로그는 현재 작업 실행 여부를 뜻하지 않습니다.
 > Rule: 상세 계획, 작업 로그, 증적은 각 `todos/*.md` 문서가 담당합니다.
+
+처음 방문했다면 [프로젝트 소개](README.md)와 [세 구현의 근거](docs/engineering-evidence.md)를 먼저 읽습니다. 이번 [안내 정비 기록](todos/2026_11_06-public-project-refresh.md)은 제품 개발·운영 재개와 별개입니다.
 
 ## Core Invariants
 - `CPU=SSOT`: CPU 백테스터가 최종 기준입니다.
@@ -11,7 +13,7 @@
 - `Evidence Before Promotion`: 중요한 판단에는 결과 파일, 테스트, 리포트 링크가 있어야 합니다.
 
 ## How To Read
-1. `Active Focus`에서 지금 실제로 움직이는 항목을 먼저 봅니다.
+1. `Active Focus`에서 완료 구현과 남은 확인 항목을 먼저 봅니다. 실시간 운영 상태는 이 파일만으로 알 수 없습니다.
 2. 각 항목의 상세 계획과 로그는 링크된 `todos/*.md` 문서를 엽니다.
 3. `Research & Review Notes`는 참고 자료입니다. 실행 SSOT가 아닙니다.
 4. `todos/done_*.md`는 완료 아카이브입니다. 현재 우선순위 판단에는 쓰지 않습니다.
@@ -27,7 +29,7 @@
 | --- | --- | --- | --- |
 | `#56 Release parity` | Done (synthetic) | config single-row + synthetic `top-k=20` 범위까지 decision-level 증적 확보, real optimizer/WFO CSV는 spot revalidation만 남음 | [#56](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md) |
 | `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
-| `ShortSellingDaily PIT lag` | Open | `sbv_ratio` same-date 반영의 PIT 의미를 확정해야 함 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
+| `ShortSellingDaily PIT lag` | 구현·영향 비교 완료 / 재계산 완료 미확인 | 임시 3거래일 지연 반영과 회귀 테스트 구현. 실제 제공처 가용 시점 확정과 장기 재계산 완료는 별도 확인 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `외부 출시 경계` | Open | 내부 검증 단계와 외부 출시 단계를 분리해서 관리해야 함 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
 | `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
 | `#98 Throughput promotion` | Done | PR `#103`으로 current HEAD canonical throughput win과 strict parity reconfirmation을 함께 반영했고, 이번 tranche 목표를 종료했다 | [#98](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md) |
@@ -35,12 +37,14 @@
 ## Active Focus
 | Priority | Item | Status | Why Now | Next Action | Detail |
 | --- | --- | --- | --- | --- | --- |
-| `P0` | `ShortSellingDaily` publication lag 정리 | In Progress | 공매도 데이터 same-date 반영은 PIT 리스크 후보이며, shadow diff로 `sbv_ratio` 영향과 `DailyStockTier` 영향 범위를 이미 확인했다 | 임시 `lag=3 + same-date 금지` 정책은 코드 반영 완료. shadow diff 결과를 근거로 `DailyStockTier` backfill을 `2013-11-20 ~ 2026-02-06` 범위에서 재개하고, 완료 후 row count / 최신 날짜 / 샘플 검증을 남긴다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
+| `P0` | `ShortSellingDaily` publication lag 정리 | 코드·영향 비교 완료 / 장기 재계산 완료 미확인 | 임시 3거래일 지연 정책과 shadow diff가 구현됨 | 마지막 공개 로그 이후 완료 증거가 확인되면 row count·최신 날짜·샘플 검증을 기록한다. 이번 문서 정비에서는 재계산하지 않는다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
 | `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
-| `P1` | `#104` GPU throughput follow-up hot path | Done | `H-001`, `H-003`, `H-004-a`는 canonical 회귀로 정리했고, `H-005-b`가 `cp.unique` 기반 additional-buy last-trade dedup 제거 후 canonical 2-run `+94.96% / +91.68%`와 strict parity를 함께 통과했다 | 새 hot-path tranche가 생기기 전까지 재개하지 않는다. 필요 시 `--kernel-breakdown` probe를 재사용한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
-| `P2` | `#68` Robust WFO / Ablation | Planned | 공식 경로 안정화 후 전략 선택 계층을 고도화해야 함 | 임시 합의안 기준으로 `Anchored WFO`, `final untouched OOS`, `stress pack` 구조와 robust score / hard gate 공식안 고정. shortlist 쪽은 `N-window discovery-only contract v1` 문서화 완료 후 구현 순서로 진행 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
+| `P1` | `#104` GPU throughput follow-up hot path | Done | `H-001`, `H-003`, `H-004-a`는 canonical 회귀로 정리했고, `H-005-b`가 `cp.unique` 기반 additional-buy last-trade dedup 제거 후 동일 조건 2회 중앙값에서 GPU 계산 시간 `94.96%`, 전체 시간 `91.68%` 감소와 strict parity를 함께 통과했다 | 새 hot-path tranche가 생기기 전까지 재개하지 않는다. 필요 시 `--kernel-breakdown` probe를 재사용한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
+| `P2` | `#68` Robust WFO / Ablation | 주요 경로 구현 / 최종 승인과 별개 | PR #106에 frozen shortlist 기반 평가·CPU 최종 검산·holdout 보호·N-window 후보 추출 반영 | 구현된 경로의 검증 기록과 미완료 승인 조건을 구분해 후속 평가한다 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
 
-## Roadmap Checkpoint (2026-03-10)
+## Roadmap Checkpoint (2026-03-10 당시 계획)
+
+아래 분기 일정은 당시 검토안입니다. 실제 완료나 현재 출시 약속을 뜻하지 않으며, 이번 정비에서 새로운 일정을 확정하지 않았습니다.
 - `2026 Q2`: 데이터 계약과 검증 규칙을 먼저 확정합니다. `ShortSellingDaily lag`, strict parity, manifest, `#68` 공식안을 이 구간에서 잠급니다.
 - `2026 Q3`: 강건성 검증과 결과 리포트 표준화를 진행합니다. CPU certification 결과를 기본 산출물로 굳힙니다.
 - `2026 Q4`: `#72` continuity, `#101` 편향 완화, k3s/GPU job 연구는 내부 검증용으로만 진행합니다.
@@ -60,7 +64,7 @@
 - `#101` deterministic Tier1 bias 완화: 특정 종목 고착보다 `theta x scenario x fold` 분포를 기준으로 파라미터를 고르려는 연구 트랙입니다. [doc](todos/2026_02_22-issue101-feat-tier1.md)
 - `GPU-native WFO v2`: 현재 공식 경로가 아닌 내부 연구용 문서입니다. [doc](todos/2026_03_06-gpu-native-wfo-v2-design.md)
 - `WFO shortlist derivation review`: `single-window shortlist` vs `research-stage WFO full-grid` 논의를 다시 열기 전에 읽는 결정 메모입니다. [doc](todos/2026_03_16-wfo-shortlist-derivation-review.md)
-- `N-window shortlist contract v1`: dual-window 이후를 감안한 discovery-only shortlist 생성 계약 초안입니다. [doc](todos/2026_03_19-n-window-shortlist-contract-v1.md)
+- `N-window shortlist contract v1`: 여러 기간의 결과를 후보 목록으로 줄이는 연구용 계약이며 PR #106에 기본 구현이 반영됐습니다. `cluster_v1` 확장은 별도 제안입니다. [doc](todos/2026_03_19-n-window-shortlist-contract-v1.md)
 
 ### Supporting Notes
 - 로컬 DB 없이 할 수 있는 개발 범위: [note](todos/2026_02_14-notebook-no-local-db-dev.md)
@@ -84,7 +88,7 @@
   - 읽는 시점: `single-window shortlist` 대신 `research-stage WFO full-grid`를 기본 경로로 올릴지 다시 논의할 때
 - [N-window shortlist contract v1](todos/2026_03_19-n-window-shortlist-contract-v1.md)
   - 성격: `research`
-  - 읽는 시점: dual-window를 넘어 `N-window discovery-only shortlist`를 구현하거나 provenance 계약을 추가할 때
+  - 읽는 시점: PR #106에 반영된 후보 추출 계약과 후속 군집화 제안의 경계를 확인할 때
 - [성능/안정성 재검토 메모](todos/2026_03_06-performance-stability-review.md)
   - 성격: `review`
   - 읽는 시점: `#98`을 왜 바로 열지 않는지 설명이 필요할 때
