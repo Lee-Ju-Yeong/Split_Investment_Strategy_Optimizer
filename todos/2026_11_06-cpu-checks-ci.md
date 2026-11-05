@@ -1,12 +1,12 @@
 # 무료 실행기로 CPU 기본 CI 도입
 
-- Status: In progress
+- Status: Done (구현·도입 전 검증). 최종 병합·공개 확인 결과는 아래 PR에 기록.
 - Type: implementation
 - Why: 방문자가 실행하는 최소 CPU 검사와 예제를 PR·main에서도 같은 명령으로 확인한다.
-- Next Action: PR의 실제 CI → 일반 병합 → main 실행 확인.
-- Gate Status: 원격 개발 환경 검사·지정 리뷰 통과. 실제 GitHub 실행 대기. 병합 필수 검사 지정은 이번 범위 밖.
+- Next Action: 검사 대상·실행 코드가 달라지면 자체 검사와 해당 후보의 CI를 확인한다. 이번 도입의 최종 SHA·병합·main 실행·브랜치 정리 결과는 [PR #110](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/110) 본문에 이어 기록한다.
+- Gate Status: 원격 개발 환경·지정 리뷰·PR 구현 후보 CPU checks·Secret Scan 통과. 최종 병합은 해당 후보의 성공을 재확인한 뒤 진행한다. 병합 필수 검사 지정은 이번 범위 밖.
 - Evidence Links: [workflow](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/.github/workflows/cpu-checks.yml), [검사 도구](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/tools/ci/run_cpu_checks.py), [실행 안내](../tests/README.md)
-- Related Issues: 별도 이슈 없음. 사용자 승인 계획에 따른 CI 도입.
+- Related Issues: [PR #110](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/110). 사용자 승인 계획에 따른 CI 도입.
 
 ## 승인된 실행 계약
 
@@ -30,9 +30,9 @@
 - [x] 안내 명령·검사 범위·배지 갱신
 - [x] 원격 개발 환경의 도구 자체 검사·34개 제품 검사·예제·pip check
 - [x] 지정 리뷰어 검토와 차단 결함 해소
-- [ ] PR 최종 후보의 실제 CPU checks·Secret Scan
-- [ ] 일반 병합 후 main CPU checks·Secret Scan·Pages·공개 안내 확인
-- [ ] 작업 브랜치 정리와 최종 결과 기록
+- [x] PR 구현 후보의 실제 CPU checks·Secret Scan
+
+최종 문서 커밋까지 포함한 PR 검사, 일반 병합 후 main CPU checks·Secret Scan·Pages·공개 안내 확인, 이번 작업 브랜치 정리는 **PR #110 본문의 최종 결과**에 기록한다. 병합 이후에 결정되는 SHA·실행 ID를 기록하기 위해 검증 완료한 소스를 다시 변경하지 않는다.
 
 ## 작업 로그
 
@@ -52,3 +52,12 @@
 자체 검사는 임시 자료에서 실패·오류·건너뜀·예상된 실패·예상 밖 성공, 모듈 가져오기 오류, 0개·중복·실행 누락, 종료 코드 0인 불완전 결과, 성공 결과와 비정상 종료의 불일치, 시간 초과·취소와 자식 프로세스 정리를 확인한다. 자체 검사에서 의도적으로 만든 FAIL 결과는 실제 CPU 검사 요약과 분리한다.
 
 실행 코드와 계산 규칙은 그대로다. GPU·실제 DB·외부 수집·성능 재측정은 필요한 환경·인증이 이번 범위에 없으므로 실행하지 않았다. Ubuntu 외 운영체제의 프로세스 정리는 이번에 검증하지 않았다.
+
+## 실제 GitHub 실행
+
+- 구현 후보: `cf4988fbcd6da65f7c5c36de04daf42e304f90a5`.
+- PR의 실제 checkout: `3e689ac0946fc458ade6e5ebe0ba54a5d778de41` (GitHub가 만든 main과의 임시 병합 커밋).
+- [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42112535646): 성공. 표준 GitHub 실행기 `ubuntu-24.04`, 실제 OS Ubuntu 24.04.5, Python 3.12.16. NumPy 2.2.6 / pandas 2.2.3 / Requests 2.32.5.
+- 새 가상환경 설치·`pip check` 통과. 자체 검사 22개(2.744초), 기존 검사 8+7+19=34개, 예제 모두 통과. 실패·오류·건너뜀·예상된 실패·예상 밖 성공 0. 각 대상 종료 코드 0.
+- [Secret Scan](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42112535893): 성공.
+- 위 기록 추가는 문서 변경이며 실행 코드·workflow·검사 본문은 동일하다. 최종 후보와 병합 후 증거는 [PR #110](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/110)에 구분해 남긴다.
