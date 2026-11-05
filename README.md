@@ -15,14 +15,18 @@ Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시
 | 사례 | 해결한 문제 | 확인할 내용 |
 | --- | --- | --- |
 | [수집 중 일부 실패 처리](docs/engineering-evidence.md#collection) | 긴 수집 작업 중 일부 요청이 실패하는 상황 | 성공한 데이터 보존, 실패 집계, 재실행 범위 관리 |
-| [GPU 계산 시간 개선](docs/engineering-evidence.md#gpu) | 반복 계산에서 시간이 많이 걸리는 구간 | 구간별 측정, 개선 전후 비교, CPU 결과와의 일치 검사 |
 | [데이터 반영 시점 검증](docs/engineering-evidence.md#availability) | 당시 알 수 없던 정보가 과거 계산에 들어가는 문제 | 지연 반영 규칙, 회귀 테스트, 변경 영향 분석 |
+| [GPU 계산 시간 개선](docs/engineering-evidence.md#gpu) | 반복 계산에서 시간이 많이 걸리는 구간 | 구간별 측정, 개선 전후 비교, CPU 결과와의 일치 검사 |
 
-각 사례는 **문제 → 구현 → 테스트 → PR·측정 기록** 순서로 읽을 수 있습니다.
+각 사례는 **문제 → 판단과 구현 → 테스트 → PR·측정 기록** 순서로 읽을 수 있습니다. 실패한 수집을 재개하는 방법, 데이터가 사용되는 시점의 정확성, 측정에 근거한 계산 개선을 차례로 확인하세요.
+
+설치 없이 먼저 살펴보려면 [여섯 행으로 보는 데이터 반영 결과](tests/README.md#example)를 읽을 수 있습니다.
 
 ## 데이터와 계산 흐름
 
-**데이터 수집 → MySQL 저장 → 당시 사용할 수 있었던 데이터로 입력 구성**
+![수집·MySQL 저장·당시 사용 가능한 입력 구성 뒤 CPU 기준 계산과 GPU 병렬 탐색으로 나뉘고 결과 비교·기간별 평가로 이어지는 흐름](assets/images/data-flow.svg)
+
+**데이터 수집 → MySQL 저장 → 당시 사용할 수 있었던 데이터로 입력 구성 → CPU·GPU 계산 → 결과 검증**
 
 - **수집·저장:** 가격·거래량, 재무·수급·공매도 데이터와 과거 상장 종목 이력을 수집합니다. 종목별 지표를 미리 계산해 반복 조회 비용을 줄입니다.
 - **CPU:** 매매 과정과 현금·보유 상태를 계산하는 기준 구현입니다.
@@ -53,7 +57,7 @@ python tools/ci/run_cpu_checks.py
 
 ## 구현 상태와 확인 범위
 
-공개 코드 기준은 2026-03-31 병합된 [PR #106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)이며, 아래 안내는 2026-11-06에 정리했습니다.
+제품 계산 구현의 기준은 2026-03-31 병합된 [PR #106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)입니다. 이후 2026-11-06에 소개·예제·자동 검사를 정비했습니다. 최신 문서·CI 커밋이 새 투자 전략이나 GPU 성능 개선을 의미하지는 않습니다.
 
 | 항목 | 확인된 상태 | 남은 확인·연구 |
 | --- | --- | --- |
@@ -63,9 +67,19 @@ python tools/ci/run_cpu_checks.py
 | 기간을 나눈 전략 검증(WFO) | 후보 목록 고정, CPU 검산, 최종 평가 전 조건 검사, 후보 압축 도구 구현 | 구현 완료와 전략의 최종 승인·실전 유효성은 별도 판단 |
 | 군집화·k3s/GPU 작업 운영 | 연구·설계 문서 보유 | 기본 운영 기능이나 배포 완료 성과로 소개하지 않음 |
 
-GitHub Actions의 **CPU 기본 검사(CPU checks)**는 main 대상 PR과 main 변경 시 위 명령을 실행합니다. 최초 도입 기준은 기존 검사 **34개와 예제**이며, 검사 도구 자체 검사는 별도 단계입니다. 건너뜀·검사 누락도 실패로 처리합니다. **비밀정보 검사(Secret Scan)**와 **문서 사이트 배포(Pages)**도 유지합니다. 전체 제품·GPU·실제 DB 검증은 포함하지 않으며, 자세한 범위는 [테스트 안내](tests/README.md)에 있습니다.
+자동 검사별 확인 범위를 구분합니다. 각 실행의 요약에서 후보 커밋·환경·실제 검사 수를 확인할 수 있습니다.
+
+| 자동 검사 | 확인하는 범위 | 실행 기록 |
+| --- | --- | --- |
+| CPU 기본 검사 | 기존 34개와 가상 데이터 예제, 실행 도구 자체 22개. 누락·건너뜀도 실패 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml) |
+| 격리 DB 통합 검사 | 매번 새 MySQL의 합성 CPU 시나리오 3개, 연결 제한·실패 처리 14개 | [DB integration](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/db-integration.yml) |
+| 문서 화면 검사 | Jekyll 생성·주요 링크·한국어 정보·넓은/좁은 화면·키보드 탐색 | [Docs preview](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/docs-preview.yml) |
+
+비밀정보 검사(Secret Scan)와 기존 Pages 배포도 유지합니다. 위 결과는 운영 DB·외부 수집·GPU 전체 검증이나 투자 성과를 뜻하지 않습니다. [검사별 준비·실행·제외 범위](tests/README.md)와 [정비 결과](todos/2026_11_06-project-maintenance-execution.md)를 함께 확인할 수 있습니다.
 
 ## 코드 찾아보기
+
+[src/ 코드 읽기 안내](src/README.md)에서 실제 구현과 관련 테스트의 추천 순서를 확인할 수 있습니다.
 
 | 관심 있는 부분 | 시작점 |
 | --- | --- |

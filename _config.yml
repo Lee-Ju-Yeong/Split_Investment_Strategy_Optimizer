@@ -1,0 +1,21 @@
+title: 국내 주식 분할투자 시뮬레이터
+description: 국내 주식의 과거 데이터로 분할투자 조건을 비교하는 개인 프로젝트. 데이터 수집·검증과 CPU·GPU 계산의 코드, 테스트, 변경 기록을 소개합니다.
+lang: ko-KR
+locale: ko_KR
+url: https://lee-ju-yeong.github.io
+baseurl: /Split_Investment_Strategy_Optimizer
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+exclude:
+  - tools
+  - examples
+  - requirements-review.txt
+  - requirements-db-test.txt
+  - requirements-docs-test.txt

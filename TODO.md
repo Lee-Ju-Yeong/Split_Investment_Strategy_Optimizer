@@ -5,13 +5,13 @@
 처음 방문했다면 [프로젝트 소개](README.md) → [구현 근거](docs/engineering-evidence.md) → [직접 확인하기](tests/README.md) 순서로 읽으세요.
 모든 작업 문서는 [작업 색인](todos/README.md), 이번 56개 제안의 처리 결과는 [정비 실행 기록](todos/2026_11_06-project-maintenance-execution.md)에 연결합니다.
 
-## 지금 진행하는 정비
+## 이번 정비 결과
 
 | 작업 | 상태 | 다음 행동 |
 | --- | --- | --- |
 | 문서·이슈 상태 정리 | PR #111 반영 완료 | 이슈 17개 갱신, #67·#97 근거로 종료, PR #75·#95 유지 |
-| #59 DB 통합 검사 | 실제 DB 검증 완료 / PR #112 병합 확인 중 | [결과](todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md): DB 3·연결 제한 14 통과. 최종 후보와 main CI 확인 후 이슈 종료 |
-| 방문 동선·Pages | 계획 확정 | 코드 읽기 안내·한국어 제목·탐색·공개 설정 정비 |
+| #59 DB 통합 검사 | PR #112 병합·main 검증 완료 | [결과](todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md): DB 3·연결 제한 14 통과. main CI 확인 후 이슈 completed 종료 |
+| 방문 동선·Pages | PR #113 구현·검증 기록 | [최종 후보·병합 후 공개 확인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/113), 홈페이지·Topics 반영 |
 
 매매 규칙·GPU 계산·운영 DB·전체 환경 이관은 이 정비의 범위가 아닙니다. DB 검사는 합성 자료와 실행마다 폐기하는 검사용 DB만 사용합니다.
 
@@ -29,7 +29,7 @@
 현재 상태·근거·재개 조건은 이슈 본문에 기록합니다. 오래됐다는 이유로 닫거나 연구를 구현 성과로 소개하지 않습니다.
 
 - 사용성·설명: [#19 통합 CLI](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/19), [#20 GPU 환경 안내](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/20), [#21 핵심 API 설명](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21), [#30 결과 리포팅](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/30).
-- 구현 후속: [#52 GPU 순차 처리·병목](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/52), [#54 파이프라인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54), [#57 모델·캐시](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57), [#58 DB 접근](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58), [#59 통합 검사](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59).
+- 구현 후속: [#52 GPU 순차 처리·병목](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/52), [#54 파이프라인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54), [#57 모델·캐시](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57), [#58 DB 접근](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58).
 - 평가·기준서: [#68 강건성 평가](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68), [#94 전략 기준서](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/94). PR #75·#95는 차이와 재개 조건을 기록하고 유지합니다.
 - 연구: [#35 동적 파라미터](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/35), [#72 기업 이벤트와 포지션 승계](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/72), [#101 분포 기반 최적화](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101), [#107 ETF 전략](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/107).
 - 다른 과제에서 이어진 항목은 [#71 후속 연결표](todos/2026_03_01-issue71-carryover-non71-backlog.md)에서 추적합니다.
@@ -44,6 +44,7 @@
 | GPU 처리량 개선 | [PR #103 기록](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md). 기존 로컬 식별자 issue98은 실제 GitHub PR #98과 다름 |
 | GPU 후속 개선 #104 | [PR #105 측정·원복 기록](todos/done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
 | 공개 안내·작은 예제 | [PR #109 완료 기록](todos/done_2026_11_06-public-project-refresh.md) |
+| 격리 DB 통합 검사 #59 | [PR #112 완료 기록](todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md): 실제 MySQL 3개·연결 제한 14개 통과 |
 | CPU 기본 CI | [PR #110 완료 기록](todos/done_2026_11_06-cpu-checks-ci.md): 기존 검사 34개·예제·도구 자체 검사 22개 |
 
 그 밖의 완료 기록과 연구·검토 문서는 [전체 색인](todos/README.md)에 있습니다.
