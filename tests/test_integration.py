@@ -1,187 +1,187 @@
+"""임시 MySQL에서 실제 SQL과 CPU 실행 인터페이스를 확인한다."""
+
 import os
 import unittest
-from unittest.mock import patch
 
-try:
-    import numpy as np
-    import pandas as pd
-except ModuleNotFoundError:
-    # Optional in minimal/laptop envs; integration tests should skip gracefully.
-    np = None
-    pd = None
 
 class TestBacktestingIntegration(unittest.TestCase):
-    TEST_TICKER = '999998'
-    START_DATE, END_DATE = '2022-01-01', '2022-03-31'
-    INITIAL_CASH = 1_000_000
-    INVESTMENT_AMOUNT = 1_000_000
+    TEST_TICKER = "999998"
+    COMPANY_NAME = "합성 검사 종목"
+    START_DATE, END_DATE = "2022-01-03", "2022-01-05"
+    INITIAL_CASH, INVESTMENT_AMOUNT = 1_000_000, 100_000
 
     @classmethod
     def setUpClass(cls):
-        if pd is None or np is None:
-            raise unittest.SkipTest("pandas/numpy are required for DB integration tests.")
-
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        config_path = os.environ.get("MAGICSPLIT_CONFIG_PATH") or os.path.join(repo_root, "config", "config.yaml")
-        if not os.path.exists(config_path):
-            raise unittest.SkipTest("config/config.yaml not found. DB integration tests require local MySQL config.")
-
-        # DB drivers are optional for most tests; integration test should skip if missing.
-        try:
-            import pymysql  # noqa: F401
-            import mysql.connector  # noqa: F401
-        except ModuleNotFoundError as exc:
-            raise unittest.SkipTest(f"DB driver not installed: {exc.name}")
-
-        # Import inside to keep module import safe in non-DB environments.
-        from src.backtest.cpu.backtester import BacktestEngine
+        if "SISO_RUN_DB_TESTS" not in os.environ:
+            raise unittest.SkipTest("임시 MySQL 검사는 SISO_RUN_DB_TESTS=1을 명시해야 합니다.")
+        # 명시적으로 실행한 검사의 의존성/설정/연결 오류는 실패로 전파한다.
+        from tools.ci.db_fixture import required_config, prepare_database
+        required_config()
+        import pandas as pd
+        import pymysql
+        from src.db_setup import create_tables
         from src.data_handler import DataHandler
-        from src.db_setup import create_tables, get_db_connection
-        from src.config_loader import load_config
+        from src.backtest.cpu.backtester import BacktestEngine
         from src.backtest.cpu.execution import BasicExecutionHandler
         from src.backtest.cpu.portfolio import Portfolio, Position
         from src.backtest.cpu.strategy import Strategy
 
-        cls.BacktestEngine = BacktestEngine
-        cls.BasicExecutionHandler = BasicExecutionHandler
-        cls.DataHandler = DataHandler
-        cls.Portfolio = Portfolio
-        cls.Position = Position
-
-        config = load_config()
-        cls.db_config = dict(config.get("database") or {})
-        if not cls.db_config:
-            raise unittest.SkipTest("config/config.yaml is missing `database` section.")
-
-        try:
-            cls.conn = get_db_connection(cls.db_config)
-            create_tables(cls.conn)
-        except Exception as exc:
-            raise unittest.SkipTest(f"Cannot connect to MySQL: {exc}")
-
-        PositionImpl = cls.Position
-
-        class SimpleBuyStrategy(Strategy):
-            def __init__(self, start_date, end_date, investment_amount):
-                self.start_date = pd.to_datetime(start_date)
-                self.end_date = pd.to_datetime(end_date)
-                self.investment_amount = float(investment_amount)
-                self.invested = False
-
-            def generate_sell_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
-                return []
-
-            def generate_additional_buy_signals(
-                self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None
-            ):
-                return []
-
-            def generate_new_entry_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
-                if self.invested:
-                    return []
-
-                for code in data_handler.get_filtered_stock_codes(current_date):
-                    row = data_handler.get_stock_row_as_of(code, current_date, self.start_date, self.end_date)
-                    if row is None:
-                        continue
-
-                    ma_5 = row.get("ma_5")
-                    ma_20 = row.get("ma_20")
-                    close_price = row.get("close_price")
-                    if pd.notna(ma_5) and pd.notna(ma_20) and pd.notna(close_price) and ma_5 > ma_20:
-                        self.invested = True
-                        position = PositionImpl(
-                            buy_price=float(close_price),
-                            quantity=0,
-                            order=1,
-                            additional_buy_drop_rate=0.05,
-                            sell_profit_rate=0.10,
-                        )
-                        return [
-                            {
-                                "date": current_date,
-                                "ticker": code,
-                                "type": "BUY",
-                                "investment_amount": self.investment_amount,
-                                "position": position,
-                                "reason_for_trade": "신규 진입",
-                                "trigger_price": float(close_price),
-                                "start_date": self.start_date,
-                                "end_date": self.end_date,
-                            }
-                        ]
-                return []
-
-        cls.SimpleBuyStrategy = SimpleBuyStrategy
+        cls.db_config, cls.conn, version = prepare_database(pymysql.connect, create_tables)
+        cls.addClassCleanup(cls.conn.close)
+        cls.DataHandler, cls.BacktestEngine = DataHandler, BacktestEngine
+        cls.BasicExecutionHandler, cls.Portfolio = BasicExecutionHandler, Portfolio
+        cls.dates = list(pd.to_datetime(["2022-01-03", "2022-01-04", "2022-01-05"]))
+        cls.SimpleBuyStrategy = cls._strategy_type(Strategy, Position)
+        message = f"- 실제 MySQL 버전: {version}\n"
+        print(message, flush=True)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+                stream.write(message)
 
     @classmethod
-    def tearDownClass(cls):
-        if getattr(cls, "conn", None) is not None:
-            cls.conn.close()
+    def _strategy_type(cls, strategy_base, position_type):
+        # 제품 Strategy의 추상 계약을 직접 상속해 인터페이스 변경을 감지한다.
+        class SimpleBuyStrategy(strategy_base):
+            max_stocks = 1
+
+            def __init__(self):
+                self.invested = False
+                self.calls = []
+
+            def generate_sell_signals(self, current_date, portfolio, data_handler,
+                                      trading_dates, current_day_idx=None):
+                self.calls.append(("sell", current_date, current_day_idx))
+                return []
+
+            def generate_additional_buy_signals(self, current_date, portfolio, data_handler,
+                                                trading_dates, current_day_idx=None):
+                self.calls.append(("additional", current_date, current_day_idx))
+                return []
+
+            def generate_new_entry_signals(self, current_date, portfolio, data_handler,
+                                           trading_dates, current_day_idx=None):
+                self.calls.append(("new", current_date, current_day_idx))
+                if self.invested:
+                    return []
+                for code in data_handler.get_filtered_stock_codes(current_date):
+                    row = data_handler.get_stock_row_as_of(
+                        code, current_date, cls.START_DATE, cls.END_DATE,
+                    )
+                    if row is not None and row["ma_5"] > row["ma_20"]:
+                        self.invested = True
+                        return [{
+                            "date": current_date, "ticker": code, "type": "BUY",
+                            "investment_amount": cls.INVESTMENT_AMOUNT,
+                            "position": position_type(10000, 0, 1, 0.05, 0.10),
+                            "reason_for_trade": "합성 조건 신규 진입", "trigger_price": 10000,
+                            "start_date": cls.START_DATE, "end_date": cls.END_DATE,
+                        }]
+                return []
+
+        return SimpleBuyStrategy
 
     def setUp(self):
-        self._cleanup_test_data()
+        self.addCleanup(self._cleanup_test_data)
         self._prepare_test_data()
 
-        self.filtered_codes_patcher = patch.object(
-            self.DataHandler, "get_filtered_stock_codes", return_value=[self.TEST_TICKER]
-        )
-        self.filtered_codes_patcher.start()
-
-    def tearDown(self):
-        self.filtered_codes_patcher.stop()
-        self._cleanup_test_data()
-
     def _cleanup_test_data(self):
-        with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM WeeklyFilteredStocks WHERE stock_code = %s", (self.TEST_TICKER,))
-            cur.execute("DELETE FROM DailyStockPrice WHERE stock_code = %s", (self.TEST_TICKER,))
-            cur.execute("DELETE FROM CalculatedIndicators WHERE stock_code = %s", (self.TEST_TICKER,))
+        with self.conn.cursor() as cursor:
+            for table in ("WeeklyFilteredStocks", "CalculatedIndicators", "DailyStockPrice", "CompanyInfo"):
+                cursor.execute(f"DELETE FROM {table} WHERE stock_code = %s", (self.TEST_TICKER,))
         self.conn.commit()
 
     def _prepare_test_data(self):
-        with self.conn.cursor() as cur:
-            cur.execute("INSERT IGNORE INTO WeeklyFilteredStocks (filter_date, stock_code, company_name) VALUES (%s,%s,%s)",
-                        (self.START_DATE, self.TEST_TICKER, '백테스트용주식'))
-        
-        dates = pd.to_datetime(pd.date_range(self.START_DATE, self.END_DATE, freq='B'))
-        n = len(dates)
-        n_down = min(30, max(1, n))
-        n_up = n - n_down
-        close_prices = np.concatenate(
-            [
-                np.linspace(12000, 10000, n_down),
-                np.linspace(10001, 15000, n_up) if n_up > 0 else np.array([], dtype=float),
-            ]
-        )
-        df = pd.DataFrame({'date': dates, 'close_price': close_prices})
-        df.set_index('date', inplace=True)
-        df['ma_5'] = df['close_price'].rolling(5).mean()
-        df['ma_20'] = df['close_price'].rolling(20).mean()
-        df.reset_index(inplace=True); df.dropna(inplace=True); df['stock_code'] = self.TEST_TICKER
-        df['date_str'] = df['date'].dt.strftime('%Y-%m-%d')
-        
-        df_daily = df.copy()
-        df_daily['open_price'], df_daily['high_price'], df_daily['low_price'], df_daily['volume'] = df['close_price'], df['close_price'], df['close_price'], 1000
-
-        with self.conn.cursor() as cur:
-            cur.executemany("INSERT INTO DailyStockPrice (stock_code, date, open_price, high_price, low_price, close_price, volume) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                            df_daily[['stock_code', 'date_str', 'open_price', 'high_price', 'low_price', 'close_price', 'volume']].values.tolist())
-            cur.executemany("INSERT INTO CalculatedIndicators (stock_code, date, ma_5, ma_20) VALUES (%s,%s,%s,%s)",
-                            df[['stock_code', 'date_str', 'ma_5', 'ma_20']].values.tolist())
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO CompanyInfo (stock_code, company_name) VALUES (%s, %s)",
+                (self.TEST_TICKER, self.COMPANY_NAME),
+            )
+            cursor.execute(
+                "INSERT INTO WeeklyFilteredStocks (filter_date, stock_code, company_name) VALUES (%s,%s,%s)",
+                ("2021-12-31", self.TEST_TICKER, self.COMPANY_NAME),
+            )
+            for index, date in enumerate(self.dates):
+                self._insert_daily_row(cursor, date)
+                cursor.execute(
+                    "INSERT INTO CalculatedIndicators (stock_code, date, ma_5, ma_20) VALUES (%s,%s,%s,%s)",
+                    (self.TEST_TICKER, date.date(), 9 if index == 0 else 11, 10),
+                )
         self.conn.commit()
 
-    def test_backtesting_buy_scenario(self):
-        data_handler = self.DataHandler(self.db_config)
-        portfolio = self.Portfolio(self.INITIAL_CASH, self.START_DATE, self.END_DATE)
-        strategy = self.SimpleBuyStrategy(self.START_DATE, self.END_DATE, self.INVESTMENT_AMOUNT)
-        execution_handler = self.BasicExecutionHandler()
-        backtester = self.BacktestEngine(self.START_DATE, self.END_DATE, portfolio, strategy, data_handler, execution_handler)
-        
-        final_portfolio = backtester.run()
+    def _insert_daily_row(self, cursor, date):
+        cursor.execute(
+            """INSERT INTO DailyStockPrice
+               (stock_code, date, open_price, high_price, low_price, close_price,
+                adj_open, adj_high, adj_low, adj_close, adj_ratio, volume)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (self.TEST_TICKER, date.date(), *([10000] * 8), 1, 1000),
+        )
 
-        self.assertGreater(len(final_portfolio.trade_history), 0, "매수 거래가 발생해야 합니다.")
-        self.assertEqual(final_portfolio.trade_history[0].code, self.TEST_TICKER)
-        
-if __name__ == '__main__':
+    def _make_engine(self):
+        handler = self.DataHandler(self.db_config, price_basis="adjusted", universe_mode="strict_pit")
+        handler.clear_load_stock_data_cache()
+        self.addCleanup(handler.clear_load_stock_data_cache)
+        self.assertTrue(handler.has_stored_adj_ohlc)
+        self.assertEqual(handler.get_name_from_ticker(self.TEST_TICKER), self.COMPANY_NAME)
+        self.assertEqual(handler.get_trading_dates(self.START_DATE, self.END_DATE), self.dates)
+        self.assertEqual(handler.get_filtered_stock_codes(self.dates[0]), [self.TEST_TICKER])
+        portfolio = self.Portfolio(self.INITIAL_CASH, self.START_DATE, self.END_DATE)
+        strategy = self.SimpleBuyStrategy()
+        engine = self.BacktestEngine(self.START_DATE, self.END_DATE, portfolio, strategy,
+                                     handler, self.BasicExecutionHandler())
+        return engine, portfolio, strategy
+
+    def _assert_daily_flow(self, portfolio, strategy):
+        expected = [(stage, date, index) for index, date in enumerate(self.dates)
+                    for stage in ("sell", "new", "additional")]
+        self.assertEqual(strategy.calls, expected)
+        self.assertEqual([row["date"] for row in portfolio.daily_snapshot_history], self.dates)
+
+    def test_backtesting_buy_scenario(self):
+        engine, portfolio, strategy = self._make_engine()
+        result = engine.run()
+        self.assertIs(result, portfolio)
+        self._assert_daily_flow(portfolio, strategy)
+        self.assertEqual(len(portfolio.trade_history), 1)
+        trade = portfolio.trade_history[0]
+        self.assertEqual((trade.code, trade.name, trade.trade_type),
+                         (self.TEST_TICKER, self.COMPANY_NAME, "BUY"))
+        self.assertEqual(trade.date, self.dates[1])
+        self.assertEqual(trade.quantity, 10)
+        self.assertEqual(trade.commission, 15)
+        self.assertEqual(portfolio.cash, 899985)
+        self.assertEqual(sum(p.quantity for p in portfolio.positions[self.TEST_TICKER]), 10)
+        self.assertEqual([row["cash"] for row in portfolio.daily_snapshot_history],
+                         [1000000, 899985, 899985])
+        self.assertEqual([row["total_value"] for row in portfolio.daily_snapshot_history],
+                         [1000000, 999985, 999985])
+
+    def test_no_buy_signal_preserves_cash(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute("UPDATE CalculatedIndicators SET ma_5=9 WHERE stock_code=%s", (self.TEST_TICKER,))
+        self.conn.commit()
+        engine, portfolio, strategy = self._make_engine()
+        engine.run()
+        self._assert_daily_flow(portfolio, strategy)
+        self.assertEqual(portfolio.trade_history, [])
+        self.assertEqual(portfolio.positions, {})
+        self.assertEqual(portfolio.cash, self.INITIAL_CASH)
+        self.assertTrue(all(row["cash"] == row["total_value"] == self.INITIAL_CASH
+                            for row in portfolio.daily_snapshot_history))
+
+    def test_missing_adjusted_price_is_not_hidden(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE DailyStockPrice SET adj_close=NULL WHERE stock_code=%s AND date=%s",
+                (self.TEST_TICKER, "2022-01-04"),
+            )
+        self.conn.commit()
+        engine, portfolio, _ = self._make_engine()
+        expected = "Adjusted price mode found NULL adjusted OHLC values for ticker=999998 at date=2022-01-04"
+        with self.assertRaisesRegex(ValueError, expected):
+            engine.run()
+        self.assertEqual(portfolio.trade_history, [])
+
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

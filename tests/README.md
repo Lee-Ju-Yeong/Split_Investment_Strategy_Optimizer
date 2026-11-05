@@ -89,22 +89,22 @@ python -m unittest discover -s tools/ci/tests -p 'test_run_cpu_checks.py' -v
 
 ## 4. 별도 환경에서 확인할 검사
 
-아래 항목은 이번 정비에서 실행하지 않았습니다. 자세한 준비 조건은 [전체 실행 안내](../docs/running.md)를 확인하세요.
+DB 통합 검사는 새 격리 환경에서 확인했습니다. 나머지 아래 범위는 이번에 실행하지 않았습니다. 자세한 준비 조건은 [전체 실행 안내](../docs/running.md)를 확인하세요.
 
 | 범위 | 필요한 환경·조건 | 명령 또는 시작점 |
 | --- | --- | --- |
 | CPU의 다른 검사 | 해당 모듈의 DB 드라이버·설정 관련 의존성 등 추가 확인 | `test_point_in_time.py`, `test_data_handler.py` 등은 최소 설치에 포함하지 않음 |
 | GPU 회귀 검사 | CUDA GPU, 호환되는 CuPy·cuDF 환경 | `python -m unittest discover -s tests -p 'test_backtest_strategy_gpu.py' -v` |
-| DB 통합 검사 | 격리된 검사용 MySQL, 설정·인터페이스 사전 점검 | `python -m unittest discover -s tests -p 'test_integration.py' -v` |
+| DB 통합 검사 | 전용 임시 MySQL과 합성 자료. CPU 기본 검사와 별도 | [준비·실행·실패 기준](../docs/testing-mysql.md), `python tools/ci/run_db_checks.py` |
 | 전체 검사 | GPU 의존성과 격리 DB를 포함한 전체 실행 환경 | `python -m unittest discover -s tests -p 'test_*.py' -v` |
 
-`test_integration.py`는 테스트 행을 삽입·삭제하는 코드가 있습니다. 운영 DB에 연결해 실행하지 마세요. 또한 현재 소스에는 `get_db_connection(cls.db_config)` 호출과 인자를 받지 않는 `src.db_setup.get_db_connection()` 정의의 불일치가 남아 있습니다. 준비 단계 예외가 `SkipTest`로 바뀔 수 있으므로 **환경을 갖췄다는 이유만으로 해당 검사가 수행됐다고 보지 않습니다.** 이번에는 제품·기존 테스트 코드를 고치지 않았습니다.
+`test_integration.py`는 일반 제품 설정을 읽지 않고 전용 변수·실제 DB/사용자·빈 스키마를 확인한 후에만 합성 행을 삽입·삭제합니다. 연결 인자 불일치를 테스트 쪽에서 제거했으며, DB 실행을 명시한 뒤의 준비 오류는 건너뛰지 않습니다. [DB integration 실행 기록](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/db-integration.yml)에서 연결 제한 검사와 실제 3개 시나리오의 결과를 따로 확인합니다.
 
 ## 5. 결과를 읽는 기준
 
 - 실행한 명령·커밋·환경·검사 수와 함께 결과를 기록합니다.
 - `skipped`, 의존성 누락, 중단은 통과로 세지 않습니다.
 - GPU 검사를 CPU 흉내 객체로 통과시켜 실제 GPU 검사처럼 소개하지 않습니다.
-- GitHub Actions의 `CPU checks`는 위 세 모듈·예제와 도구 자체 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
+- GitHub Actions의 `CPU checks`는 위 세 모듈·예제와 도구 자체 검사, `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
 
 [프로젝트 소개](../README.md) · [세 가지 구현 근거](../docs/engineering-evidence.md) · [문서 안내](../docs/README.md)
