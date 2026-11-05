@@ -1,0 +1,71 @@
+name: CPU checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-checks:
+    name: CPU 기본 검사
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install review dependencies
+        run: |
+          python -m venv .venv-ci
+          .venv-ci/bin/python -m pip install -r requirements-review.txt
+          .venv-ci/bin/python -m pip check
+      - name: Record environment
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          .venv-ci/bin/python - <<'PY'
+          import importlib.metadata
+          import os
+          import platform
+          import subprocess
+          from pathlib import Path
+
+          checkout = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          lines = ['## 실행 환경', '', f'- 후보 SHA: `{os.environ["CANDIDATE_SHA"]}`',
+                   f'- 실제 checkout SHA: `{checkout}`',
+                   f'- Python: `{platform.python_version()}`', '- 실행기: `ubuntu-24.04`']
+          for name in ('numpy', 'pandas', 'requests'):
+              lines.append(f'- {name}: `{importlib.metadata.version(name)}`')
+          text = '\n'.join(lines) + '\n'
+          print(text)
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:
+              stream.write(text)
+          PY
+      - name: Test the CI tool
+        id: tool-tests
+        run: .venv-ci/bin/python -m unittest discover -s tools/ci/tests -p 'test_run_cpu_checks.py' -v
+      - name: Run CPU checks and example
+        id: cpu-tests
+        run: .venv-ci/bin/python tools/ci/run_cpu_checks.py
+      - name: Record step outcomes
+        if: always()
+        env:
+          TOOL_RESULT: ${{ steps.tool-tests.outcome }}
+          CPU_RESULT: ${{ steps.cpu-tests.outcome }}
+        run: |
+          printf '\n## 단계 결과\n\n- 도구 자체 검사: %s\n- CPU 검사·예제: %s\n' "$TOOL_RESULT" "$CPU_RESULT" >> "$GITHUB_STEP_SUMMARY"

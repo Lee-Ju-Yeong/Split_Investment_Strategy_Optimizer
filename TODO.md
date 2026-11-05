@@ -6,6 +6,8 @@
 
 처음 방문했다면 [프로젝트 소개](README.md)와 [세 구현의 근거](docs/engineering-evidence.md)를 먼저 읽습니다. 이번 [안내 정비 기록](todos/2026_11_06-public-project-refresh.md)은 제품 개발·운영 재개와 별개입니다.
 
+CPU 기본 CI 도입은 [별도 실행 기록](todos/2026_11_06-cpu-checks-ci.md)에서 관리합니다. 무료 GitHub 실행기로 선택된 세 모듈과 예제를 검사하며 전체 GPU·DB 검증과 구분합니다.
+
 ## Core Invariants
 - `CPU=SSOT`: CPU 백테스터가 최종 기준입니다.
 - `Parity First`: release-grade 변경은 CPU/GPU parity mismatch `0`이 기본 게이트입니다.

@@ -2,6 +2,8 @@
 
 **Split Investment Strategy Optimizer**
 
+[![CPU 기본 검사](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml/badge.svg?branch=main)](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml)
+
 주식을 여러 차례 나누어 사고파는 분할투자 전략을 국내 주식의 과거 데이터로 시험하고, 매수·매도 조건을 비교하는 개인 프로젝트입니다.
 
 Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시뮬레이션을 결과 검증의 기준으로 삼고, GPU로 여러 설정 조합을 병렬 계산합니다. 이후 기간을 나누어 특정 과거 구간에서만 좋은 결과가 나온 것은 아닌지 검토합니다.
@@ -38,10 +40,11 @@ Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-review.txt
-python -m examples.short_selling_lag_demo
+python -m pip check
+python tools/ci/run_cpu_checks.py
 ```
 
-예제는 **1월 2일 기준 데이터가 세 거래일 뒤인 1월 5일에 반영되는 과정**을 보여줍니다. 실제 수익률이나 전체 시뮬레이션 결과는 계산하지 않습니다.
+이 명령은 선택한 세 테스트 모듈과 작은 예제를 실행합니다. 예제는 **1월 2일 기준 데이터가 세 거래일 뒤인 1월 5일에 반영되는 과정**을 보여줍니다. 실제 수익률이나 전체 시뮬레이션 결과는 계산하지 않습니다.
 
 - [처음 설치하기·예상 출력·기존 테스트 실행](tests/README.md)
 - [전체 실행에 필요한 환경과 설정](docs/running.md)
@@ -60,7 +63,7 @@ python -m examples.short_selling_lag_demo
 | 기간을 나눈 전략 검증(WFO) | 후보 목록 고정, CPU 검산, 최종 평가 전 조건 검사, 후보 압축 도구 구현 | 구현 완료와 전략의 최종 승인·실전 유효성은 별도 판단 |
 | 군집화·k3s/GPU 작업 운영 | 연구·설계 문서 보유 | 기본 운영 기능이나 배포 완료 성과로 소개하지 않음 |
 
-현재 GitHub Actions는 **비밀정보 검사(Secret Scan)**와 **문서 사이트 배포(Pages)**를 수행합니다. 제품 전체 테스트를 자동 수행하는 구성은 아닙니다. 이번에 실제 실행한 CPU 검사 범위는 [테스트 안내](tests/README.md)에 구분해 적었습니다.
+GitHub Actions의 **CPU 기본 검사(CPU checks)**는 main 대상 PR과 main 변경 시 위 명령을 실행합니다. 최초 도입 기준은 기존 검사 **34개와 예제**이며, 검사 도구 자체 검사는 별도 단계입니다. 건너뜀·검사 누락도 실패로 처리합니다. **비밀정보 검사(Secret Scan)**와 **문서 사이트 배포(Pages)**도 유지합니다. 전체 제품·GPU·실제 DB 검증은 포함하지 않으며, 자세한 범위는 [테스트 안내](tests/README.md)에 있습니다.
 
 ## 코드 찾아보기
 
