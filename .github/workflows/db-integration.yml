@@ -1,0 +1,92 @@
+name: DB integration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  db-integration:
+    name: 격리 MySQL 통합 검사
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
+        env:
+          MYSQL_ROOT_PASSWORD: ephemeral-root-only
+          MYSQL_DATABASE: siso_test_integration
+          MYSQL_USER: siso_test
+          MYSQL_PASSWORD: ephemeral-test-only
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      SISO_RUN_DB_TESTS: "1"
+      SISO_TEST_MYSQL_HOST: 127.0.0.1
+      SISO_TEST_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+      SISO_TEST_MYSQL_USER: siso_test
+      SISO_TEST_MYSQL_PASSWORD: ephemeral-test-only
+      SISO_TEST_MYSQL_DATABASE: siso_test_integration
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install isolated test dependencies
+        run: |
+          python -m venv .venv-db
+          .venv-db/bin/python -m pip install -r requirements-db-test.txt
+          .venv-db/bin/python -m pip check
+      - name: Record candidate and environment
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          .venv-db/bin/python - <<'PY'
+          import importlib.metadata
+          import os
+          import platform
+          import subprocess
+          from pathlib import Path
+          checkout = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          lines = ['## DB 검사 환경', '', f'- 후보 SHA: `{os.environ["CANDIDATE_SHA"]}`',
+                   f'- 실제 checkout SHA: `{checkout}`', f'- Python: `{platform.python_version()}`',
+                   '- 실행기: ubuntu-24.04; 매번 폐기하는 MySQL 8.4 서비스']
+          for package in ('numpy', 'pandas', 'requests', 'PyMySQL', 'mysql-connector-python'):
+              lines.append(f'- {package}: `{importlib.metadata.version(package)}`')
+          text = '\n'.join(lines) + '\n'
+          print(text)
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:
+              stream.write(text)
+          PY
+      - name: Check isolation and failure propagation
+        id: guards
+        run: .venv-db/bin/python -m unittest discover -s tools/ci/tests -p 'test_run_db_checks.py' -v
+      - name: Run real MySQL scenarios
+        id: integration
+        run: .venv-db/bin/python tools/ci/run_db_checks.py
+      - name: Record step outcomes
+        if: always()
+        env:
+          GUARD_RESULT: ${{ steps.guards.outcome }}
+          DB_RESULT: ${{ steps.integration.outcome }}
+        run: |
+          printf '\n## 단계 결과\n\n- 연결 제한·실패 처리: %s\n- 실제 DB 시나리오: %s\n' "$GUARD_RESULT" "$DB_RESULT" >> "$GITHUB_STEP_SUMMARY"
