@@ -1,12 +1,12 @@
 # 공개 저장소 안내 정비
 
 > Type: `implementation`
-> Status: `validated; publication pending`
+> Status: `documentation and example validated; publication tracked in PR #109`
 > Last updated: 2026-11-06 (Asia/Seoul)
 > Why: 처음 방문한 사람이 프로젝트 목적, 개인 기여, 구현과 검증 근거를 순서대로 확인하도록 한다.
-> Next Action: PR의 최종 후보 Secret Scan을 확인하고 일반 merge 후 About·Pages·공개 동선을 확인한다.
+> Next Action: 공개 반영의 최종 SHA·자동 검사·About·Pages 결과는 아래 PR에서 추적한다.
 > Gate Status: 예제·기존 검사 34개·문서 링크 확인 완료. 제품 전체 검증·운영 승인을 뜻하지 않는다.
-> Evidence Links: 아래 실행 기록과 연결할 PR
+> Evidence Links: 아래 실행 기록과 [PR #109](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/109)
 > Related Issues: 기존 구현 근거 #100, #104/#105, #106. 이 정비는 해당 제품 작업을 재개하지 않는다.
 
 ## 승인한 실행 계약
@@ -35,14 +35,15 @@
 3. [x] TODO·AI 참고 문서·과거 문서의 상태와 링크 정비. 기존 경로 유지.
 4. [x] 가상 데이터 예제와 확인용 의존성 추가. 기존 제품 함수 호출, DB/API/GPU 사용 없음.
 5. [x] 세 기존 검사와 예제 실행, 링크·수치·연결 파일·diff 확인.
-6. [ ] PR 생성·Secret Scan 확인·검증한 후보 병합.
-7. [ ] About 갱신·Pages 배포·로그아웃 방문 동선 확인.
+6. PR 생성 완료. 최종 후보의 Secret Scan과 일반 merge 결과는 PR #109에 기록한다.
+7. About·Pages·로그아웃 방문 동선의 게시 후 확인 결과도 PR #109에 기록한다. 이 파일의 오프라인 검사 결과와 구분한다.
 
 ## 실행 기록
 
 - 2026-11-06: main이 조사 기준 SHA와 같고 checkout이 깨끗함을 확인. 세 AI 지침 파일은 `llm.md` 심볼릭 링크다. 별도 `codex/public-project-refresh` 브랜치에서 시작했다.
 - 검증 환경: 원격 Linux, Python 3.12.3. 이 정비 전에는 제품 검사를 실행하지 않았다.
 - 기존 자동 검사는 Secret Scan과 Pages 배포다. 제품 테스트 전체를 수행하는 CI가 아니다.
+- 내용·예제 후보 커밋: `6323d986f6fcc91c4a2225c8fb6ccafaca422fe2`. 이후 공개 결과 링크를 추가한 문서 변경은 예제·검사·의존성을 바꾸지 않는다.
 
 ### 안내 명령 검증
 
