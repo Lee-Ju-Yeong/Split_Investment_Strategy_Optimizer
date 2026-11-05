@@ -5,13 +5,13 @@
 처음 방문했다면 [프로젝트 소개](README.md) → [구현 근거](docs/engineering-evidence.md) → [직접 확인하기](tests/README.md) 순서로 읽으세요.
 모든 작업 문서는 [작업 색인](todos/README.md), 이번 56개 제안의 처리 결과는 [정비 실행 기록](todos/2026_11_06-project-maintenance-execution.md)에 연결합니다.
 
-## 지금 진행하는 정비
+## 이번 정비 결과
 
 | 작업 | 상태 | 다음 행동 |
 | --- | --- | --- |
 | 문서·이슈 상태 정리 | PR #111 반영 완료 | 이슈 17개 갱신, #67·#97 근거로 종료, PR #75·#95 유지 |
 | #59 DB 통합 검사 | PR #112 병합·main 검증 완료 | [결과](todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md): DB 3·연결 제한 14 통과. main CI 확인 후 이슈 completed 종료 |
-| 방문 동선·Pages | 후보 검증 중 | 코드 읽기 안내·한국어 제목·탐색·공개 설정 정비 |
+| 방문 동선·Pages | PR #113 구현·검증 기록 | [최종 후보·병합 후 공개 확인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/113), 홈페이지·Topics 반영 |
 
 매매 규칙·GPU 계산·운영 DB·전체 환경 이관은 이 정비의 범위가 아닙니다. DB 검사는 합성 자료와 실행마다 폐기하는 검사용 DB만 사용합니다.
 
