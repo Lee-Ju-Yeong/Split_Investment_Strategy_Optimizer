@@ -1,5 +1,7 @@
 # Issue #56: CPU/GPU Parity Release Gate
 
+> **문서 상태 대조: 2026-11-06.** 아래 시험·실행 결과는 기록된 당시 입력과 환경에 한정합니다. `current HEAD`·`live evidence`는 현재 서비스 운영이나 최신 코드 재검증을 뜻하지 않습니다. 빈 체크박스에는 당시 계획·후속 과제·재사용 양식이 섞여 있으므로 일괄 완료 처리하지 않습니다. 공개되지 않은 results/logs 원본은 이번에 재검증하지 않았습니다. 현재 남은 일은 [상태판](../TODO.md), 후속 연결은 [작업 색인](README.md)에서 확인합니다.
+
 > Type: `implementation`
 > Status: `done (synthetic harness)`
 > Priority: `P0`

@@ -1,5 +1,4 @@
 # feat(data): Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/64`
 - 백테스트/실거래 정합성을 위해 Point-in-Time(PIT) 규칙을 프로젝트 전역 기준으로 정리하고, 룩어헤드 위반을 테스트로 차단해야 함
 - 상장폐지 "결과 라벨" 사용, 공시 시점 미반영 등으로 생존편향/룩어헤드 위험이 존재함

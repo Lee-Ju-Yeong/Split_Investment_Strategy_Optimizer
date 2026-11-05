@@ -13,7 +13,7 @@
 - What: `ShortSellingDaily` 데이터를 `DailyStockTier`에 반영할 때, 실제 가용 시점보다 이르게 쓰지 않도록 PIT 계약을 고정합니다.
 - Why: 변경 전 tier batch는 same-date join으로 `sbv_ratio`를 만들어, 당시 사용할 수 없었던 값을 계산에 넣을 우려가 있었습니다.
 - Current status: 비인증 KRX/pykrx 경로는 이 호스트에서 `400 LOGOUT`/empty로 깨지고, 로그인 세션 주입 smoke는 성공했습니다. `DailyStockTier` 코드에도 임시 운영정책 `lag=3 + same-date 금지`를 반영했고, shadow diff까지 완료했습니다. 2026-03-14 로그는 `DailyStockTier` backfill 재개까지 남아 있으며 전체 완료는 확인되지 않았습니다.
-- Next action: backfill을 `2013-11-20 ~ 2026-02-06` 범위로 끝내고, 완료 후 최신 날짜/row count/샘플 검증을 남깁니다.
+- Next action (2026-11-06 문서 대조): 기존 작업의 완료 증거·최신 날짜·행 수·샘플 결과를 먼저 확인합니다. 공개 기록으로 전체 완료는 미확인입니다. 아래 backfill 재개 명령은 당시 기록이며 이번 정비에서 실행하지 않습니다.
 
 ## 2. Fixed Problem Statement
 - 수집기에는 `lag_trading_days` 개념이 이미 있습니다.

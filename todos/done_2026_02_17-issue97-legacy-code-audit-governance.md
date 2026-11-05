@@ -1,5 +1,7 @@
 # Issue #97: Legacy Audit And Strict-Only Governance
 
+> **문서 상태 대조: 2026-11-06.** 아래 시험·실행 결과는 기록된 당시 입력과 환경에 한정합니다. `current HEAD`·`live evidence`는 현재 서비스 운영이나 최신 코드 재검증을 뜻하지 않습니다. 빈 체크박스에는 당시 계획·후속 과제·재사용 양식이 섞여 있으므로 일괄 완료 처리하지 않습니다. 공개되지 않은 results/logs 원본은 이번에 재검증하지 않았습니다. 현재 남은 일은 [상태판](../TODO.md), 후속 연결은 [작업 색인](README.md)에서 확인합니다.
+
 > Type: `implementation`
 > Status: `done`
 > Priority: `P1`
@@ -11,7 +13,7 @@
 - What: 레거시, fallback, 호환 경로를 무작정 지우지 않고 승인 게이트를 거쳐 정리하는 문서입니다.
 - Why: 실행 경로를 단순화해야 parity와 문서 가독성도 같이 좋아지지만, 잘못 지우면 운영 계약이 깨집니다.
 - Current status: runtime strict-only fail-fast(`tier_hysteresis_mode`, `candidate_source_mode`, `use_weekly_alpha_gate`)와 retained wrapper drift 정리까지 반영됐습니다. `src.pipeline_batch`와 `src.ohlcv_batch`는 canonical module thin wrapper로 재정렬했고, Gate A/B/C 승인 기준도 충족했습니다. step 2 historical synthetic sample pack도 helper 기준으로 승인됐습니다. step 3에서는 tier-only runtime에서 더 이상 쓰지 않는 `weekly_filtered_gpu` dead plumbing, compat alias, Financial/OHLCV legacy universe fallback surface를 제거했습니다.
-- Next action: `#98` throughput 증적 수집으로 진행합니다. Gate B 승인 예외(`src.parameter_simulation_gpu_lib` facade, `src.main_script` legacy/general orchestrator, historical/archive docs)는 유지 이유가 확정된 상태입니다.
+- Next action (2026-11-06 문서 대조): 로컬 issue98 처리량 개선은 PR #103, 후속 개선은 PR #105로 완료됐습니다. 새 정책 변경 때만 재개합니다. Gate B 승인 예외(`src.parameter_simulation_gpu_lib` facade, `src.main_script` legacy/general orchestrator, historical/archive docs)는 유지 이유가 확정된 상태입니다.
 
 ## 2. Fixed Rules
 - 근거 없는 즉시 삭제는 금지합니다.

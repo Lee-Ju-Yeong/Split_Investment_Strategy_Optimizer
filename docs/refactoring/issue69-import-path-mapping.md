@@ -2,7 +2,7 @@
 
 - Scope: `src` 패키지 구조 재편 이슈(#69)에서 변경된 import 경로 매핑
 - Status date: 2026-02-17
-- Source todo: `todos/2026_02_16-issue69-src-package-restructure-breakdown.md`
+- Source todo: [완료 작업 기록](../../todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md)
 - Update: Issue #93 Stage 2에서 조건부 wrapper 8종 제거 완료
 
 ## 1. 원칙

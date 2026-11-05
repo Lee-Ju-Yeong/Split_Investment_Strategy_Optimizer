@@ -1,5 +1,34 @@
 # Issue #104: GPU Throughput Follow-up Hot Path
 
+<details>
+<summary>최종 요약·측정·실험 기록 찾아보기</summary>
+
+- [1. One-Page Summary](#1-one-page-summary)
+- [2. 초심자용 현재 판단](#2-초심자용-현재-판단)
+- [3. Scope](#3-scope)
+- [4. Non-Goals](#4-non-goals)
+- [5. Guardrails](#5-guardrails)
+- [6. Current Plan](#6-current-plan)
+- [7. Follow-up Backlog Reclassification](#7-follow-up-backlog-reclassification)
+- [8. First Slice Contract (`H-001`)](#8-first-slice-contract-h-001)
+- [9. References](#9-references)
+- [10. Working Log](#10-working-log)
+- [11. H-001 Interim Decision](#11-h-001-interim-decision)
+- [12. H-001 Final Decision](#12-h-001-final-decision)
+- [13. Next Slice Selection](#13-next-slice-selection)
+- [14. H-003 Current Status](#14-h-003-current-status)
+- [15. Next Slice Reprioritization](#15-next-slice-reprioritization)
+- [16. H-004 First Contract (`H-004-a`)](#16-h-004-first-contract-h-004-a)
+- [17. H-004 Final Decision](#17-h-004-final-decision)
+- [18. Breakdown-Driven Reprioritization](#18-breakdown-driven-reprioritization)
+- [19. Next Slice Contract (`H-005-a`)](#19-next-slice-contract-h-005-a)
+- [21. Final Close Recommendation](#21-final-close-recommendation)
+- [20. Multi-Agent Direction Review (Codex blind-first + Gemini post-check)](#20-multi-agent-direction-review-codex-blind-first--gemini-post-check)
+
+</details>
+
+> **문서 상태 대조: 2026-11-06.** **완료.** 이슈 #104 종료 및 [PR #105](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/105) 병합. 실패 실험·원복·최종 측정은 당시 조건의 기록이며 이번에 GPU를 재측정하지 않았습니다. [조건과 공개 범위](../docs/engineering-evidence.md#gpu).
+
 > Type: `implementation`
 > Status: `done`
 > Priority: `P1`

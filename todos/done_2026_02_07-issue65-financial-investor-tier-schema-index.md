@@ -1,5 +1,4 @@
 # feat(db): FinancialData, InvestorTradingTrend, DailyStockTier 스키마 및 인덱스 추가
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/65`
 - 가격/지표 중심 구조에 재무/수급/티어 데이터를 분리 저장할 수 있도록 DB 스키마를 확장
 - 백필/일배치에서 재사용할 조인 키/조회 인덱스를 준비
