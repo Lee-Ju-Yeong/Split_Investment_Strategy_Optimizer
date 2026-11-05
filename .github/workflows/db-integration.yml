@@ -38,7 +38,6 @@ jobs:
     env:
       SISO_RUN_DB_TESTS: "1"
       SISO_TEST_MYSQL_HOST: 127.0.0.1
-      SISO_TEST_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
       SISO_TEST_MYSQL_USER: siso_test
       SISO_TEST_MYSQL_PASSWORD: ephemeral-test-only
       SISO_TEST_MYSQL_DATABASE: siso_test_integration
@@ -82,6 +81,8 @@ jobs:
         run: .venv-db/bin/python -m unittest discover -s tools/ci/tests -p 'test_run_db_checks.py' -v
       - name: Run real MySQL scenarios
         id: integration
+        env:
+          SISO_TEST_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
         run: .venv-db/bin/python tools/ci/run_db_checks.py
       - name: Record step outcomes
         if: always()
