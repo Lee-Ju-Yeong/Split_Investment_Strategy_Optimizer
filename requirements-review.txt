@@ -1,0 +1,5 @@
+# Python 3.12: small CPU example and the three documented offline test modules.
+# Full runtime dependencies remain in requirement.txt / environment.yml.
+numpy==2.2.6
+pandas==2.2.3
+requests==2.32.5

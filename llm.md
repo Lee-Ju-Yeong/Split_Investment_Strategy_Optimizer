@@ -17,53 +17,24 @@
 
 ## 2. Quick Commands
 
-> Last Verified: 2026-03-18
-> 엔트리포인트/CLI 옵션 변경 시 이 섹션을 즉시 갱신합니다.
+> 확인일: 2026-11-06. Linux / Python 3.12.3에서 아래 예제와 기존 검사 34개 통과.
+> 전체 CPU·GPU·DB 환경을 검증했다는 뜻은 아닙니다.
 
 ```bash
-# 환경 설정
-conda env create -f environment.yml
-conda activate stock_optimizer_env  # CPU
-conda activate rapids-env           # GPU (CuPy, cuDF, 별도 수동 준비)
-
-# 설정 파일
-cp config/config.example.yaml config/config.yaml  # 후 DB 정보 수정
-
-# DB 스키마 반영
-python -c "from src.db_setup import get_db_connection, create_tables; conn=get_db_connection(); create_tables(conn); conn.close()"
-
-# CPU/일반 런타임 (`stock_optimizer_env`)
-# 데이터 파이프라인 (Legacy/General)
-python -m src.main_script
-
-# 배치 오케스트레이터 (Financial/Investor/Tier)
-python -m src.pipeline_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD>
-python -m src.pipeline_batch --mode daily --end-date <YYYYMMDD>
-
-# Historical Universe 배치 (상폐 포함 PIT 유니버스)
-python -m src.ticker_universe_batch --mode backfill --start-date <YYYYMMDD> --end-date <YYYYMMDD> --step-days 7 --workers 1
-python -m src.ticker_universe_batch --mode daily --end-date <YYYYMMDD>
-
-# OHLCV 장기 백필
-python -m src.ohlcv_batch --start-date 19950101 --end-date <YYYYMMDD> --log-interval 20
-
-# 백테스팅
-python -m src.main_backtest        # CPU 백테스트 (Source of Truth)
-
-# 웹 UI
-python -m src.app                          # Flask (localhost:5000)
-
-# GPU/WFO 런타임 (`rapids-env`)
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.debug_gpu_single_run
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.parameter_simulation_gpu
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.issue98_perf_measure --label issue98_baseline --runs 3
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m src.walk_forward_analyzer
-python -m src.analysis.shortlist_derivation derive-shortlist --bundle-manifest <PATH/window_bundle_manifest.json> --out-dir <PATH/out_dir>
-
-# 테스트
-CONDA_NO_PLUGINS=true conda run -n rapids-env python -m unittest discover -s tests -p 'test_*.py'  # 전체 테스트 discovery
-CONDA_NO_PLUGINS=true conda run -n stock_optimizer_env python -m unittest tests.test_portfolio       # CPU 단일 모듈 테스트
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-review.txt
+python -m examples.short_selling_lag_demo
+python -m unittest discover -s tests -p 'test_portfolio.py' -v
+python -m unittest discover -s tests -p 'test_short_selling_collector.py' -v
+python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 ```
+
+- [작은 예제와 검사 안내](tests/README.md): 외부 계정·DB·GPU 없이 확인합니다.
+- [전체 실행 안내](docs/running.md): YAML/INI 설정, DB를 변경하는 명령, GPU 환경을 구분합니다.
+- `environment.yml`의 Python 3.9와 현재 일부 코드 문법은 맞지 않습니다. 이 파일만으로 전체 실행 환경이 재현된다고 가정하지 않습니다.
+- `rapids-env`는 별도로 준비한 환경 이름입니다. 확인용 의존성 파일로 생성되지 않습니다.
+- 전체 테스트에는 DB·GPU 조건이 있습니다. 위 세 모듈의 통과를 전체 테스트 통과로 기록하지 않습니다.
 
 ---
 
@@ -128,7 +99,8 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - override: 환경변수 `MAGICSPLIT_CONFIG_PATH` (절대/상대 경로 모두 허용)
 
 **Database:**
-- `database.host|user|password|database` 를 표준으로 사용합니다.
+- YAML을 읽는 경로는 `database.host|user|password|database`를 사용합니다.
+- `src.db_setup.get_db_connection()`은 별도로 실행 디렉터리의 `config.ini` / `[mysql]`을 읽습니다. YAML만 준비해 모든 DB 도구가 설정됐다고 가정하지 않습니다.
 
 **Data Pipeline (`src/main_script.py`):**
 - `data_pipeline.paths`: `condition_search_files_folder`, `processed_data_folder`, `filtered_stocks_csv_path`
@@ -187,6 +159,8 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 ### Persona: 퀀트-J
 
+아래 직함과 전문 분야는 **AI 도구에 부여한 역할 설정**입니다. 저장소 작성자의 실제 직함·연차·경력을 나타내지 않습니다.
+
 **역할**: 시니어 퀀트 시스템 개발자 & GPU 병렬 컴퓨팅 아키텍트
 
 **우선순위**: CPU-GPU 정합성 > 안정성(OOM/에러 방지) > 성능(벡터화) > 가독성
@@ -238,33 +212,22 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 ---
 
-## 7. Current Mission
+## 7. 공개 코드와 남은 확인
 
-> 기준일: 2026-03-10
-> 단일 상태 소스: `TODO.md`
+> 문서 대조일: 2026-11-06. 작업 상태와 근거는 [TODO.md](TODO.md)에서 관리합니다.
 
-### Immediate (P0: 운영 안정성 및 인프라)
-- `ShortSellingDaily` publication lag 정책 확정 및 PIT 리스크 제거
-- k3s 클러스터 배포 적합성 검토 및 서버 시뮬레이션 환경(GPU Job) 구축 연구
-- `DailyStockPrice` 전기간 재적재 데이터 정합성 최종 검증
-
-### Next (P1: 성능 최적화 및 전략 고도화)
-- `#98`: GPU throughput refactor (slice 2a 측정 및 남은 루프 최적화)
-- `#68`: Robust WFO / Ablation 공식 스코어링 로직 고정
-- `#72`: Ticker continuity (합병/분할 시 포지션 상속) 설계 및 구현
-
-### Future (P2: 연구 트랙)
-- `#101`: Deterministic Tier1 bias 완화 (Scenario-based selection)
-- `GPU-native WFO v2`: 데이터 텐서화 기반의 초고속 WFO 아키텍처 연구
-- Web UI 고도화 및 실시간 매매 신호 인터페이스 연동
+- GPU 개선은 PR #103·#105에 반영됐습니다. 과거 측정 조건과 제한은 [구현 근거](docs/engineering-evidence.md#gpu)에 있습니다.
+- 공매도 데이터의 임시 3거래일 지연 반영, 회귀 테스트, 영향 비교 도구는 구현됐습니다. 장기 데이터 재계산의 전체 완료는 공개 기록으로 확인되지 않았습니다.
+- PR #106에는 기간별 후보 평가, 후보 고정, CPU 최종 검산, 마지막 평가 구간 보호 및 여러 기간의 후보 추출 구현이 포함됩니다. 코드 구현을 전략의 최종 승인이나 실전 유효성으로 해석하지 않습니다.
+- k3s/GPU 작업 운영, 군집화 확장 등 연구 문서는 구현·운영 성과와 구분합니다.
+- 이 안내 정비에서는 제품 계산·DB·운영 데이터를 변경하지 않습니다.
 
 ---
 
 ## 8. Deep Context
 
-상세 설계/결정 배경은 다음 파일 참고:
-- `llm-context/_PROJECT_MASTER.md`: 프로젝트 전체 개요 및 롤링 요약
-- `llm-context/01_data_pipeline.md` ~ `05_robust_parameter_clustering.md`: 단계별 상세 설계
-- `TODO.md`: 최신 우선순위/이슈 상태 (single source)
-- `docs/database/schema.md`: 현재 DB 스키마 정의
-- `docs/database/backfill_validation_runbook.md`: 백필 검증 절차
+- [현재 문서 지도](docs/README.md): 실행 안내와 구현 근거의 시작점
+- [llm-context 안내](llm-context/README.md): 과거 단계별 설계 자료. SQLite·완료 표현·AI 역할은 당시 기록이며 현재 코드의 상태 근거가 아닙니다.
+- [TODO.md](TODO.md): 공개 코드와 대조한 상태, 미완료 검증, 연구 항목
+- [DB 스키마](docs/database/schema.md): 현재 코드와 함께 대조할 테이블 정의
+- [백필 검증 절차](docs/database/backfill_validation_runbook.md): 과거 절차·결과와 현재 재검증 필요 항목을 구분

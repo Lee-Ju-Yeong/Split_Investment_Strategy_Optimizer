@@ -1,5 +1,7 @@
 # DailyStockTier Rules (Operational)
 
+> 본문은 2026-02-28 기준 규칙·확장 검토를 보존합니다. 이후 공매도 데이터에 **임시 3거래일 지연 반영**이 구현됐습니다. [정책·영향 분석 근거](../engineering-evidence.md#availability)와 현재 코드를 함께 확인합니다. 문서의 운영 표현은 실서비스 운영을 입증하지 않습니다.
+
 Last Updated: 2026-02-28  
 Source of Truth (code): `src/pipeline/daily_stock_tier_batch.py`
 
