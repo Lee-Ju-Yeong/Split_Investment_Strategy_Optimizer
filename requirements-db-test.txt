@@ -1,0 +1,4 @@
+# Python 3.12; isolated synthetic MySQL integration only.
+-r requirements-review.txt
+PyMySQL[rsa]==1.2.3
+mysql-connector-python==26.10.0
