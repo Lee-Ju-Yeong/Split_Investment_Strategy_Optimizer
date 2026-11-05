@@ -64,9 +64,11 @@ jobs:
           PY
       - name: Check links and wide/narrow keyboard navigation
         timeout-minutes: 3
-        run: .venv-docs/bin/python tools/ci/check_docs.py --site-dir _site
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: .venv-docs/bin/python tools/ci/check_docs.py --site-dir _site --expected-revision "$EXPECTED_REVISION"
       - name: Check published main after the existing Pages deployment
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         timeout-minutes: 3
         env:
           EXPECTED_REVISION: ${{ github.sha }}
