@@ -1,10 +1,10 @@
 # 대표 프로젝트 정비 실행 기록
 
-- Status: 진행 중 — PR #111 병합·이슈 정리 완료, PR #112 격리 DB 검증
+- Status: 진행 중 — PR #111/#112 병합·검증 완료, 방문 동선·Pages 후보 작성
 - Type: implementation
 - Why: 목적·기여·구현·검증·남은 상태를 같은 근거로 설명한다.
-- Next Action: DB 후보의 실제 검사·지정 리뷰를 확인한 뒤 방문 동선과 Pages를 정비한다.
-- Gate Status: PR #111의 CPU·Secret Scan·병합 후 Pages 통과. DB·화면 검증은 진행 중.
+- Next Action: 방문 동선·Pages 후보를 무료 GitHub 실행기에서 검증하고 지정 리뷰 후 공개한다.
+- Gate Status: PR #111/#112의 최종 후보·main CPU·DB·Secret Scan·Pages 통과. 새 화면 검증 진행 중.
 - Evidence Links: [56개 원제안](2026_11_06-project-maintenance-discovery.md), [상태판](../TODO.md).
 - Related Issues: #59·#67·#97 및 탐색 당시 열린 이슈 17개, PR #75·#95.
 - 시작 SHA: cf9af35b0f3038506a7f574a68565df559df0f02. 기록 시각 기준: Asia/Seoul.
@@ -40,7 +40,8 @@
 - 계획 리뷰: gpt-6.1-sol/xhigh. 빈 DB 사전 확인·실제 후보 조회·조용한 대체 처리 검사 보강을 반영. 구현 최종 후보에서도 지정 리뷰 필요.
 - [PR #112](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/112): 최초 후보 d1171a5는 workflow의 job 수준에서 서비스 포트를 읽어 작업 시작 전 거부됐다(실행 `42119382452`). GitHub context 가용성 규칙에 맞춰 실제 검사 step의 env로 옮겼다. 실패 기록은 보존하며 DB 시나리오 실패와 구분한다.
 
-- a2cf8a9 실제 DB 실행 [42119887317](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42119887317) 성공: Python 3.12.16, MySQL 8.4.13, checkout 633f94ff833316519ee0dd1356c6b573ee8bc31c. 연결 제한 14·실제 DB 3 통과, 실패·오류·건너뜀 0. CPU 42119887316·Secret Scan 42119887573 성공. 지정 읽기 전용 검토에서 차단 결함 없음. 이후 시험·실행 코드는 그대로 두고 완료 기록만 보완한다.
+- a2cf8a9 실제 DB 실행 [42119887317](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42119887317) 성공: Python 3.12.16, MySQL 8.4.13, checkout 633f94ff833316519ee0dd1356c6b573ee8bc31c. 연결 제한 14·실제 DB 3 통과, 실패·오류·건너뜀 0. CPU 42119887316·Secret Scan 42119887573 성공. 지정 읽기 전용 검토에서 차단 결함 없음. 이후 시험·실행 코드는 그대로 두고 완료 기록만 보완했다. 최종 2022f58의 DB 42120264754·CPU 42120264742·Secret Scan 42120264799 성공 후 일반 merge했다.
+- 병합 SHA `bc48845ebcf9e89d410b6ba94be4f0f6403bed9b`: [DB 42120454622](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42120454622)에서 14+3 통과·실패/오류/건너뜀 0, CPU 42120454717·Secret Scan 42120454712·Pages 42120452460 성공. #59 본문을 실제 결과로 갱신하고 근거 댓글 후 completed로 종료했다.
 
 ## PR 3: 방문 동선·Pages 계약
 
@@ -51,12 +52,19 @@
 - Topics: python, mysql, backtesting, data-pipeline, gpu-computing.
 - 기존 About 설명·저장소 이름·고정 상태·AI 지침 연결 유지. Bio 준비 문구: **AIOps와 운영 자동화에 관심이 있습니다.**
 
+### Pages 구현 판단
+
+- 색: 흰 본문 #ffffff, 짙은 글자 #182636, 청색 링크 #174b70, 녹색 초점 #20675c, 옅은 구분선 #d7e1e7. 외부 글꼴 없이 한국어 시스템 글꼴을 사용한다.
+- 구조: 이름·공통 메뉴 → 단일 문서 H1·본문 → 범위·GitHub 원문. 최대 폭 54rem, 왼쪽 정렬, 줄바꿈 메뉴, 표/코드만 가로 스크롤. 숫자 장식·성과 카드 대신 실제 데이터 흐름 그림을 사용한다.
+- 같은 Markdown·Primer 기반·기존 Pages 배포를 유지한다. 주요 7문서의 1280/390px·키보드·링크·메타데이터를 검사한다. main에는 기존 배포의 SHA 확인 후 공개 주소 읽기 검사를 추가한다.
+- 공개 설정 변경 전 상태: homepage=null, topics=[]. About 설명·저장소 이름·고정 상태·프로필은 유지한다.
+
 ## 검증·공개 기록
 
 | 묶음 | 후보/PR | 검사·리뷰 | 병합·공개 |
 | --- | --- | --- | --- |
 | 상태·문서 | PR #111 / ca3853e | 문서 74개·로컬 링크 296개, CPU 34·예제·도구 22, Secret Scan 성공 | 7ec863f 병합, main CI·Pages 성공, 이슈 17개 갱신 |
-| DB | PR #112 / a2cf8a9 | DB 3·연결 제한 14 통과, CPU 34·예제·도구 22, Secret Scan 성공; sol 검토 차단 없음 | 최종 문서 후보 검사 후 병합 |
+| DB | PR #112 / 최종 2022f58 | DB 3·연결 제한 14 통과, CPU 34·예제·도구 22, Secret Scan 성공; sol 검토 차단 없음 | bc48845 병합, main CI·Pages 성공, #59 completed 종료 |
 | 방문 동선 | 구현 전 | 화면·Pages 미실행 | 미반영 |
 
 ## 제안별 처리 원장

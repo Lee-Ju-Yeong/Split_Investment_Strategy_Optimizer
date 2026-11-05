@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 620" role="img" aria-labelledby="title desc">
+  <title id="title">데이터 수집부터 계산과 검증까지</title>
+  <desc id="desc">수집, MySQL 저장, 당시 알 수 있던 입력 구성을 거쳐 CPU 기준 계산과 GPU 병렬 탐색으로 나뉜 뒤 결과 비교와 기간별 평가로 이어집니다.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#526477"/></marker></defs>
+  <rect width="560" height="620" fill="#fff"/>
+  <g fill="#f3f6f8" stroke="#d7e1e7" stroke-width="2">
+    <rect x="30" y="10" width="500" height="70" rx="8"/>
+    <rect x="30" y="115" width="500" height="70" rx="8"/>
+    <rect x="30" y="220" width="500" height="70" rx="8"/>
+    <rect x="30" y="350" width="235" height="90" rx="8"/>
+    <rect x="295" y="350" width="235" height="90" rx="8"/>
+    <rect x="30" y="510" width="500" height="90" rx="8"/>
+  </g>
+  <g stroke="#526477" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M280 80V110"/><path d="M280 185V215"/>
+    <path d="M280 290V320H147V345"/><path d="M280 320H412V345"/>
+    <path d="M147 440V475H280V505"/><path d="M412 440V475H280" marker-end="none"/>
+  </g>
+  <g font-family="sans-serif" fill="#182636" text-anchor="middle" font-size="23">
+    <text x="280" y="54">가격·재무·수급 데이터 수집</text>
+    <text x="280" y="159">MySQL 저장·지표 계산</text>
+    <text x="280" y="264">당시 알 수 있었던 입력 구성</text>
+    <text x="147" y="387" font-weight="bold">CPU 기준 계산</text>
+    <text x="147" y="418" font-size="18">매매·현금·보유 상태</text>
+    <text x="412" y="387" font-weight="bold">GPU 병렬 탐색</text>
+    <text x="412" y="418" font-size="18">많은 설정 조합</text>
+    <text x="280" y="550">결과 비교·기간별 평가</text>
+    <text x="280" y="580" font-size="18">후보와 판단 근거 기록</text>
+  </g>
+</svg>
