@@ -68,7 +68,7 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 
 최초 도입 기준은 **34개 통과, 실패 0, 건너뜀 0**입니다. DB·API는 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
 
-이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/2026_11_06-cpu-checks-ci.md)에 남깁니다.
+이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/done_2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/done_2026_11_06-cpu-checks-ci.md)에 남깁니다.
 
 ### GitHub에서 자동 실행하는 범위
 

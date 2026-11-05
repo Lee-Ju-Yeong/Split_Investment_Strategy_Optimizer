@@ -1,5 +1,4 @@
 # 구조화된 로깅 도입 및 하드코딩 디버그 출력 제거 (Issue #55)
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/55`
 - 목표: 표준 `logging`으로 출력 수준(verbosity)을 제어하고, 하드코딩 디버그 출력을 정리
 - 범위:

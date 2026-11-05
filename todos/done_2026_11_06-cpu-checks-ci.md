@@ -1,5 +1,7 @@
 # 무료 실행기로 CPU 기본 CI 도입
 
+> **문서 상태 대조: 2026-11-06.** **병합·공개 확인 완료.** 병합 SHA `cf9af35b0f3038506a7f574a68565df559df0f02`. PR/main의 CPU 34개·예제·도구 자체 검사 22개, Secret Scan·Pages 및 작업 브랜치 정리 결과는 [PR #110](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/110)에 있습니다. 아래 미래형 문장은 도입 당시 기록입니다.
+
 - Status: Done (구현·도입 전 검증). 최종 병합·공개 확인 결과는 아래 PR에 기록.
 - Type: implementation
 - Why: 방문자가 실행하는 최소 CPU 검사와 예제를 PR·main에서도 같은 명령으로 확인한다.

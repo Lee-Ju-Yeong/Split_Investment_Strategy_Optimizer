@@ -1,5 +1,6 @@
 # 테스트 인터페이스 갱신 (test_integration.py) (Issue #59)
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
+
+> **문서 상태 대조: 2026-11-06.** **부분 완료 / 실제 DB 검증 미완료.** 아래는 2월의 인터페이스 수정·무DB 건너뜀 확인 기록입니다. 현재 호출 인자 불일치가 연결 실패와 함께 SkipTest로 처리됩니다. 원래 완료 조건은 충족되지 않았으므로 done_를 제거했습니다. [이번 보수·검증 계약](2026_11_06-project-maintenance-execution.md#db)을 따르며 운영 DB에는 연결하지 않습니다.
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59`
 - 목표: `tests/test_integration.py`를 최신 Strategy/Execution 인터페이스에 맞게 정비
 - 범위:
@@ -30,26 +31,11 @@
 - DB 통합 테스트는 `config.ini`/DB 연결/DB 드라이버(pymysql or mysql-connector)가 없으면 실패해야 하는데, 현재는 자동 스킵 경계가 없어 `python -m unittest discover`가 깨질 수 있음
 - GPU 의존 테스트(`cupy`, `cudf`)도 유사하게 import 단계에서 실패하면 전체 discover를 망가뜨릴 수 있음(옵션 범위)
 
-### 1-3. <디버그내용1>(생략가능)
-- 구체적인 코드나, 재현가능한 스크립트, db 조회 쿼리 등으로 진단한 결과
-- <디버그내용1내용1>
-- <디버그내용1내용2>
-```
-<예시코드1>
-```
-- ...
-#### 1-3-1. <기타 참고해야할 로직/원칙/세부사항1>(생략가능)
-- <참고해야할 로직/원칙/세부사항1내용1>
-```
-<예시코드2>
-```
-- ...
 
 ---
 
 ## 2. 목표(해결하고자 하는 목표)
 
-<목표 핵심 정리>
 - `tests/test_integration.py`를 최신 `Strategy` 인터페이스(3단계 신호 생성) 및 `BasicExecutionHandler` 호출 규약에 맞춰 수정
 - 테스트 더블(전략/실행핸들러)을 최소화하여, 인터페이스가 변하면 테스트가 즉시 깨지도록 정렬
 - 로컬 DB/의존패키지가 없는 환경에서는 DB 통합 테스트가 명확한 메시지로 skip되도록 개선(노트북 개발 생산성)

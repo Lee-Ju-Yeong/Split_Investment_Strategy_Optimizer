@@ -1,5 +1,4 @@
 # 임포트 스타일 통일(상대/절대/스크립트 실행) (Issue #61)
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/61`
 - `src/` 내부 모듈 간 import 방식이 `from src...` / `from .` / 직접 import 형태로 섞여 있어,
   - 실행 방식(`python -m src.<module>` vs `python src/<module>.py`)에 따라 ImportError가 발생하고

@@ -1,5 +1,7 @@
 # 공개 저장소 안내 정비
 
+> **문서 상태 대조: 2026-11-06.** **병합·공개 확인 완료.** 병합 SHA `bfa584dcf7f25b597d3dacc664f872f9d57bfb0d`. CPU 예제·34개 검사, Secret Scan·Pages·About·로그아웃 동선 확인 결과는 [PR #109](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/109)에 있습니다. 아래 실행 계약·도입 과정은 당시 기록입니다.
+
 > Type: `implementation`
 > Status: `documentation and example validated; publication tracked in PR #109`
 > Last updated: 2026-11-06 (Asia/Seoul)

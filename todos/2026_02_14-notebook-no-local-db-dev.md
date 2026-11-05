@@ -1,5 +1,7 @@
 # Reference Note: 로컬 DB 없이 진행 가능한 작업
 
+> **문서 상태 대조: 2026-11-06.** 현재 외부 연결 없는 확인 경로는 [작은 예제·CPU 검사](../tests/README.md)입니다. 아래 환경 제약은 당시 메모이며 CPU 검사 통과를 실제 DB·GPU 검증으로 확대하지 않습니다.
+
 > Type: `reference`
 > Status: `reference`
 > Priority: `N/A`
