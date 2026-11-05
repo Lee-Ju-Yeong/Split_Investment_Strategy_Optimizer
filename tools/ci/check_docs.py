@@ -63,7 +63,7 @@ def wait_for_revision(base, revision):
         time.sleep(3)
 
 
-def check_site(base):
+def check_site(base, expected_revision=None):
     checked_links = set()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -78,6 +78,10 @@ def check_site(base):
                     response = page.goto(address, wait_until="load", timeout=30000)
                     if response.status != 200:
                         raise AssertionError(f"문서 응답 {response.status}: {address}")
+                    if expected_revision is not None:
+                        actual_revision = page.locator('meta[name="siso-revision"]').get_attribute("content")
+                        if actual_revision != expected_revision:
+                            raise AssertionError(f"공개 문서 SHA 불일치: {path or '/'}: {actual_revision}")
                     if page.locator("html").get_attribute("lang") != "ko-KR":
                         raise AssertionError(f"한국어 lang 누락: {path}")
                     if page.locator('meta[property="og:locale"]').get_attribute("content") != "ko_KR":
@@ -185,10 +189,10 @@ def main():
         base = args.base_url.rstrip("/") + "/"
         if args.expected_revision:
             wait_for_revision(base, args.expected_revision)
-        report(base, check_site(base))
+        report(base, check_site(base, args.expected_revision))
     else:
         with serve(args.site_dir.resolve()) as base:
-            report(base, check_site(base))
+            report(base, check_site(base, args.expected_revision))
 
 
 if __name__ == "__main__":
