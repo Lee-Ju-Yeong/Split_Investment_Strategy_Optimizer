@@ -1,5 +1,4 @@
 # 스크립트 import 부작용 제거 (parameter_simulation_gpu.py) (Issue #60)
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/60`
 - 문제: `src/parameter_simulation_gpu.py`가 **import 시점에** 설정 로딩 + CuPy 파라미터 그리드 생성 + 로그 출력 등을 수행함
 - 영향: WFO 오케스트레이터(`src/walk_forward_analyzer.py`) 등에서 안전하게 import 하기 어렵고, 노트북/무DB 개발에서 불필요한 부작용(시간/메모리/출력)을 유발

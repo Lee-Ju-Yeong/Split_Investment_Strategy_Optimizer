@@ -1,5 +1,7 @@
 # Issue #93: Wrapper Deprecation / Removal Plan
 
+> **문서 상태 대조: 2026-11-06.** **완료.** 이슈 #93 종료 및 [PR #96](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/96) 병합 범위의 기록입니다. 제거한 호환 경로와 유지한 진입점은 [경로 안내](../docs/refactoring/issue69-import-path-mapping.md)에서 확인합니다.
+
 > Type: `reference`
 > Status: `done`
 > Priority: `archive`

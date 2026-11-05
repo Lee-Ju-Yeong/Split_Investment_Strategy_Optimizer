@@ -1,123 +1,57 @@
-# Project Status Dashboard
+# 현재 작업과 확인 범위
 
-> Last updated: 2026-11-06 (공개 코드·기록 대조)
-> Role: 공개 코드에서 확인한 구현, 남은 검증, 연구 계획을 구분합니다. 과거 로그는 현재 작업 실행 여부를 뜻하지 않습니다.
-> Rule: 상세 계획, 작업 로그, 증적은 각 `todos/*.md` 문서가 담당합니다.
+> 문서 대조일: 2026-11-06(Asia/Seoul). 실제 시험일·입력·후보 SHA는 각 기록에서 따로 확인합니다.
 
-처음 방문했다면 [프로젝트 소개](README.md)와 [세 구현의 근거](docs/engineering-evidence.md)를 먼저 읽습니다. 이번 [안내 정비 기록](todos/2026_11_06-public-project-refresh.md)은 제품 개발·운영 재개와 별개입니다.
+처음 방문했다면 [프로젝트 소개](README.md) → [구현 근거](docs/engineering-evidence.md) → [직접 확인하기](tests/README.md) 순서로 읽으세요.
+모든 작업 문서는 [작업 색인](todos/README.md), 이번 56개 제안의 처리 결과는 [정비 실행 기록](todos/2026_11_06-project-maintenance-execution.md)에 연결합니다.
 
-CPU 기본 CI 도입은 [별도 실행 기록](todos/2026_11_06-cpu-checks-ci.md)에서 관리합니다. 무료 GitHub 실행기로 선택된 세 모듈과 예제를 검사하며 전체 GPU·DB 검증과 구분합니다.
+## 지금 진행하는 정비
 
-## Core Invariants
-- `CPU=SSOT`: CPU 백테스터가 최종 기준입니다.
-- `Parity First`: release-grade 변경은 CPU/GPU parity mismatch `0`이 기본 게이트입니다.
-- `PIT / No Lookahead`: 미래 데이터 참조는 즉시 중단 사유입니다.
-- `Evidence Before Promotion`: 중요한 판단에는 결과 파일, 테스트, 리포트 링크가 있어야 합니다.
+| 작업 | 상태 | 다음 행동 |
+| --- | --- | --- |
+| 문서·이슈 상태 정리 | 진행 중 | 완료 기록·원래 이슈 요구·현재 코드 대조, 링크와 공개 상태 확인 |
+| #59 DB 통합 검사 | 부분 완료 / 실제 DB 검증 미완료 | [기존 기록](todos/2026_02_15-issue59-tests-split-no-db-gpu.md)의 호출 불일치·건너뜀 처리를 보수하고 전용 임시 MySQL에서 검증 |
+| 방문 동선·Pages | 계획 확정 | 코드 읽기 안내·한국어 제목·탐색·공개 설정 정비 |
 
-## How To Read
-1. `Active Focus`에서 완료 구현과 남은 확인 항목을 먼저 봅니다. 실시간 운영 상태는 이 파일만으로 알 수 없습니다.
-2. 각 항목의 상세 계획과 로그는 링크된 `todos/*.md` 문서를 엽니다.
-3. `Research & Review Notes`는 참고 자료입니다. 실행 SSOT가 아닙니다.
-4. `todos/done_*.md`는 완료 아카이브입니다. 현재 우선순위 판단에는 쓰지 않습니다.
+매매 규칙·GPU 계산·운영 DB·전체 환경 이관은 이 정비의 범위가 아닙니다. DB 검사는 합성 자료와 실행마다 폐기하는 검사용 DB만 사용합니다.
 
-## Document Types
-- `implementation`: 실제 실행 계획, 체크리스트, 로그, 증적을 가진 문서
-- `research`: 아직 공식 경로가 아닌 설계/실험 문서
-- `review`: 판단 근거와 결론을 요약해 둔 문서
-- `reference`: 참고 메모, 이관 백로그, 개발 편의 노트
+## 구현됐지만 남은 확인
 
-## Gate Board
-| Gate | Current State | Meaning | Owner Doc |
-| --- | --- | --- | --- |
-| `#56 Release parity` | Done (synthetic) | config single-row + synthetic `top-k=20` 범위까지 decision-level 증적 확보, real optimizer/WFO CSV는 spot revalidation만 남음 | [#56](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md) |
-| `#67 Runtime PIT candidate policy` | Done (live evidence) | GPU runtime gate parity, strict frozen manifest `record/replay`, candidate order zero-mismatch, structured `pit_failure` artifact까지 실제 parity/certification run 증적 확보 | [#67](todos/done_2026_02_09-issue67-tier-universe-migration.md) |
-| `ShortSellingDaily PIT lag` | 구현·영향 비교 완료 / 재계산 완료 미확인 | 임시 3거래일 지연 반영과 회귀 테스트 구현. 실제 제공처 가용 시점 확정과 장기 재계산 완료는 별도 확인 | [lag note](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `외부 출시 경계` | Open | 내부 검증 단계와 외부 출시 단계를 분리해서 관리해야 함 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
-| `#97 Strict-only governance` | Done | Gate A/B/C 승인, step 2 synthetic sample pack 승인, step 3 active non-strict surface 제거까지 완료. Gate B 예외(`src.parameter_simulation_gpu_lib`, `src.main_script`, historical/archive docs)만 명시적으로 유지 | [#97](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
-| `#98 Throughput promotion` | Done | PR `#103`으로 current HEAD canonical throughput win과 strict parity reconfirmation을 함께 반영했고, 이번 tranche 목표를 종료했다 | [#98](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md) |
+| 항목 | 확인된 범위 | 남은 확인 |
+| --- | --- | --- |
+| 공매도 데이터의 지연 반영 | 임시 3거래일 정책·회귀 검사·읽기 전용 영향 비교 구현 | 실제 제공처 가용 시점 확정, 기존 장기 재계산의 완료 증거·행 수·최신 날짜·샘플 확인. 이번에 재계산하지 않음. [기록](todos/2026_03_07-short-selling-publication-lag-pit.md) |
+| 기간을 나눈 전략 평가 #68 | PR #106의 후보 고정·CPU 검산·holdout 보호·후보 추출 | 원래 ablation·강건성 평가와 최종 승인 조건. 열린 PR #75의 차이도 별도. [요구 대조](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
+| 전체 실행 환경 | CPU 최소 확인 경로와 명령 안내 제공 | Python 환경 파일·YAML/INI 설정 혼재, GPU 환경 준비 안내. [실행 조건](docs/running.md) |
+| 과거 CPU·GPU 일치 및 성능 | 해당 기록의 당시 입력에서 확인 | 전체 입력·최신 GPU 환경을 검증한 결과가 아님. [측정 조건](docs/engineering-evidence.md#gpu) |
 
-## Active Focus
-| Priority | Item | Status | Why Now | Next Action | Detail |
-| --- | --- | --- | --- | --- | --- |
-| `P0` | `ShortSellingDaily` publication lag 정리 | 코드·영향 비교 완료 / 장기 재계산 완료 미확인 | 임시 3거래일 지연 정책과 shadow diff가 구현됨 | 마지막 공개 로그 이후 완료 증거가 확인되면 row count·최신 날짜·샘플 검증을 기록한다. 이번 문서 정비에서는 재계산하지 않는다 | [doc](todos/2026_03_07-short-selling-publication-lag-pit.md) |
-| `P0` | `내부 검증 / 외부 출시 경계 정리` | Draft | 아직 외부 출시 전 단계인데 가능한 일과 불가능한 일이 섞여 보이면 혼선이 생김 | 내부 검증만 기본 허용, 외부는 `NDA + 읽기 전용 설명` 범위까지만 허용하는 문구로 정리 | [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md) |
-| `P1` | `#104` GPU throughput follow-up hot path | Done | `H-001`, `H-003`, `H-004-a`는 canonical 회귀로 정리했고, `H-005-b`가 `cp.unique` 기반 additional-buy last-trade dedup 제거 후 동일 조건 2회 중앙값에서 GPU 계산 시간 `94.96%`, 전체 시간 `91.68%` 감소와 strict parity를 함께 통과했다 | 새 hot-path tranche가 생기기 전까지 재개하지 않는다. 필요 시 `--kernel-breakdown` probe를 재사용한다 | [doc](todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
-| `P2` | `#68` Robust WFO / Ablation | 주요 경로 구현 / 최종 승인과 별개 | PR #106에 frozen shortlist 기반 평가·CPU 최종 검산·holdout 보호·N-window 후보 추출 반영 | 구현된 경로의 검증 기록과 미완료 승인 조건을 구분해 후속 평가한다 | [doc](todos/2026_02_09-issue68-robust-wfo-ablation.md) |
+## 열린 이슈와 연구
 
-## Roadmap Checkpoint (2026-03-10 당시 계획)
+현재 상태·근거·재개 조건은 이슈 본문에 기록합니다. 오래됐다는 이유로 닫거나 연구를 구현 성과로 소개하지 않습니다.
 
-아래 분기 일정은 당시 검토안입니다. 실제 완료나 현재 출시 약속을 뜻하지 않으며, 이번 정비에서 새로운 일정을 확정하지 않았습니다.
-- `2026 Q2`: 데이터 계약과 검증 규칙을 먼저 확정합니다. `ShortSellingDaily lag`, strict parity, manifest, `#68` 공식안을 이 구간에서 잠급니다.
-- `2026 Q3`: 강건성 검증과 결과 리포트 표준화를 진행합니다. CPU certification 결과를 기본 산출물로 굳힙니다.
-- `2026 Q4`: `#72` continuity, `#101` 편향 완화, k3s/GPU job 연구는 내부 검증용으로만 진행합니다.
-- `2027 Q1`: 출시 기준을 모두 통과했을 때만 제한적 공개 또는 canary를 검토합니다.
-- 기준: 외부 유료 파일럿, 실시간 신호 제공, 실계좌 연동은 출시 기준 통과 전까지 금지합니다.
+- 사용성·설명: [#19 통합 CLI](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/19), [#20 GPU 환경 안내](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/20), [#21 핵심 API 설명](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21), [#30 결과 리포팅](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/30).
+- 구현 후속: [#52 GPU 순차 처리·병목](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/52), [#54 파이프라인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54), [#57 모델·캐시](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57), [#58 DB 접근](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58), [#59 통합 검사](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/59).
+- 평가·기준서: [#68 강건성 평가](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68), [#94 전략 기준서](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/94). PR #75·#95는 차이와 재개 조건을 기록하고 유지합니다.
+- 연구: [#35 동적 파라미터](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/35), [#72 기업 이벤트와 포지션 승계](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/72), [#101 분포 기반 최적화](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101), [#107 ETF 전략](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/107).
+- 다른 과제에서 이어진 항목은 [#71 후속 연결표](todos/2026_03_01-issue71-carryover-non71-backlog.md)에서 추적합니다.
 
-## Backlog Summary
+## 완료 기록
 
-### Integrity & Runtime
-- `#72` ticker continuity / position inheritance: 합병·분할·티커 변경 시 포지션 연속성 설계가 필요합니다. [doc](todos/2026_02_09-issue72-ticker-continuity-position-inheritance.md)
-- `#54` DataPipeline modularization + CPU session cache: CPU backtest session cache와 레거시 스크립트 정리가 남아 있습니다.
-- `#58` DB access layer standardization: connector/engine 표준화가 아직 남아 있습니다.
-- `#57` domain model/cache integration: Position/CompanyInfo 캐시 통합은 아직 후순위입니다.
-- `#71 carryover backlog`: issue #71에서 넘어온 후속 데이터/거버넌스 항목을 따로 모아둔 문서입니다. [doc](todos/2026_03_01-issue71-carryover-non71-backlog.md)
+| 완료한 범위 | 근거와 경계 |
+| --- | --- |
+| 후보군·시점 기준 전환 #67 | [당시 검증 기록](todos/done_2026_02_09-issue67-tier-universe-migration.md). 과거 모드의 모든 체크박스를 지금 실행했다는 뜻은 아님 |
+| 레거시 조사와 승인 범위 정리 #97 | [분류·승인·유지 예외](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md) |
+| 호환 경로 정리 #93 | [PR #96 완료 기록](todos/done_2026_02_16-issue93-wrapper-deprecation-removal-plan.md) |
+| GPU 처리량 개선 | [PR #103 기록](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md). 기존 로컬 식별자 issue98은 실제 GitHub PR #98과 다름 |
+| GPU 후속 개선 #104 | [PR #105 측정·원복 기록](todos/done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md) |
+| 공개 안내·작은 예제 | [PR #109 완료 기록](todos/done_2026_11_06-public-project-refresh.md) |
+| CPU 기본 CI | [PR #110 완료 기록](todos/done_2026_11_06-cpu-checks-ci.md): 기존 검사 34개·예제·도구 자체 검사 22개 |
 
-### Strategy & Research
-- `#101` deterministic Tier1 bias 완화: 특정 종목 고착보다 `theta x scenario x fold` 분포를 기준으로 파라미터를 고르려는 연구 트랙입니다. [doc](todos/2026_02_22-issue101-feat-tier1.md)
-- `GPU-native WFO v2`: 현재 공식 경로가 아닌 내부 연구용 문서입니다. [doc](todos/2026_03_06-gpu-native-wfo-v2-design.md)
-- `WFO shortlist derivation review`: `single-window shortlist` vs `research-stage WFO full-grid` 논의를 다시 열기 전에 읽는 결정 메모입니다. [doc](todos/2026_03_16-wfo-shortlist-derivation-review.md)
-- `N-window shortlist contract v1`: 여러 기간의 결과를 후보 목록으로 줄이는 연구용 계약이며 PR #106에 기본 구현이 반영됐습니다. `cluster_v1` 확장은 별도 제안입니다. [doc](todos/2026_03_19-n-window-shortlist-contract-v1.md)
+그 밖의 완료 기록과 연구·검토 문서는 [전체 색인](todos/README.md)에 있습니다.
+[3월 사업화 검토](todos/2026_03_10-roadmap-commercialization-checkpoint.md)의 분기 일정·외부 출시 조건은 당시 제안입니다. 현재 서비스 출시 일정이나 채용용 코드 소개의 제한으로 읽지 않습니다.
 
-### Supporting Notes
-- 로컬 DB 없이 할 수 있는 개발 범위: [note](todos/2026_02_14-notebook-no-local-db-dev.md)
-- 성능/안정성 우선순위 재검토 메모: [review](todos/2026_03_06-performance-stability-review.md)
-- 백테스트/최적화 재검토 메모: [review](todos/2026_03_07-backtest-optimizer-review.md)
-- 사업화 포함 로드맵 점검 메모: [review](todos/2026_03_10-roadmap-commercialization-checkpoint.md)
-- 사업모델/시장성 검토 메모: [review](todos/2026_03_10-business-model-marketability-review.md)
+## 기록을 갱신할 때
 
-## Research & Review Notes
-- [로드맵/사업화 점검 메모](todos/2026_03_10-roadmap-commercialization-checkpoint.md)
-  - 성격: `review`
-  - 읽는 시점: 내부 검증 단계와 외부 출시 가능 시점을 다시 확인할 때
-- [사업모델/시장성 검토 메모](todos/2026_03_10-business-model-marketability-review.md)
-  - 성격: `review`
-  - 읽는 시점: 어떤 BM을 먼저 잡아야 하는지 또는 공개레포에 남길 사업 문서의 범위를 정할 때
-- [GPU-native WFO v2 design](todos/2026_03_06-gpu-native-wfo-v2-design.md)
-  - 성격: `research`
-  - 읽는 시점: 공식 경로 대체를 고민할 때
-- [WFO shortlist derivation review](todos/2026_03_16-wfo-shortlist-derivation-review.md)
-  - 성격: `review`
-  - 읽는 시점: `single-window shortlist` 대신 `research-stage WFO full-grid`를 기본 경로로 올릴지 다시 논의할 때
-- [N-window shortlist contract v1](todos/2026_03_19-n-window-shortlist-contract-v1.md)
-  - 성격: `research`
-  - 읽는 시점: PR #106에 반영된 후보 추출 계약과 후속 군집화 제안의 경계를 확인할 때
-- [성능/안정성 재검토 메모](todos/2026_03_06-performance-stability-review.md)
-  - 성격: `review`
-  - 읽는 시점: `#98`을 왜 바로 열지 않는지 설명이 필요할 때
-- [백테스트/최적화 재검토 메모](todos/2026_03_07-backtest-optimizer-review.md)
-  - 성격: `review`
-  - 읽는 시점: 최근 추가된 backlog 항목의 근거를 확인할 때
-- [로컬 DB 없이 진행 가능한 작업 메모](todos/2026_02_14-notebook-no-local-db-dev.md)
-  - 성격: `reference`
-  - 읽는 시점: 노트북/비로컬 DB 환경에서 바로 작업 가능한 범위를 보고 싶을 때
-
-## Recent Done / Archive
-- 완료 문서는 `todos/done_*.md`에 둡니다.
-- 최근 완료된 큰 묶음:
-  - [#64 PIT / lookahead 방지](todos/done_2026_02_07-issue64-point-in-time-lookahead-bias.md)
-  - [#65 schema/index 확장](todos/done_2026_02_07-issue65-financial-investor-tier-schema-index.md)
-  - [#66 collector 분리 + tier batch](todos/done_2026_02_07-issue66-financial-investor-collector-tier-batch.md)
-  - [#70 historical universe](todos/done_2026_02_08-issue70-historical-ticker-universe-delisted.md)
-  - [#71 pykrx + Tier v2 roadmap](todos/done_2026_02_08-issue71-pykrx-tier-v2-data-roadmap.md)
-  - [#69 package restructure](todos/done_2026_02_16-issue69-src-package-restructure-breakdown.md)
-  - [#56 parity release gate](todos/done_2026_02_09-issue56-cpu-gpu-parity-topk.md)
-  - [#67 PIT candidate policy](todos/done_2026_02_09-issue67-tier-universe-migration.md)
-  - [#97 strict-only governance](todos/done_2026_02_17-issue97-legacy-code-audit-governance.md)
-  - [#98 throughput refactor tranche](todos/done_2026_02_17-issue98-gpu-throughput-refactor.md)
-- 완료 상태이지만 참고가 필요한 운영 문서:
-  - [#93 wrapper deprecation/removal plan](todos/2026_02_16-issue93-wrapper-deprecation-removal-plan.md)
-
-## Rule For Future Docs
-- 새 active 문서는 반드시 `Status / Type / Why / Next Action / Gate Status / Evidence Links / Related Issues`를 문서 앞부분에 둡니다.
-- `implementation` 문서는 체크리스트와 작업 로그를 함께 가져야 합니다.
-- `research/review/reference` 문서는 배경 설명보다 `이 문서를 언제 읽어야 하는가`를 먼저 써야 합니다.
+- 현재 할 일은 이 상태판, 이유·완료 조건·검증은 상세 작업 문서에 남깁니다.
+- 문서 유형(구현·연구·검토·참고)과 상태(진행·완료·보류)는 별개입니다.
+- 완료 문서는 결과·근거·남은 조건을 적고 알려진 링크를 고친 뒤 done_를 붙입니다. 시험 건너뜀은 통과가 아닙니다.
+- 실제 자료·시험 근거 없이 완료·개인 기여·운영 현황·성능을 확대하지 않습니다.
