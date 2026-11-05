@@ -5,6 +5,20 @@
 처음 방문했다면 [프로젝트 소개](README.md) → [구현 근거](docs/engineering-evidence.md) → [직접 확인하기](tests/README.md) 순서로 읽으세요.
 모든 작업 문서는 [작업 색인](todos/README.md), 이번 56개 제안의 처리 결과는 [정비 실행 기록](todos/2026_11_06-project-maintenance-execution.md)에 연결합니다.
 
+## 다음에 할 일
+
+다음 작업을 고를 때의 순서입니다. **세 항목 모두 미착수**이며, 이번에는 우선순위와 완료 조건을 정리했습니다. 포트폴리오 공개를 위해 모두 끝내야 한다는 뜻은 아닙니다.
+
+| 순서 | 작업 | 바로 다음 행동 | 완료를 확인하는 기준 |
+| --- | --- | --- | --- |
+| 1 | [#21 핵심 코드 설명 보강](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21) | DataHandler·BacktestEngine·Strategy와 대표 GPU 진입점의 설명 대상 목록을 정하고 소스·기존 검사와 대조 | 입력·반환·단위·날짜 기준·오류 조건을 실제 코드에 맞게 설명. 원래 요구 대비 완료·남은 대상을 기록한 뒤 이슈 종료 판단 |
+| 2 | [#20 GPU 환경 준비·실행 안내](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/20) | 검증 가능한 GPU 환경과 공개 가능한 환경 기록 확보 | OS·장비·드라이버·CUDA·Python·패키지 조합, 설치부터 최소 실행·관련 검사까지 실제 명령·결과 기록. 통합 CLI 구현은 #19에 유지 |
+| 3 | [#58 DB 접근 방식 정리](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58) | 호출자·설정 경로·연결 생성/반환/종료를 조사하고 호환·전환·복구 계획 검토 | 원래 요구인 런타임 DB 접근 통일·중복 설정 제거·문서 갱신을 별도 구현과 격리 DB 회귀 검증으로 확인. 현황 조사만으로 완료 처리하지 않음 |
+
+#21은 외부 장비 없이 설명 대조부터 시작할 수 있습니다. #20은 GPU 환경 준비가 필요하며, 준비를 기다리는 동안 #58의 읽기 전용 현황 조사처럼 독립적인 준비를 먼저 할 수 있습니다. 제품 DB 변경은 별도 설계·검증 범위를 확정한 뒤 진행합니다.
+
+이슈 목록에서는 기존 `priority-high`(#21), `priority-medium`(#20·#58) 라벨로 구분합니다. 선정 이유와 이번 정리 범위는 [후속 기록](todos/2026_11_06-project-maintenance-execution.md#후속-정리-다음에-할-일의-우선순위)에 있습니다.
+
 ## 이번 정비 결과
 
 | 작업 | 상태 | 다음 행동 |
@@ -24,12 +38,12 @@
 | 전체 실행 환경 | CPU 최소 확인 경로와 명령 안내 제공 | Python 환경 파일·YAML/INI 설정 혼재, GPU 환경 준비 안내. [실행 조건](docs/running.md) |
 | 과거 CPU·GPU 일치 및 성능 | 해당 기록의 당시 입력에서 확인 | 전체 입력·최신 GPU 환경을 검증한 결과가 아님. [측정 조건](docs/engineering-evidence.md#gpu) |
 
-## 열린 이슈와 연구
+## 그 밖의 후속 개선과 연구
 
 현재 상태·근거·재개 조건은 이슈 본문에 기록합니다. 오래됐다는 이유로 닫거나 연구를 구현 성과로 소개하지 않습니다.
 
-- 사용성·설명: [#19 통합 CLI](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/19), [#20 GPU 환경 안내](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/20), [#21 핵심 API 설명](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21), [#30 결과 리포팅](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/30).
-- 구현 후속: [#52 GPU 순차 처리·병목](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/52), [#54 파이프라인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54), [#57 모델·캐시](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57), [#58 DB 접근](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58).
+- 사용성·설명: [#19 통합 CLI](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/19), [#30 결과 리포팅](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/30).
+- 구현 후속: [#52 GPU 순차 처리·병목](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/52), [#54 파이프라인](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/54), [#57 모델·캐시](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/57).
 - 평가·기준서: [#68 강건성 평가](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/68), [#94 전략 기준서](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/94). PR #75·#95는 차이와 재개 조건을 기록하고 유지합니다.
 - 연구: [#35 동적 파라미터](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/35), [#72 기업 이벤트와 포지션 승계](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/72), [#101 분포 기반 최적화](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/101), [#107 ETF 전략](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/107).
 - 다른 과제에서 이어진 항목은 [#71 후속 연결표](todos/2026_03_01-issue71-carryover-non71-backlog.md)에서 추적합니다.
