@@ -1,5 +1,7 @@
 # Work Note: `ShortSellingDaily` Publication Lag / PIT
 
+> **2026-11-06 공개 기록 대조:** 3거래일 지연 반영·회귀 테스트·영향 비교는 구현됐습니다. 마지막 재계산 로그는 2026-03-14의 재개 지점 `2017-04-18`이며, 전체 기간 완료는 확인되지 않았습니다. 아래 접근성·환경·실행 로그는 당시 기록입니다. 이번 정비에서 수집이나 재계산은 실행하지 않았습니다.
+
 > Type: `implementation`
 > Status: `in_progress`
 > Priority: `P0`
@@ -9,13 +11,13 @@
 
 ## 1. Summary
 - What: `ShortSellingDaily` 데이터를 `DailyStockTier`에 반영할 때, 실제 가용 시점보다 이르게 쓰지 않도록 PIT 계약을 고정합니다.
-- Why: 현재 수집기는 lag를 보수적으로 보지만, tier batch는 same-date join으로 `sbv_ratio`를 만들고 있어 룩어헤드 후보가 됩니다.
-- Current status: 비인증 KRX/pykrx 경로는 이 호스트에서 `400 LOGOUT`/empty로 깨지고, 로그인 세션 주입 smoke는 성공했습니다. `DailyStockTier` 코드에도 임시 운영정책 `lag=3 + same-date 금지`를 반영했고, shadow diff까지 완료했습니다. 현재는 `DailyStockTier` backfill을 진행 중입니다.
+- Why: 변경 전 tier batch는 same-date join으로 `sbv_ratio`를 만들어, 당시 사용할 수 없었던 값을 계산에 넣을 우려가 있었습니다.
+- Current status: 비인증 KRX/pykrx 경로는 이 호스트에서 `400 LOGOUT`/empty로 깨지고, 로그인 세션 주입 smoke는 성공했습니다. `DailyStockTier` 코드에도 임시 운영정책 `lag=3 + same-date 금지`를 반영했고, shadow diff까지 완료했습니다. 2026-03-14 로그는 `DailyStockTier` backfill 재개까지 남아 있으며 전체 완료는 확인되지 않았습니다.
 - Next action: backfill을 `2013-11-20 ~ 2026-02-06` 범위로 끝내고, 완료 후 최신 날짜/row count/샘플 검증을 남깁니다.
 
 ## 2. Fixed Problem Statement
 - 수집기에는 `lag_trading_days` 개념이 이미 있습니다.
-- 그러나 tier batch는 `ShortSellingDaily.date == MarketCapDaily.date` 기준으로 same-date join을 하고 있습니다.
+- 변경 전 tier batch는 `ShortSellingDaily.date == MarketCapDaily.date` 기준으로 same-date join을 했습니다.
 - 이 구조가 진짜 PIT-safe인지 아직 명확하지 않습니다.
 
 ## 3. 2026-03-13 접근성 증적
@@ -24,7 +26,7 @@
   - 의미: 기본 collector/probe 경로로는 최근 가용 시점을 판단할 수 없습니다.
 - 비인증 `pykrx.stock.get_shorting_status_by_date(...)`는 최근/과거 날짜 모두 `rows=0`이었지만, 이것은 데이터 부재보다 접근 실패일 가능성이 큽니다.
 - 인증 세션을 `pykrx`에 주입하는 smoke는 성공했습니다.
-  - 스크립트: [check_pykrx_login_session.py](/root/projects/Split_Investment_Strategy_Optimizer/tools/operations/check_pykrx_login_session.py)
+  - 스크립트: [check_pykrx_login_session.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/tools/operations/check_pykrx_login_session.py)
   - 관측:
     - `login_ok=True`
     - `stock.get_etf_ticker_list(20260227)` 정상
@@ -39,7 +41,7 @@
 
 ## 4. Interim Decision
 - `publication_lag_trading_days`는 **임시 운영정책으로 `3` 유지**합니다.
-- `DailyStockTier.sbv_ratio`의 **same-date 반영은 금지** 방향으로 수정합니다.
+- `DailyStockTier.sbv_ratio`의 **same-date 반영은 금지**하는 방향으로 코드에 반영했습니다.
 - 현재 호스트에서 lag를 추가 실험으로 줄이려면, 반드시 로그인 세션 주입 smoke를 먼저 통과해야 합니다.
 - 비인증 경로의 `rows=0` 또는 `empty`는 lag 근거로 사용하지 않습니다.
 
@@ -65,10 +67,10 @@
 - 로그인 세션 없이 직접 endpoint probe만 성공/실패한 결과는 참고용으로만 남기고 정책 결정에는 사용하지 않습니다.
 
 ## 7. Code Summary
-- [daily_stock_tier_batch.py](/root/projects/Split_Investment_Strategy_Optimizer/src/pipeline/daily_stock_tier_batch.py)
+- [daily_stock_tier_batch.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/pipeline/daily_stock_tier_batch.py)
   - `short_selling_publication_lag_trading_days` 인자를 `build_daily_stock_tier_frame(...)`, `run_daily_stock_tier_batch(...)`에 추가했습니다.
   - `ShortSellingDaily.date`는 merge 전에 trading-day 기준으로 `lag=3`만큼 앞으로 밀어 `available date`에 반영하도록 바꿨습니다.
-- [test_daily_stock_tier_batch.py](/root/projects/Split_Investment_Strategy_Optimizer/tests/test_daily_stock_tier_batch.py)
+- [test_daily_stock_tier_batch.py](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/tests/test_daily_stock_tier_batch.py)
   - 기존 SBV overlay 테스트는 `lag=0`을 명시해 기존 수학/임계값 의미를 고정했습니다.
   - 새 lag 테스트를 추가해 same-date에는 `sbv_ratio`가 비어 있고, 가용일에만 반영되는지 확인했습니다.
 

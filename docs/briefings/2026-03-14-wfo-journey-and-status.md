@@ -1,5 +1,7 @@
 # WFO(Walk-Forward Optimization, 과거로 공부하고 미래 구간으로 시험 보는 검증 방식) 여정과 현재 상태
 
+> **작성 당시의 절차·판단·검증 기록입니다.** 본문의 성공·진행·예정 표현은 당시 환경과 범위에 한정됩니다. 현재 구현과 남은 확인은 [프로젝트 상태](../../TODO.md), 실행 환경은 [전체 실행 안내](../running.md)를 확인합니다. 이번 안내 정비에서는 운영 작업을 재실행하지 않았습니다.
+
 > 작성일: 2026-03-14
 > 대상 독자: 처음 이 프로젝트를 접하는 팀원, 관리직 임원, 협업자
 > 목적: Magic Split 전략의 WFO 개선이 왜 필요했는지, `simulation(후보를 넓게 찾는 단계)` 이후 실제로 무엇을 하는지, 지금 어디까지 왔는지를 초심자도 이해하기 쉽게 공유하는 문서
@@ -518,9 +520,9 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 - `우리는 지금 이 다섯 단계를 섞지 않도록 구조를 다시 세우는 중이다.`
 
 ## 15. 참고 문서
-- [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
-- [Issue #68: Robust WFO / Ablation](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_02_09-issue68-robust-wfo-ablation.md)
-- [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
+- [WFO Approval Workflow Runbook](../operations/2026-03-14-wfo-approval-runbook.md)
+- [Issue #68: Robust WFO / Ablation](../../todos/2026_02_09-issue68-robust-wfo-ablation.md)
+- [WFO / OOS Lane 임시 합의안](../../todos/2026_03_12-wfo-oos-lane-provisional-review.md)
 
 ## 16. approval-grade로 닫는 실행 체크리스트 (2년 holdout, 초심자용)
 아래 순서는 `내 터미널(WSL)`에서 그대로 따라 하기 쉽게 정리한 것이다.

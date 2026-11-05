@@ -116,7 +116,7 @@
   - `selection_metric`
   - `shortlist_hash`
 - 후속 공식안은 별도 문서로 정리한다.
-  - [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
+  - [N-window shortlist contract v1](2026_03_19-n-window-shortlist-contract-v1.md)
 
 ## 6. 지금 바로 할 다음 액션
 ### 6-1. `P0` Simulation metric alignment
@@ -148,8 +148,8 @@
 - promotion lane과 discovery lane의 경계를 다시 설명해야 하는 경우
 
 ## 8. 관련 문서
-- [WFO Approval Workflow Runbook](/root/projects/Split_Investment_Strategy_Optimizer/docs/operations/2026-03-14-wfo-approval-runbook.md)
-- [WFO / OOS Lane 임시 합의안](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_12-wfo-oos-lane-provisional-review.md)
-- [WFO 여정과 현재 상태](/root/projects/Split_Investment_Strategy_Optimizer/docs/briefings/2026-03-14-wfo-journey-and-status.md)
-- [GPU-native WFO v2 Design Note](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_06-gpu-native-wfo-v2-design.md)
-- [N-window shortlist contract v1](/root/projects/Split_Investment_Strategy_Optimizer/todos/2026_03_19-n-window-shortlist-contract-v1.md)
+- [WFO Approval Workflow Runbook](../docs/operations/2026-03-14-wfo-approval-runbook.md)
+- [WFO / OOS Lane 임시 합의안](2026_03_12-wfo-oos-lane-provisional-review.md)
+- [WFO 여정과 현재 상태](../docs/briefings/2026-03-14-wfo-journey-and-status.md)
+- [GPU-native WFO v2 Design Note](2026_03_06-gpu-native-wfo-v2-design.md)
+- [N-window shortlist contract v1](2026_03_19-n-window-shortlist-contract-v1.md)
