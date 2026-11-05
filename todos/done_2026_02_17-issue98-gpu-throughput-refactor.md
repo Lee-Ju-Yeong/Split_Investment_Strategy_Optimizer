@@ -1,4 +1,43 @@
-# Issue #98: GPU Throughput Refactor
+# GPU 처리량 개선 기록 (기존 로컬 식별자 issue98)
+
+<details>
+<summary>최종 요약·측정·실험 기록 찾아보기</summary>
+
+- [1. One-Page Summary](#1-one-page-summary)
+- [2. 초심자용 현재 판단 (2026-03-08)](#2-초심자용-현재-판단-2026-03-08)
+- [3. Plain-Language Rule](#3-plain-language-rule)
+- [4. Current Priority Bottlenecks](#4-current-priority-bottlenecks)
+- [5. Current Plan](#5-current-plan)
+- [6. Key Evidence](#6-key-evidence)
+- [7. Reading Guide](#7-reading-guide)
+- [8. Detailed History And Working Log](#8-detailed-history-and-working-log)
+- [1. 변경 분류 프레임 (필수)](#1-변경-분류-프레임-필수)
+- [2. 성능 병목 전수 인벤토리 (2026-02-18)](#2-성능-병목-전수-인벤토리-2026-02-18)
+- [3. 비목표 (Out of Scope)](#3-비목표-out-of-scope)
+- [4. 게이트](#4-게이트)
+- [5. 측정/검증 기준 (반드시 Before/After)](#5-측정검증-기준-반드시-beforeafter)
+- [6. 실행 체크리스트](#6-실행-체크리스트)
+- [7. PR 분할 제안](#7-pr-분할-제안)
+- [8. 실행 순서 (파일 단위 상세)](#8-실행-순서-파일-단위-상세)
+- [9. 의사결정 규칙 (병합 차단)](#9-의사결정-규칙-병합-차단)
+- [10. PR-98A 반영 내역 (2026-02-18)](#10-pr-98a-반영-내역-2026-02-18)
+- [11. PR-98C slice 1 반영 내역 (2026-03-08)](#11-pr-98c-slice-1-반영-내역-2026-03-08)
+- [12. PR-98C slice 2 진행 현황 (2026-03-08)](#12-pr-98c-slice-2-진행-현황-2026-03-08)
+- [11. Tier-only 병목 추가 검토 메모 (2026-02-18)](#11-tier-only-병목-추가-검토-메모-2026-02-18)
+- [12. 현재 상태 업데이트 (2026-02-20, Baseline 고정 완료)](#12-현재-상태-업데이트-2026-02-20-baseline-고정-완료)
+- [13. Baseline(B0) 공식 기록 (PR-98A / P0 fallback 정리 기준)](#13-baselineb0-공식-기록-pr-98a--p0-fallback-정리-기준)
+- [14. PR-98B-2 진행 현황 (2026-02-20)](#14-pr-98b-2-진행-현황-2026-02-20)
+- [15. PR-98C-1 진행 현황 (2026-02-21)](#15-pr-98c-1-진행-현황-2026-02-21)
+- [16. C1 원복 결정 및 재발방지 규칙 (2026-02-23)](#16-c1-원복-결정-및-재발방지-규칙-2026-02-23)
+- [17. C2 제외 잔여 개선안 + 예상 효과 (2026-02-23)](#17-c2-제외-잔여-개선안--예상-효과-2026-02-23)
+- [18. 최신 정합성 재검증 + 머지 판단 (2026-02-25)](#18-최신-정합성-재검증--머지-판단-2026-02-25)
+- [19. 현재 단계 측정 Runbook (2026-03-08)](#19-현재-단계-측정-runbook-2026-03-08)
+
+</details>
+
+> **문서 상태 대조: 2026-11-06.** 아래 시험·실행 결과는 기록된 당시 입력과 환경에 한정합니다. `current HEAD`·`live evidence`는 현재 서비스 운영이나 최신 코드 재검증을 뜻하지 않습니다. 빈 체크박스에는 당시 계획·후속 과제·재사용 양식이 섞여 있으므로 일괄 완료 처리하지 않습니다. 공개되지 않은 results/logs 원본은 이번에 재검증하지 않았습니다. 현재 남은 일은 [상태판](../TODO.md), 후속 연결은 [작업 색인](README.md)에서 확인합니다.
+
+> **식별자 안내:** GitHub의 실제 PR #98은 다른 정합성 수정입니다. 이 처리량 개선의 병합 기록은 [PR #103](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/103)이며 후속 개선은 [완료 #104 기록](done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md)입니다. 도구·산출물의 issue98 이름은 재현 경로이므로 유지합니다.
 
 > Type: `implementation`
 > Status: `done`
@@ -11,7 +50,7 @@
 - What: GPU 처리량 병목과 fallback 유발 성능 저하를 줄이는 문서입니다.
 - Why: 긴 최적화/WFO 실행 시간을 줄여야 하지만, 의미론이 흔들리면 성능 개선이 무의미해집니다.
 - Current status: current HEAD 기준 canonical `Jan-Feb 2024` 2-run에서 baseline 대비 약 `+8.5%` throughput win을 다시 확인했고, current HEAD 기준 `A-D` strict parity canary도 `0 mismatch`로 재통과했습니다. 이번 라운드의 `#98` 핵심 목표는 기술적으로 닫힌 상태입니다.
-- Next action: 더 공격적인 `P-008/P-009` 벡터화와 CPU I/O 계열 PO 정리는 follow-up backlog로 분리했고, 후속 작업은 `todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md`에서 진행합니다.
+- Next action: 더 공격적인 `P-008/P-009` 벡터화와 CPU I/O 계열 PO 정리는 follow-up backlog로 분리했고, 후속 #104도 완료됐으며 `todos/done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md`에서 결과를 확인합니다.
 
 ## 2. 초심자용 현재 판단 (2026-03-08)
 ### 2-1. 지금 무엇이 끝났나

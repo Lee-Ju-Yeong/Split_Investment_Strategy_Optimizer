@@ -1,5 +1,7 @@
 # Review Memo: 성능/안정성 우선순위 재검토
 
+> **문서 상태 대조: 2026-11-06.** 아래 `No-Go`·`not implemented`·현재형 판단은 문서에 적힌 3월 시점의 검토입니다. 이후 [GPU 처리량 PR #103](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/103), [후속 개선 #105](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/105), [WFO 구현 #106](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/106)이 병합됐습니다. 모든 우려가 해소됐다는 뜻은 아니며, 남은 평가·연구는 [상태판](../TODO.md)에서 구분합니다.
+
 > Type: `review`
 > Status: `reference`
 > Priority: `N/A`

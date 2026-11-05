@@ -340,3 +340,12 @@
   - `approval-grade holdout`은 기본적으로 `24개월 이상`을 목표로 둔다.
   - 현재 `2025-01-01 ~ 2025-11-30`는 `internal provisional holdout`으로 취급한다.
   - holdout 적정성은 `미청산 비율` 하나보다 `자본 배치 적정성`과 `실제 회전/청산 커버리지`를 같이 보는 쪽이 맞다.
+
+## 요구와 현재 구현의 구분 (2026-11-06)
+
+| 원래 요구 | 현재 근거 | 남은 판단 |
+| --- | --- | --- |
+| 멀티팩터·강건 점수·선택 조건 | main의 `src/analysis/walk_forward_analyzer.py`와 열린 PR #75에 서로 다른 형태의 구현 존재 | 함수 이름이 유사해도 점수·gate·flag 계약을 동일하다고 보지 않음. #75 유지 |
+| WFO 후보 고정·기간별 평가 | PR #106의 shortlist·CPU 검산·holdout 보호 | 구현 완료와 최종 전략 승인 구분 |
+| Ablation·행동 지표·최종 강건성 평가 | 원 이슈의 실험 요구 | 전체 완료 증거 미확인. 이슈 #68 유지 |
+| 군집화 확장 | [cluster 제안](2026_03_24-cluster-v1-shortlist-diversification-poc.md) | 별도 연구이며 기본 구현 완료와 구분 |

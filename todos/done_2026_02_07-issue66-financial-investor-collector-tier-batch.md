@@ -1,5 +1,6 @@
 # feat(pipeline): 재무/수급 수집기 분리 및 DailyStockTier 사전 계산 배치 도입
-(현재 파일 이름은 YYYY_MM_DD-issue<이슈번호>-<issue_name_only_english>.md 로 지정)
+
+> **문서 상태 대조: 2026-11-06.** 아래 시험·실행 결과는 기록된 당시 입력과 환경에 한정합니다. `current HEAD`·`live evidence`는 현재 서비스 운영이나 최신 코드 재검증을 뜻하지 않습니다. 빈 체크박스에는 당시 계획·후속 과제·재사용 양식이 섞여 있으므로 일괄 완료 처리하지 않습니다. 공개되지 않은 results/logs 원본은 이번에 재검증하지 않았습니다. 현재 남은 일은 [상태판](../TODO.md), 후속 연결은 [작업 색인](README.md)에서 확인합니다.
 - 이슈 주소: `https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/66`
 - 런타임 병목을 줄이고 재현성을 높이기 위해, 재무/수급 데이터 수집과 Tier 계산을 사전 배치 체계로 전환
 - 백필(backfill)과 일배치(daily batch) 경로를 분리해 운영 안정성과 재실행 가능성을 확보

@@ -42,7 +42,7 @@ GPU는 많은 설정 조합을 동시에 계산하지만 준비·정렬·상태 
 | [갱신 대상 회귀 테스트](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/tests/test_backtest_strategy_gpu.py#L759) | 허용된 매수 대상만 마지막 거래일이 바뀌는지 확인 |
 | [측정 도구](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/ea5683405a5c2e0e55a2f2365f4a1e0ff6022dd3/src/issue98_perf_measure.py) | 실행 시간·구간별 시간·환경·입력 정보를 측정 산출물로 기록 |
 | [PR #105](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/105) | 개선 결과와 CPU·GPU 일치 검사 요약 |
-| [실험·원복·최종 판정 기록](../todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md) | 효과가 없었던 변경과 채택한 변경을 함께 추적 |
+| [실험·원복·최종 판정 기록](../todos/done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md) | 효과가 없었던 변경과 채택한 변경을 함께 추적 |
 
 ### 당시 측정 결과와 조건
 
@@ -58,7 +58,7 @@ GPU는 많은 설정 조합을 동시에 계산하지만 준비·정렬·상태 
 | 전체 실행 시간 | 1,049.52초 → 87.30초, 약 91.68% 감소 |
 | 실행 상태 | 두 실행 모두 메모리 부족 재시도 없음, 각 4묶음 처리 |
 
-측정 규격은 [#98 기록의 19-3절](../todos/done_2026_02_17-issue98-gpu-throughput-refactor.md), 최종 수치는 [#104 기록의 19-8절](../todos/2026_03_13-issue104-gpu-throughput-followup-hotpath.md)과 PR #105에 있습니다. 비교 식은 `(변경 전 시간 - 변경 후 시간) / 변경 전 시간`입니다. 기록에 적힌 `+94.96%` 등을 이 문서에서는 시간 감소율로 풀어 썼습니다.
+측정 규격은 [#98 기록의 19-3절](../todos/done_2026_02_17-issue98-gpu-throughput-refactor.md), 최종 수치는 [#104 기록의 19-8절](../todos/done_2026_03_13-issue104-gpu-throughput-followup-hotpath.md)과 PR #105에 있습니다. 비교 식은 `(변경 전 시간 - 변경 후 시간) / 변경 전 시간`입니다. 기록에 적힌 `+94.96%` 등을 이 문서에서는 시간 감소율로 풀어 썼습니다.
 
 기준 실행 ID는 `pr98_head_final_janfeb2024_cov020_20260312_223231`, 변경 후 실행 ID는 `pr104_h005b_final_janfeb2024_cov020_20260313_212906`입니다. 원본 `summary.json`·환경 기록은 Git에 포함되지 않은 `results/` 경로를 가리킵니다. **정확한 장비·드라이버와 원본 로그는 공개 자료만으로 확인되지 않았고 이번 정비에서 GPU 재측정하지 않았습니다.**
 

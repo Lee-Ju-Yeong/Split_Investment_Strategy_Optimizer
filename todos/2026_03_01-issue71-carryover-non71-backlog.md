@@ -37,7 +37,7 @@
 - mode 전환 시 study 분리 강제
 - 문서 동기화
 
-## 3. Related Active Docs
+## 3. 연결된 완료 기록과 미완료 과제
 - [#56 parity](done_2026_02_09-issue56-cpu-gpu-parity-topk.md)
 - [#67 tier universe](done_2026_02_09-issue67-tier-universe-migration.md)
 - [#68 robust WFO](2026_02_09-issue68-robust-wfo-ablation.md)
@@ -46,3 +46,13 @@
 ## 4. Reading Rule
 - 이 문서 자체는 실행 SSOT가 아닙니다.
 - 작업을 시작할 때는 반드시 owning issue 문서로 이관한 뒤 체크리스트를 만듭니다.
+
+## 5. 후속 연결 확인 (2026-11-06)
+
+| 묶음 | 이어서 읽을 기록 | 현재 구분 |
+| --- | --- | --- |
+| 공매도 반영 시점·shadow 비교 | [지연 반영 기록](2026_03_07-short-selling-publication-lag-pit.md) | 코드·영향 비교 구현, 장기 재계산 완료는 미확인 |
+| 후보 조회·검증 규칙 | [완료 #67](done_2026_02_09-issue67-tier-universe-migration.md) | 당시 완료 범위만 연결. 이 백로그 전체 완료를 뜻하지 않음 |
+| 기간별 평가·승인 자료 | [#68](2026_02_09-issue68-robust-wfo-ablation.md) | 구현과 미완료 실험 구분 |
+| 분포 기반 강건성 | [#101](2026_02_22-issue101-feat-tier1.md) | 연구 제안 |
+| 그 외 데이터·Optuna 항목 | 이 문서 2절 | 항목별 완료·이관 근거 미확인. 재개할 때 담당 이슈와 완료 조건부터 지정 |
