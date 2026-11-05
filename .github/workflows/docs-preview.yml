@@ -1,0 +1,76 @@
+name: Docs preview
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths: ['**/*.md', '_config.yml', '_layouts/**', 'assets/**', 'tools/ci/check_docs.py', 'requirements-docs-test.txt', '.github/workflows/docs-preview.yml']
+  push:
+    branches: [main]
+    paths: ['**/*.md', '_config.yml', '_layouts/**', 'assets/**', 'tools/ci/check_docs.py', 'requirements-docs-test.txt', '.github/workflows/docs-preview.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-preview:
+    name: 문서 빌드·화면 확인
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the same Markdown with Jekyll
+        uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+        with:
+          source: ./
+          destination: ./_site
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install isolated browser checks
+        run: |
+          python -m venv .venv-docs
+          .venv-docs/bin/python -m pip install -r requirements-docs-test.txt
+          .venv-docs/bin/python -m pip check
+          .venv-docs/bin/python -m playwright install --with-deps chromium
+      - name: Record candidate and browser environment
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          .venv-docs/bin/python - <<'PY'
+          import importlib.metadata, os, platform, subprocess
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              version = browser.version
+              browser.close()
+          text = ('## 문서 검사 환경\n\n'
+                  f'- 후보 SHA: {os.environ["CANDIDATE_SHA"]}\n'
+                  f'- 실제 checkout SHA: {subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}\n'
+                  f'- Python: {platform.python_version()}\n'
+                  f'- Playwright: {importlib.metadata.version("playwright")}; Chromium: {version}\n')
+          print(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as stream:
+              stream.write(text)
+          PY
+      - name: Check links and wide/narrow keyboard navigation
+        timeout-minutes: 3
+        run: .venv-docs/bin/python tools/ci/check_docs.py --site-dir _site
+      - name: Check published main after the existing Pages deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        timeout-minutes: 3
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          .venv-docs/bin/python tools/ci/check_docs.py
+          --base-url https://lee-ju-yeong.github.io/Split_Investment_Strategy_Optimizer/
+          --expected-revision "$EXPECTED_REVISION"

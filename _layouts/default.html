@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="{{ site.lang | default: 'ko-KR' }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="siso-revision" content="{{ site.github.build_revision }}">
+    {% seo %}
+    <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+    <link rel="stylesheet" href="{{ '/assets/css/project.css' | relative_url }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">본문으로 바로 이동</a>
+    <header class="site-header">
+      <div class="site-shell">
+        <p class="site-name"><a href="{{ '/' | relative_url }}">국내 주식 분할투자 시뮬레이터</a></p>
+        <nav class="site-nav" aria-label="주요 문서">
+          <a href="{{ '/' | relative_url }}">소개</a>
+          <a href="{{ '/docs/engineering-evidence.html' | relative_url }}">구현 근거</a>
+          <a href="{{ '/tests/' | relative_url }}">직접 확인</a>
+          <a href="{{ '/docs/' | relative_url }}">문서 안내</a>
+          <a href="https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer">GitHub 코드</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main-content" class="site-shell markdown-body" tabindex="-1">
+      {{ content }}
+    </main>
+    <footer class="site-shell site-footer">
+      <p>과거 데이터 시뮬레이션과 검증의 기록입니다. 구현·측정·후속 연구의 범위를 각 문서에서 확인할 수 있습니다.</p>
+      <a href="https://github.com/Lee-Ju-Yeong">Lee-Ju-Yeong</a>
+      <span aria-hidden="true"> · </span>
+      <a href="https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/blob/main/{{ page.path }}">GitHub에서 이 문서 보기</a>
+    </footer>
+  </body>
+</html>

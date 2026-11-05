@@ -1,0 +1,2 @@
+# Docs preview 전용. 제품/CPU/DB 환경과 분리한다.
+playwright==1.64.1

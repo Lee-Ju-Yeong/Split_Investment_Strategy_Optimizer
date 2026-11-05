@@ -105,6 +105,7 @@ DB 통합 검사는 새 격리 환경에서 확인했습니다. 나머지 아래
 - 실행한 명령·커밋·환경·검사 수와 함께 결과를 기록합니다.
 - `skipped`, 의존성 누락, 중단은 통과로 세지 않습니다.
 - GPU 검사를 CPU 흉내 객체로 통과시켜 실제 GPU 검사처럼 소개하지 않습니다.
+- [문서 화면 검사](../docs/pages-maintenance.md)는 제품 검사를 대신하지 않습니다.
 - GitHub Actions의 `CPU checks`는 위 세 모듈·예제와 도구 자체 검사, `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
 
 [프로젝트 소개](../README.md) · [세 가지 구현 근거](../docs/engineering-evidence.md) · [문서 안내](../docs/README.md)
