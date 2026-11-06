@@ -79,7 +79,9 @@ class CpuSplitDemoTests(unittest.TestCase):
 
     def test_tier_can_block_additional_buy_without_changing_strategy(self):
         tiers = demo.make_tier_rows()
-        tiers[1]["tier"] = 3
+        # 첫 신규 매수의 기준일만 등급 1. 이후에도 추가 매수 자격을 주지 않는다.
+        for row in tiers[1:]:
+            row["tier"] = 3
         result = demo.run_simulation(tiers=tiers)
         self.assertEqual([row["side"] for row in result["trades"]], ["BUY", "SELL"])
         self.assertEqual(result["daily_equity"][2]["quantity"], 10)
