@@ -1,6 +1,8 @@
 # CPU 합성 시나리오 재현 단계
 
-유형: implementation. 상태: 구현 중. 기준: main `31b80cfb1002471c5aab52295dfb7e4146ad0356`.
+유형: implementation. 상태: CPU 구현·후보 검증 완료. 기준: main `31b80cfb1002471c5aab52295dfb7e4146ad0356`.
+
+done_은 아래 CPU 구현·검증 범위의 완료다. 최종 문서 후보와 병합 후 공개 확인은 [PR #115](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/115)의 최신 결과로 연결한다. 그 확인 전에는 전체 공개 작업이 끝난 것으로 세지 않는다.
 
 ## 목표와 승인 범위
 
@@ -38,11 +40,27 @@
 - sol_reviewer(gpt-6.1-sol/xhigh)의 읽기 전용 연결 지점·최종 후보 검토를 통과한다. 계획 검토의 인수 유입·일별 수량 출처·마지막 날 누락 지적을 반영한다.
 - 제품 결함이면 범위 밖 수정이나 기대값 완화 없이 원인·재개 조건을 남긴다. 설치 장애는 근거를 확인해 같은 SHA로 한 번 재시도하고 실패를 무시해 병합하지 않는다.
 
-## 진행과 다음 행동
+## 구현 결과와 검증 근거
 
-별도 작업 브랜치에서 구현을 시작했다. 최종 후보 SHA·실제 검사 수·리뷰·PR·병합 후 CI와 Pages 결과는 확인 후 아래에 기록한다. 합격 후 문서에 CPU 재현 단계 완료를 표시하고 이 문서를 done_으로 전환하며, 이번 작업 브랜치만 정리한다.
+`examples/cpu_split_demo.py`는 실제 CPU 경로와 예제용 메모리 입력을 연결한다. `tests/test_cpu_split_demo.py`는 거래·자산·입력·외부 연결 없음·CLI·CSV를 확인한다. `tools/ci/run_cpu_checks.py`의 예제 인수를 격리하고 원래 인수를 복원하며, 성공 보고서와 비정상 종료가 함께 있는 실패 판정 자료도 실제 보고 경로를 사용하도록 보완했다.
 
 - 구현 연결 지점의 sol_reviewer(gpt-6.1-sol/xhigh) 읽기 전용 리뷰: 차단 지적 없음. 실제 실행 통과는 별도 확인해야 한다.
 - 로컬에서는 AST 문법·diff·문서 링크만 확인한다. 네 제품 CPU 파일은 docstring을 제외한 AST가 기준 main과 같음을 확인했다. 제품 계산을 로컬에서 시험하거나 새 환경을 설치하지 않았다.
-- 현재 검사 구성: 기존 CPU 52개+새 예제 20개=72개, 실행기 자체 24개. 실제 실행 결과로 확정할 예정이며 아직 통과 기록이 아니다.
+- 실제 검사 결과: 기존 CPU 52개+새 예제 20개=72개, 예제 2개, 실행기 자체 24개 통과. 실패·오류·건너뜀 0이다.
 - 첫 원격 후보 `1c60a48`: [CPU 실행](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42314601671)에서 예제 2개·기존 52개·자체 24개는 통과, 새 예제 20개 중 1개 실패. 비대상 등급을 하루만 준 검사 자료 때문에 다음 날 등급 1로 복귀해 추가 매수가 발생했다. 이후도 비대상 등급으로 유지해 검사 의도인 추가 매수 계속 차단을 확인하도록 자료만 수정했다. 제품·기본 거래/자산 기대값은 그대로다. 이 실패 기록은 보존하며 통과로 세지 않는다.
+
+| 실행 코드 후보 | 실제 checkout | 환경·결과 | 근거 |
+| --- | --- | --- | --- |
+| `273ce2326aa0c75ef6809f72c34bed2b06dfb38b` | PR 합성 병합 `d1970ace497e3f873bcba136f1dde91e6c32f409` | ubuntu-24.04·Python 3.12.16·mysql-connector-python 26.10.0·tqdm 4.67.1, CPU 72·예제 2·자체 24 성공 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42314867843) |
+| 같은 후보 | 같은 checkout | MySQL 8.4.13, 연결 제한·실패 전파 14개, 실제 DB 3개 성공 | [DB integration](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42314867745) |
+| 같은 후보 | — | Secret Scan 성공 | [Secret Scan](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/runs/42314867782) |
+
+최종 실행 코드의 sol_reviewer(gpt-6.1-sol/xhigh) 검토도 차단 지적 없음으로 통과했다. 등급 검사 수정은 원래 기대를 유지한 자료 수정이며, 콘솔 한국어 열 이름은 결과·CSV 계약을 바꾸지 않음을 확인했다. 이후 변경은 설명·상태·링크뿐이며 최신 후보 자동 검사는 별도로 확인한다.
+
+## 완료 범위와 후속 조건
+
+- 완료: 명령 하나로 가상 7거래일의 신규·추가 매수→분할 매도→전액 현금, 실제 거래·일별 보유 기록, 비용·순손익, 선택 CSV, 실패 전파와 반복 가능성.
+- #21 부분 반영: CPU 엔진 run, 전략 생성자·세 신호 메서드, execute_order, Portfolio 평가·일별 기록의 입력·반환·날짜·비용 설명.
+- #21 잔여: DataHandler의 생성자·가격 로드·기준일 조회와 GPU의 prepare_market_data_for_gpu/run_magic_split_strategy_on_gpu 등은 설명 요구가 남아 있다. 이슈를 종료하지 않는다.
+- 후속: GPU 준비 안내 #20, 제품 DB 접근 표준화 #58, 실제 데이터·장기 재계산·전체 전략 검증은 이번 단계와 별개다. 예제의 사전 계산 등급/지표를 생산용 산정이나 실제 투자 성과로 확대하지 않는다.
+- 최종 후보·병합 SHA·CI·Pages·이슈 #21 반영·브랜치 정리 결과는 PR #115에 기록한다. CPU 재현 단계의 공개 확인까지 완료하면 이번 정비는 마감하며 추가 기능을 자동 시작하지 않는다.

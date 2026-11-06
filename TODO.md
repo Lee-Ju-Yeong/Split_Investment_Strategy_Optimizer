@@ -7,9 +7,9 @@
 
 ## 이번 단계: CPU 합성 시나리오 재현
 
-**구현·검증 중.** [승인 범위·기대 거래·실행 계약](todos/2026_11_06-cpu-split-demo.md)에 따라 실제 CPU 엔진·전략·체결·자산 계산을 가상 7거래일로 연결합니다. 거래 4건, 최종 현금·자산 1,020,551원, 비용·입력·CSV·실패 처리를 원격 CI에서 검증한 뒤 이번 단계를 마감합니다.
+**CPU 구현·후보 검증 완료.** [완료 범위·기대 거래·검증 근거](todos/done_2026_11_06-cpu-split-demo.md)에 따라 실제 CPU 엔진·전략·체결·자산 계산을 가상 7거래일로 재현합니다. 거래 4건, 최종 현금·자산 1,020,551원, 수수료 60원·세금 389원, CPU 72개·예제 2개·실행기 자체 24개를 확인했습니다. 최종 공개 후보와 병합 후 CI·Pages 확인은 [PR #115](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/pull/115)에 연결합니다. 그 확인까지 마치면 이번 정비 단계를 마감합니다.
 
-#21의 CPU 경로 설명도 보강하되 DataHandler·GPU의 남은 설명 요구를 보존합니다. GPU 환경 안내·DB 표준화는 이 단계의 완료 조건이 아닙니다.
+#21의 CPU 경로 설명을 보강했고 DataHandler·GPU의 남은 설명 요구는 보존합니다. GPU 환경 안내·DB 표준화는 이 단계의 완료 조건이 아닙니다.
 
 <a id="다음에-할-일"></a>
 ## 그 뒤에 할 일
@@ -18,7 +18,7 @@
 
 | 순서 | 작업 | 바로 다음 행동 | 완료를 확인하는 기준 |
 | --- | --- | --- | --- |
-| 1 | [#21 핵심 코드 설명 보강](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21) | DataHandler·BacktestEngine·Strategy와 대표 GPU 진입점의 설명 대상 목록을 정하고 소스·기존 검사와 대조 | 입력·반환·단위·날짜 기준·오류 조건을 실제 코드에 맞게 설명. 원래 요구 대비 완료·남은 대상을 기록한 뒤 이슈 종료 판단 |
+| 1 | [#21 핵심 코드 설명 보강](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/21) | CPU 경로 반영 후 남은 DataHandler·GPU 진입점의 입력·반환·날짜·오류 설명을 대조 | 원래 요구 대비 CPU 완료·남은 대상을 기록. 나머지 요구를 마친 뒤 이슈 종료 판단 |
 | 2 | [#20 GPU 환경 준비·실행 안내](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/20) | 검증 가능한 GPU 환경과 공개 가능한 환경 기록 확보 | OS·장비·드라이버·CUDA·Python·패키지 조합, 설치부터 최소 실행·관련 검사까지 실제 명령·결과 기록. 통합 CLI 구현은 #19에 유지 |
 | 3 | [#58 DB 접근 방식 정리](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/issues/58) | 호출자·설정 경로·연결 생성/반환/종료를 조사하고 호환·전환·복구 계획 검토 | 원래 요구인 런타임 DB 접근 통일·중복 설정 제거·문서 갱신을 별도 구현과 격리 DB 회귀 검증으로 확인. 현황 조사만으로 완료 처리하지 않음 |
 
@@ -67,6 +67,7 @@
 | 공개 안내·작은 예제 | [PR #109 완료 기록](todos/done_2026_11_06-public-project-refresh.md) |
 | 격리 DB 통합 검사 #59 | [PR #112 완료 기록](todos/done_2026_02_15-issue59-tests-split-no-db-gpu.md): 실제 MySQL 3개·연결 제한 14개 통과 |
 | CPU 기본 CI | [PR #110 완료 기록](todos/done_2026_11_06-cpu-checks-ci.md): 기존 검사 34개·예제·도구 자체 검사 22개 |
+| CPU 합성 시나리오 재현 | [PR #115 CPU 검증 기록](todos/done_2026_11_06-cpu-split-demo.md): 7거래일·4거래·CSV, CPU 72·예제 2·실행기 자체 24 |
 
 그 밖의 완료 기록과 연구·검토 문서는 [전체 색인](todos/README.md)에 있습니다.
 [3월 사업화 검토](todos/2026_03_10-roadmap-commercialization-checkpoint.md)의 분기 일정·외부 출시 조건은 당시 제안입니다. 현재 서비스 출시 일정이나 채용용 코드 소개의 제한으로 읽지 않습니다.

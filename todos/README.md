@@ -16,7 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [CPU 합성 시나리오 재현 단계](2026_11_06-cpu-split-demo.md) | implementation | 구현·검증 중 |
+| [CPU 합성 시나리오 재현 단계](done_2026_11_06-cpu-split-demo.md) | implementation | CPU 구현·검증 완료·공개 결과는 PR #115 연결 |
 | [Issue #68: Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md) | implementation | 부분 구현·후속 확인 |
 | [Issue #72: Ticker Continuity & Position Inheritance](2026_02_09-issue72-ticker-continuity-position-inheritance.md) | implementation | 부분 구현·후속 확인 |
 | [Reference Note: 로컬 DB 없이 진행 가능한 작업](2026_02_14-notebook-no-local-db-dev.md) | reference | 참고·후속 연결 |
@@ -34,7 +34,7 @@
 | [N-Window Shortlist Contract v1](2026_03_19-n-window-shortlist-contract-v1.md) | research | 연구·제안 |
 | [Cluster V1 Shortlist Diversification PoC](2026_03_24-cluster-v1-shortlist-diversification-poc.md) | research | 연구·제안 |
 | [대표 프로젝트 정비: 다중 관점 탐색과 실행안](2026_11_06-project-maintenance-discovery.md) | review | 탐색 완료·원제안 보존 |
-| [대표 프로젝트 정비 실행 기록](2026_11_06-project-maintenance-execution.md) | implementation | 진행 중 |
+| [대표 프로젝트 정비 실행 기록](2026_11_06-project-maintenance-execution.md) | implementation | 정비 반영·후속 연결 |
 | [feat(data): Point-in-Time 규칙 명문화 및 룩어헤드 방지 테스트 추가](done_2026_02_07-issue64-point-in-time-lookahead-bias.md) | implementation | 완료·당시 범위 |
 | [feat(db): FinancialData, InvestorTradingTrend, DailyStockTier 스키마 및 인덱스 추가](done_2026_02_07-issue65-financial-investor-tier-schema-index.md) | implementation | 완료·당시 범위 |
 | [feat(pipeline): 재무/수급 수집기 분리 및 DailyStockTier 사전 계산 배치 도입](done_2026_02_07-issue66-financial-investor-collector-tier-batch.md) | implementation | 완료·당시 범위 |
