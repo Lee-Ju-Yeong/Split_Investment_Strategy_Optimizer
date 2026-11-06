@@ -273,7 +273,7 @@ class MagicSplitStrategy(Strategy):
 
         엔진이 거래일 인덱스를 주면 전일 후보·지표로 판단하며 첫날은 빈 목록이다.
         strict 정책은 등급 1만 신규 진입시키고 재진입 대기·현금·당일 시가로
-        가능한 수량을 확인한다. lookup_error_policy='raise'이면 조회 오류를 전파한다.
+        가능한 수량을 확인한다. candidate_lookup_error_policy='raise'이면 조회 오류를 전파한다.
         인덱스 없이 직접 호출하면 기준일은 current_date다.
         """
         # 각 신호 생성 함수가 독립적으로 호출되므로, 투자금 계산 로직은 각 함수에 포함되어야 합니다.
