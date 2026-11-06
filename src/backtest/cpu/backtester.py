@@ -88,6 +88,13 @@ class BacktestEngine:
         clear_lookup_cache()
 
     def run(self):
+        """지정 기간의 거래일을 순회하고 갱신한 Portfolio를 반환한다.
+
+        날짜별로 매도→신규 매수→추가 매수를 즉시 체결한 뒤 종가로 자산을
+        평가한다. 신호의 전일 기준은 전략이 결정한다. 일별 기본 기록에는
+        현금·총자산·종목 수만 있으며 수량은 선택적인 보유 스냅샷에 있다.
+        데이터/전략/체결 오류는 호출자에게 전파한다.
+        """
         self.logger.info("백테스팅 엔진을 시작합니다...")
         
         trading_dates = self.data_handler.get_trading_dates(self.start_date, self.end_date)

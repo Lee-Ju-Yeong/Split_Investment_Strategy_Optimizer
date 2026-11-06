@@ -16,6 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
+| [CPU 합성 시나리오 재현 단계](2026_11_06-cpu-split-demo.md) | implementation | 구현·검증 중 |
 | [Issue #68: Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md) | implementation | 부분 구현·후속 확인 |
 | [Issue #72: Ticker Continuity & Position Inheritance](2026_02_09-issue72-ticker-continuity-position-inheritance.md) | implementation | 부분 구현·후속 확인 |
 | [Reference Note: 로컬 DB 없이 진행 가능한 작업](2026_02_14-notebook-no-local-db-dev.md) | reference | 참고·후속 연결 |

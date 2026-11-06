@@ -160,10 +160,33 @@ def load_tests(loader, tests, pattern):
 
     def test_nonzero_exit_with_success_report_is_rejected(self):
         report = {"task": ["example", "sample"], "completed": True}
-        task = self.example("import os, sys\nfrom pathlib import Path\n"
-                            f"Path(sys.argv[-1]).write_text({json.dumps(report)!r})\nos._exit(7)")
+        task = self.example("import os\nfrom pathlib import Path\n"
+                            f"(Path(os.environ['TMPDIR']) / 'result.json').write_text({json.dumps(report)!r})\nos._exit(7)")
         outcome = self.assert_rejected(task)
         self.assertEqual(outcome.returncode, 7)
+        self.assertEqual(outcome.report, report)
+
+    def test_example_receives_only_its_own_cli_arguments(self):
+        task = self.example("import argparse, sys\n"
+                            "argparse.ArgumentParser().parse_args()\n"
+                            "assert sys.argv == ['sample'], sys.argv")
+        outcome = self.run_tasks([task])[0]
+        self.assertFalse(outcome.problem, outcome)
+
+    def test_example_arguments_are_restored_after_success_and_error(self):
+        original = ["runner", "--worker", "private-report-path"]
+        for error in (False, True):
+            with self.subTest(error=error):
+                report_path = self.root / "argv-report.json"
+                def invoke(*_args, **_kwargs):
+                    self.assertEqual(sys.argv, ["sample"])
+                    if error:
+                        raise RuntimeError("fixture failure")
+                with patch.object(sys, "argv", original), patch.object(ci.runpy, "run_module", invoke):
+                    with redirect_stdout(StringIO()):
+                        code = ci.worker(ci.Task("example", "sample"), report_path)
+                    self.assertIs(sys.argv, original)
+                self.assertEqual(code, int(error))
 
     def test_example_failure(self):
         self.assert_rejected(self.example("raise RuntimeError('example failure')"))
