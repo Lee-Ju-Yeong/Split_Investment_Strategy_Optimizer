@@ -69,7 +69,7 @@ jobs:
           lines = ['## DB 검사 환경', '', f'- 후보 SHA: `{os.environ["CANDIDATE_SHA"]}`',
                    f'- 실제 checkout SHA: `{checkout}`', f'- Python: `{platform.python_version()}`',
                    '- 실행기: ubuntu-24.04; 매번 폐기하는 MySQL 8.4 서비스']
-          for package in ('numpy', 'pandas', 'requests', 'PyMySQL', 'mysql-connector-python'):
+          for package in ('numpy', 'pandas', 'requests', 'PyMySQL', 'mysql-connector-python', 'tqdm'):
               lines.append(f'- {package}: `{importlib.metadata.version(package)}`')
           text = '\n'.join(lines) + '\n'
           print(text)

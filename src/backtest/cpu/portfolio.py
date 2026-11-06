@@ -119,6 +119,11 @@ class Portfolio:
         return resolved if isinstance(resolved, dict) else None
 
     def get_total_value(self, evaluation_date, data_handler: 'DataHandler', price_map=None):
+        """기준일 이하 최근 종가로 평가한 보유액과 현금을 float32 원화로 반환한다.
+
+        price_map을 주면 그 값을 사용한다. 기존 동작은 평가 가격이 없으면 해당
+        보유액을 더하지 않으므로 호출자는 입력 완전성을 별도로 확인해야 한다.
+        """
         price_map = self._resolve_price_map(evaluation_date, data_handler, price_map=price_map)
         total_market_value = np.float32(0.0)
         for ticker, positions_list in self.positions.items():
@@ -142,7 +147,7 @@ class Portfolio:
 
     ### ### [핵심] 일별 스냅샷 기록 기능 ### ###
     def record_daily_snapshot(self, date, total_value):
-        """일별 포트폴리오의 주요 정보를 기록합니다."""
+        """date/total_value/cash/stock_count를 기록한다. 수량은 포함하지 않는다."""
         snapshot = {
             'date': date,
             'total_value': total_value,
@@ -152,6 +157,11 @@ class Portfolio:
         self.daily_snapshot_history.append(snapshot)
 
     def record_positions_snapshot(self, date, positions_df):
+        """평가 시점의 실제 보유 수량·평가액을 별도 일별 이력에 복사한다.
+
+        엔진의 capture_daily_positions_snapshot 설정이 켜져 있을 때 호출한다.
+        전량 매도한 날은 빈 positions 목록으로 기록해 무보유와 누락을 구분한다.
+        """
         snapshot_date = pd.to_datetime(date)
         if positions_df is None or positions_df.empty:
             self.daily_positions_snapshot_history.append({'date': snapshot_date, 'positions': []})

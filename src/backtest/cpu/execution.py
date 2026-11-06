@@ -42,6 +42,13 @@ class BasicExecutionHandler:
         return math.ceil(rounded) * tick_size
 
     def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx):
+        """BUY/SELL 주문을 당일 시가의 호가 단위 올림 가격으로 처리한다.
+
+        금액은 원, 수량은 주다. 매수 수량은 투자금/체결가의 버림이며 수수료까지
+        현금으로 낼 수 있어야 한다. 매도 순수취액은 기존 float32 비용 모델로
+        버림 처리한다. 현금·보유·거래 기록을 갱신하며 반환값은 없다.
+        가격 누락/유효하지 않은 시가나 부족한 매수 현금은 미체결로 남긴다.
+        """
         ticker = order_event["ticker"]
         order_type = order_event["type"]
         current_date = order_event["date"]
