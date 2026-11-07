@@ -4,11 +4,9 @@
 
 [![CPU 기본 검사](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml/badge.svg?branch=main)](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml)
 
-주식을 여러 차례 나누어 사고파는 분할투자 전략을 국내 주식의 과거 데이터로 시험하고, 매수·매도 조건을 비교하는 개인 프로젝트입니다.
+국내 주식의 과거 데이터로 분할투자 전략을 시험하고, 매수·매도 조건을 비교하기 위해 혼자 개발한 시뮬레이터입니다.
 
 Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시뮬레이션을 결과 검증의 기준으로 삼고, GPU로 여러 설정 조합을 병렬 계산합니다. 이후 기간을 나누어 특정 과거 구간에서만 좋은 결과가 나온 것은 아닌지 검토합니다.
-
-**직접 맡은 범위:** 프로젝트의 설계·구현·테스트·운영을 주도했습니다. 아래 사례에서 실제 코드와 테스트, 변경 이유를 확인할 수 있습니다.
 
 ## 먼저 볼 구현 사례
 
