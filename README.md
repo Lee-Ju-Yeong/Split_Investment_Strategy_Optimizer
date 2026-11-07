@@ -20,7 +20,7 @@ Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시
 
 각 사례는 **문제 → 판단과 구현 → 테스트 → PR·측정 기록** 순서로 읽을 수 있습니다. 실패한 수집을 재개하는 방법, 데이터가 사용되는 시점의 정확성, 측정에 근거한 계산 개선을 차례로 확인하세요.
 
-설치 없이 먼저 살펴보려면 [여섯 행으로 보는 데이터 반영 결과](tests/README.md#example)를 읽을 수 있습니다.
+설치 없이 먼저 살펴보려면 [가상 종목의 매수부터 매도까지](tests/README.md#cpu-example) 또는 [여섯 행으로 보는 데이터 반영 결과](tests/README.md#example)를 읽을 수 있습니다.
 
 ## 데이터와 계산 흐름
 
@@ -37,7 +37,7 @@ Python으로 데이터를 수집·정리하고 MySQL에 저장합니다. CPU 시
 
 ## 직접 확인하기
 
-외부 계정·DB·GPU 없이 실행할 수 있는 기존 테스트와 가상 데이터 예제를 제공합니다. 패키지 설치에는 인터넷이 필요합니다.
+외부 계정·DB·GPU 없이 **기존 CPU 분할투자 구현**을 실행할 수 있습니다. 가상 종목 하나와 7거래일로 신규 매수 → 추가 매수 → 두 차례 매도 → 전액 현금 상태를 재현합니다. 패키지 설치에는 인터넷이 필요합니다.
 
 ```bash
 # Python 3.12, 저장소 루트에서 실행
@@ -45,10 +45,20 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-review.txt
 python -m pip check
+
+python -m examples.cpu_split_demo
+# 선택: 결과를 새 디렉터리에 CSV 두 개로 저장
+python -m examples.cpu_split_demo --output-dir results/cpu-split-demo
+
+# 예제와 관련 CPU 검사를 CI와 같은 명령으로 확인
 python tools/ci/run_cpu_checks.py
 ```
 
-이 명령은 선택한 세 테스트 모듈과 작은 예제를 실행합니다. 예제는 **1월 2일 기준 데이터가 세 거래일 뒤인 1월 5일에 반영되는 과정**을 보여줍니다. 실제 수익률이나 전체 시뮬레이션 결과는 계산하지 않습니다.
+CPU 예제는 실제 엔진·전략·체결·자산 계산을 사용합니다. 가상 입력의 검증 결과는 거래 4건, 최종 현금·자산 1,020,551원, 수수료 60원·세금 389원입니다. 결과를 고정 기대값과 대조한 뒤 성공을 표시합니다. 사전 구성한 가상 가격·지표·등급으로 계산하며 실제 투자 성과나 데이터 수집·SQL·GPU 전체 검증을 뜻하지 않습니다.
+
+**이번 단계의 완료 범위는 가상 데이터로 CPU 분할투자 과정을 끝까지 재현하는 것**입니다. [완료 범위와 실제 검사 근거](todos/done_2026_11_06-cpu-split-demo.md)를 남겼으며 GPU 환경·전체 데이터 실행 등은 후속 과제로 구분합니다.
+
+기존 `python -m examples.short_selling_lag_demo`는 **1월 2일 기준 데이터가 세 거래일 뒤인 1월 5일에 반영되는 과정**을 별도로 보여줍니다.
 
 - [처음 설치하기·예상 출력·기존 테스트 실행](tests/README.md)
 - [전체 실행에 필요한 환경과 설정](docs/running.md)
@@ -71,7 +81,7 @@ python tools/ci/run_cpu_checks.py
 
 | 자동 검사 | 확인하는 범위 | 실행 기록 |
 | --- | --- | --- |
-| CPU 기본 검사 | 기존 34개와 가상 데이터 예제, 실행 도구 자체 22개. 누락·건너뜀도 실패 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml) |
+| CPU 기본 검사 | 기존 34개·관련 CPU 18개·새 예제 검사 20개 = 72개와 예제 2개, 실행 도구 자체 24개. 누락·건너뜀도 실패 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml) |
 | 격리 DB 통합 검사 | 매번 새 MySQL의 합성 CPU 시나리오 3개, 연결 제한·실패 처리 14개 | [DB integration](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/db-integration.yml) |
 | 문서 화면 검사 | Jekyll 생성·주요 링크·한국어 정보·넓은/좁은 화면·키보드 탐색 | [Docs preview](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/docs-preview.yml) |
 

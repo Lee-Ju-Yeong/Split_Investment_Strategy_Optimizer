@@ -6,7 +6,7 @@
 
 | 범위 | 환경과 의존성 | 이번 확인 |
 | --- | --- | --- |
-| 작은 예제·세 단위 테스트 | Python 3.12, `requirements-review.txt` | Linux·Python 3.12.3에서 예제와 34개 검사 통과 |
+| 외부 연결 없는 CPU 예제·고정 검사 | Python 3.12, `requirements-review.txt` | [72개·예제 2개 구성과 실행 기록](../tests/README.md#cpu-example). 전체 제품 환경과 구분 |
 | 전체 CPU 실행 | `requirement.txt`의 라이브러리, MySQL, 실행에 맞는 설정·입력 데이터 | 미실행 |
 | GPU·WFO 실행 | 별도 CUDA/RAPIDS, CuPy·cuDF, 호환 GPU·드라이버, 데이터·설정 | 미실행 |
 | 실제 수집 | 해당 제공처에 허용된 접근과 인증, DB, 요청 간격·조회 범위 설정 | 미실행 |
