@@ -28,7 +28,13 @@ TASKS = (
     Task("tests", "test_portfolio.py"),
     Task("tests", "test_short_selling_collector.py"),
     Task("tests", "test_daily_stock_tier_batch.py"),
+    Task("tests", "test_cpu_candidate_priority.py"),
+    Task("tests", "test_cpu_strategy_entry_context.py"),
+    Task("tests", "test_backtester_entry_metrics.py"),
+    Task("tests", "test_execution_halt_guard.py"),
+    Task("tests", "test_cpu_split_demo.py"),
     Task("example", "examples.short_selling_lag_demo"),
+    Task("example", "examples.cpu_split_demo"),
 )
 
 
@@ -111,7 +117,13 @@ def worker(task, report_path):
         if task.kind == "tests":
             report.update(run_test_module(task.target))
         else:
-            runpy.run_module(task.target, run_name="__main__")
+            original_argv = sys.argv
+            try:
+                # 예제 CLI가 내부 --worker 인수나 결과 경로를 읽지 않게 한다.
+                sys.argv = [task.target]
+                runpy.run_module(task.target, run_name="__main__")
+            finally:
+                sys.argv = original_argv
         report["completed"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

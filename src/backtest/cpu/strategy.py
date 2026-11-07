@@ -77,6 +77,13 @@ class MagicSplitStrategy(Strategy):
         buy_commission_rate=0.00015,
         enable_candidate_rank_trace=False,
     ):
+        """기준 기간과 분할매매 조건을 받는다. 비율은 0.05처럼 소수로 지정한다.
+
+        주문 투자금은 매월 직전 평가 자산에 order_investment_ratio를 곱한다.
+        cooldown_period_days는 거래일 수, max_inactivity_period는 기존
+        비활성 청산 판정의 거래일 기준값이다. 허용하지 않는 후보/등급/우선순위
+        설정은 ValueError다. 신호는 주문이며 체결과 비용 처리는 실행기가 맡는다.
+        """
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
         self.additional_buy_drop_rate = additional_buy_drop_rate
@@ -262,6 +269,13 @@ class MagicSplitStrategy(Strategy):
             self.previous_month = current_month
     # 신규 진입 신호만 생성하는 함수
     def generate_new_entry_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        """빈 종목 슬롯에 신규 BUY 주문 목록을 만든다.
+
+        엔진이 거래일 인덱스를 주면 전일 후보·지표로 판단하며 첫날은 빈 목록이다.
+        strict 정책은 등급 1만 신규 진입시키고 재진입 대기·현금·당일 시가로
+        가능한 수량을 확인한다. candidate_lookup_error_policy='raise'이면 조회 오류를 전파한다.
+        인덱스 없이 직접 호출하면 기준일은 current_date다.
+        """
         # 각 신호 생성 함수가 독립적으로 호출되므로, 투자금 계산 로직은 각 함수에 포함되어야 합니다.
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
@@ -565,6 +579,12 @@ class MagicSplitStrategy(Strategy):
 
     # 추가 매수 신호만 생성하는 함수
     def generate_additional_buy_signals(self, current_date, portfolio, data_handler, trading_dates, current_day_idx=None):
+        """보유 종목의 전일 저가 하락 조건으로 추가 BUY 주문 목록을 만든다.
+
+        전일 등급 1~2, 최대 분할 수, 1차 매수일과 당일 매도 대기를 확인한다.
+        직전 분할 매수가의 additional_buy_drop_rate 하락이 조건이며 체결가는
+        신호의 trigger_price와 다를 수 있다. 엔진은 당일 시가로 체결한다.
+        """
         # 투자금 재계산은 신규 매수에서 이미 했을 수 있지만, 이 함수가 단독으로 사용될 수도 있으므로 여기서도 호출합니다.
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         buy_signals = []
@@ -687,6 +707,12 @@ class MagicSplitStrategy(Strategy):
     def _create_buy_signal(self, date, ticker, investment_amount, position, priority, sort_metric, reason, trigger_price):
         return {"date": date, "ticker": ticker, "type": "BUY", "investment_amount": investment_amount, "position": position, "priority_group": priority, "sort_metric": sort_metric, "reason_for_trade": reason, "trigger_price": trigger_price}
     def generate_sell_signals(self, current_date, portfolio, data_handler,trading_dates,current_day_idx=None):
+        """전일 종가·고가와 보유 상태로 SELL 주문 목록을 만든다.
+
+        평균가 손절/비활성 청산을 먼저 보고, 개별 분할분은 전일 고가로 익절을
+        판단한다. 익절 목표가는 체결가 보장이 아니며 실제 체결은 당일 시가다.
+        당일 매수분은 익절에서 제외하고 매도 신호 시 거래일 인덱스로 대기를 기록한다.
+        """
         self._calculate_monthly_investment(current_date, current_day_idx, trading_dates, portfolio, data_handler)
         signals = []
         signal_date = self._resolve_signal_date(current_date, trading_dates, current_day_idx, data_handler)

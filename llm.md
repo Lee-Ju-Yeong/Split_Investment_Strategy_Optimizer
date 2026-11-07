@@ -17,7 +17,8 @@
 
 ## 2. Quick Commands
 
-> 확인일: 2026-11-06. Linux / Python 3.12.3에서 아래 예제와 기존 검사 34개 통과.
+> 확인일: 2026-11-06. CPU 검사 구성은 기존 34개+관련 18개+예제 회귀 20개와 예제 2개다.
+> 과거 Linux / Python 3.12.3의 34개 통과 기록과 현재 후보의 CI 실행 기록은 구분한다.
 > 전체 CPU·GPU·DB 환경을 검증했다는 뜻은 아닙니다.
 
 ```bash
@@ -25,6 +26,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-review.txt
 python -m pip check
+python -m examples.cpu_split_demo
 python tools/ci/run_cpu_checks.py
 ```
 
@@ -32,7 +34,8 @@ python tools/ci/run_cpu_checks.py
 - [전체 실행 안내](docs/running.md): YAML/INI 설정, DB를 변경하는 명령, GPU 환경을 구분합니다.
 - `environment.yml`의 Python 3.9와 현재 일부 코드 문법은 맞지 않습니다. 이 파일만으로 전체 실행 환경이 재현된다고 가정하지 않습니다.
 - `rapids-env`는 별도로 준비한 환경 이름입니다. 확인용 의존성 파일로 생성되지 않습니다.
-- 전체 테스트에는 DB·GPU 조건이 있습니다. 위 세 모듈의 통과를 전체 테스트 통과로 기록하지 않습니다.
+- 전체 테스트에는 DB·GPU 조건이 있습니다. 선택한 8개 모듈과 예제의 통과를 전체 테스트 통과로 기록하지 않습니다.
+- CPU 분할투자 예제는 실제 엔진·전략·체결·자산 계산과 사전 구성한 메모리 입력을 사용합니다. mysql-connector-python·tqdm은 가져오기에 필요하지만 DB·설정·네트워크는 사용하지 않습니다. 제품 매매/체결 규칙은 바꾸지 않습니다.
 - `CPU checks` CI는 같은 명령 전에 검사 도구 자체 검사를 실행합니다. PR과 main 실행의 범위·제외 항목은 [테스트 안내](tests/README.md)를 따릅니다.
 
 ---
