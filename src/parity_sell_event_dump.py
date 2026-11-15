@@ -33,7 +33,7 @@ from .backtest.cpu.strategy import MagicSplitStrategy
 from .candidate_runtime_policy import normalize_runtime_candidate_policy
 from .config_loader import load_config
 from .data_handler import DataHandler, build_pit_failure_record
-from .split_slot_policy import require_gpu_supported_split_slot_policy
+from .split_slot_policy import apply_split_slot_policy_to_gpu_execution_params
 from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.context import _build_db_connection_str, _ensure_core_deps, _ensure_gpu_deps
 from .optimization.gpu.data_loading import (
@@ -202,8 +202,8 @@ def _build_exec_params(
     parity_mode: str,
 ) -> Dict[str, Any]:
     strategy_params = dict(config["strategy_params"])
-    require_gpu_supported_split_slot_policy(strategy_params)
     execution_params = dict(config["execution_params"])
+    apply_split_slot_policy_to_gpu_execution_params(execution_params, strategy_params)
     normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
         candidate_source_mode,
         use_weekly_alpha_gate,

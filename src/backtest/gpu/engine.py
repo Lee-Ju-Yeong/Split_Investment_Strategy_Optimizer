@@ -11,7 +11,7 @@ import pandas as pd
 
 from ...candidate_runtime_policy import normalize_runtime_candidate_policy
 from ...execution_price_policy import normalize_sell_price_tick_rounding
-from ...split_slot_policy import require_gpu_supported_split_slot_policy
+from ...split_slot_policy import FIXED_SLOT_V1_POLICY, require_gpu_supported_split_slot_policy
 from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .data import (
     _collect_candidate_rank_metrics_asof,
@@ -23,6 +23,7 @@ from .data import (
 )
 from .logic import (
     _calculate_monthly_investment_gpu,
+    _fixed_slot_reentry_mask_gpu,
     _process_additional_buy_signals_gpu,
     _process_new_entry_signals_gpu,
     _process_sell_signals_gpu,
@@ -283,8 +284,10 @@ def run_magic_split_strategy_on_gpu(
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
-    # 마지막 방어선: 어떤 경로든 CPU 전용 차수 규칙을 실행 설정에 담아 오면 계산하지 않는다.
-    require_gpu_supported_split_slot_policy(execution_params)
+    # 차수 규칙은 실행 설정에서만 읽는다(각 진입점이 전략 설정에서 옮겨 싣는다). 키가 없으면 legacy.
+    fixed_slot_policy = (
+        require_gpu_supported_split_slot_policy(execution_params) == FIXED_SLOT_V1_POLICY
+    )
 
     # Config from exec_params
     candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
@@ -496,12 +499,18 @@ def run_magic_split_strategy_on_gpu(
                 in_cooldown_mask_sim0 = (cooldown_row_sim0 >= 0) & (
                     (day_idx - cooldown_row_sim0) < cooldown_period_days
                 )
-                active_mask_sim0 = (~held_mask_sim0) & (~in_cooldown_mask_sim0)
+                # fixed_slot_v1: CPU는 1차가 빈 보유 종목(재진입 후보)도 순위 계산 대상에 넣는다.
+                reentry_mask_sim0 = (
+                    _fixed_slot_reentry_mask_gpu(positions_state, cooldown_state, day_idx)[0]
+                    if fixed_slot_policy
+                    else cp.zeros_like(held_mask_sim0)
+                )
+                active_mask_sim0 = ((~held_mask_sim0) | reentry_mask_sim0) & (~in_cooldown_mask_sim0)
                 available_slots_sim0 = _get_single_sim_available_slots(
                     positions_state=positions_state,
                     max_stocks=param_combinations[0, 0].item(),
                 )
-                if available_slots_sim0 <= 0:
+                if available_slots_sim0 <= 0 and not bool(cp.any(reentry_mask_sim0)):
                     candidate_tickers_for_day = cp.array([], dtype=cp.int32)
                     candidate_atrs_for_day = cp.array([], dtype=cp.float32)
                     ranked_records_for_day = []
@@ -562,6 +571,7 @@ def run_magic_split_strategy_on_gpu(
                 execution_params["buy_commission_rate"], log_buffer, log_counter, debug_mode,
                 all_tickers=all_tickers,
                 strict_cash_rounding=strict_cash_rounding,
+                fixed_slot_policy=fixed_slot_policy,
             )
             _record_stage_duration(
                 kernel_stage_totals,
@@ -583,6 +593,7 @@ def run_magic_split_strategy_on_gpu(
                 signal_date=signal_date,
                 kernel_stage_totals=kernel_stage_totals,
                 kernel_stage_timing_enabled=kernel_stage_timing_enabled,
+                fixed_slot_policy=fixed_slot_policy,
             )
             _record_stage_duration(
                 kernel_stage_totals,

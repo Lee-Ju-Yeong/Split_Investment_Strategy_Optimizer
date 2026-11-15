@@ -2,7 +2,7 @@
 
 명세: todos/2026_11_15-fixed-split-slot-v1.md. 신호는 전일(T-1) 저가·고가, 체결은
 당일(T0) 시가의 호가 올림이다. 주문 금액은 1월 첫날 자산 1,000,000원의 10%다.
-기본값은 legacy이고, fixed_slot_v1은 설정으로 켠다(현재 CPU 전용).
+기본값은 legacy이고, fixed_slot_v1은 설정으로 켠다. GPU 대조는 test_gpu_fixed_split_slot_parity.py.
 """
 
 from contextlib import redirect_stderr, redirect_stdout
@@ -307,23 +307,25 @@ class FixedSlotV1Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_strategy("bogus")
 
-    def test_gpu_paths_reject_cpu_only_policy(self):
-        # GPU 커널은 legacy만 구현하므로 fixed_slot_v1 설정으로 GPU 탐색·대조를 시작하면 멈춘다.
+    def test_gpu_supports_both_policies_and_rejects_unknown(self):
+        # GPU 커널도 fixed_slot_v1을 구현한다. 모르는 값은 GPU 경로에서도 멈춘다.
         self.assertEqual(require_gpu_supported_split_slot_policy({}), "legacy")
-        self.assertEqual(require_gpu_supported_split_slot_policy({"split_slot_policy": "legacy"}), "legacy")
-        with self.assertRaisesRegex(ValueError, "CPU-only"):
-            require_gpu_supported_split_slot_policy({"split_slot_policy": "fixed_slot_v1"})
+        for policy in ("legacy", "fixed_slot_v1"):
+            self.assertEqual(require_gpu_supported_split_slot_policy({"split_slot_policy": policy}), policy)
+        with self.assertRaises(ValueError):
+            require_gpu_supported_split_slot_policy({"split_slot_policy": "bogus"})
 
-    def test_shared_gpu_execution_params_reject_cpu_only_policy(self):
-        # WFO 후보 평가·GPU 단일 실행이 함께 쓰는 실행 설정 구성 단계. 정책이 사라지기 전에 멈춰야
-        # legacy 커널 결과가 fixed_slot_v1 이름으로 기록되지 않는다.
-        legacy = build_gpu_execution_params({}, {"split_slot_policy": "legacy"}, "strict_pit")
-        self.assertEqual(legacy["split_slot_policy"], "legacy")
+    def test_shared_gpu_execution_params_carry_strategy_policy(self):
+        # WFO 후보 평가·GPU 단일 실행이 함께 쓰는 실행 설정 구성 단계. 후보 행의 차수 규칙이 GPU
+        # 실행 설정에 실려야 CPU 검산과 같은 규칙으로 계산한다. 키가 없으면 legacy다.
         self.assertEqual(build_gpu_execution_params({}, {}, "strict_pit")["split_slot_policy"], "legacy")
-        for base, params in (({}, {"split_slot_policy": "fixed_slot_v1"}),
-                             ({"split_slot_policy": "fixed_slot_v1"}, {})):
-            with self.subTest(base=base, params=params), self.assertRaisesRegex(ValueError, "CPU-only"):
-                build_gpu_execution_params(base, params, "strict_pit")
+        for policy in ("legacy", "fixed_slot_v1"):
+            built = build_gpu_execution_params({}, {"split_slot_policy": policy}, "strict_pit")
+            self.assertEqual(built["split_slot_policy"], policy)
+        # 실행 설정과 전략 설정이 서로 다른 규칙을 말하면 어느 쪽인지 알 수 없으므로 멈춘다.
+        with self.assertRaisesRegex(ValueError, "mismatch"):
+            build_gpu_execution_params({"split_slot_policy": "legacy"},
+                                       {"split_slot_policy": "fixed_slot_v1"}, "strict_pit")
 
 
 if __name__ == "__main__":

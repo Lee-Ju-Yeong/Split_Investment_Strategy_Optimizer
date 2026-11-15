@@ -642,6 +642,65 @@ class TestIssue56TierSignalExecutionParity(unittest.TestCase):
         self.assertEqual(float(portfolio_state_after[0, 0].item()), 1_000_000.0)
         self.assertEqual(float(positions_after[0, 0, 3, 0].item()), 0.0)
 
+    def _run_fixed_slot_add(self, positions_state, *, signal_low, current_day_idx=3, max_splits=4):
+        params = self._single_param_row(add_drop=0.05)
+        params[0, 6] = max_splits
+        return _process_additional_buy_signals_gpu(
+            portfolio_state=cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32),
+            positions_state=positions_state,
+            last_trade_day_idx_state=cp.array([[current_day_idx - 1]], dtype=cp.int32),
+            sell_occurred_today_mask=cp.zeros((1, 1), dtype=cp.bool_),
+            current_day_idx=current_day_idx,
+            param_combinations=params,
+            current_opens=cp.array([80.0], dtype=cp.float32),
+            signal_close_prices=cp.array([signal_low], dtype=cp.float32),
+            signal_lows=cp.array([signal_low], dtype=cp.float32),
+            signal_day_idx=current_day_idx - 1,
+            buy_commission_rate=0.00015,
+            log_buffer=cp.zeros((1, 1), dtype=cp.float32),
+            log_counter=cp.zeros((1,), dtype=cp.int32),
+            debug_mode=False,
+            all_tickers=["TEST"],
+            fixed_slot_policy=True,
+        )
+
+    @staticmethod
+    def _positions(slots):
+        positions_state = cp.zeros((1, 1, 4, 3), dtype=cp.float32)
+        for slot, (qty, price, open_day) in slots.items():
+            positions_state[0, 0, slot] = cp.array([qty, price, open_day], dtype=cp.float32)
+        return positions_state
+
+    def test_fixed_slot_add_fills_lowest_gap_from_previous_slot_price(self):
+        # 1차 100, 3차 120(빈 2차). 대상은 2차(슬롯 1), 기준은 1차 100 → 트리거 95.
+        positions_state = self._positions({0: (10, 100.0, 0), 2: (5, 120.0, 1)})
+        _, positions_after, _ = self._run_fixed_slot_add(positions_state, signal_low=95.0)
+        self.assertGreater(float(positions_after[0, 0, 1, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[0, 0, 3, 0].item()), 0.0)
+
+    def test_fixed_slot_add_continues_without_first_slot(self):
+        # 1차가 비고 2차만 100. 대상은 3차(슬롯 2), 기준은 2차 100 → 트리거 95. legacy는 1차 필수라 사지 않는다.
+        positions_state = self._positions({1: (10, 100.0, 0)})
+        _, positions_after, _ = self._run_fixed_slot_add(positions_state.copy(), signal_low=95.0)
+        self.assertGreater(float(positions_after[0, 0, 2, 0].item()), 0.0)
+        self.assertEqual(float(positions_after[0, 0, 0, 0].item()), 0.0)
+
+    def test_fixed_slot_add_requires_previous_slot(self):
+        # 3차만 보유(1·2차 빈칸). 대상 2차의 기준 1차가 없으므로 사지 않는다.
+        positions_state = self._positions({2: (10, 100.0, 0)})
+        portfolio_after, positions_after, _ = self._run_fixed_slot_add(positions_state, signal_low=50.0)
+        self.assertEqual(float(portfolio_after[0, 0].item()), 1_000_000.0)
+        self.assertEqual(int(cp.count_nonzero(positions_after[0, 0, :, 0]).item()), 1)
+
+    def test_fixed_slot_add_skips_ticker_bought_today_and_respects_max_splits(self):
+        # 그날 재진입한 1차(open_day=3)가 있으면 추가 매수 없음. 최대 2차면 3차를 사지 않는다.
+        bought_today = self._positions({0: (10, 100.0, 3), 1: (10, 100.0, 0)})
+        portfolio_after, _, _ = self._run_fixed_slot_add(bought_today, signal_low=50.0)
+        self.assertEqual(float(portfolio_after[0, 0].item()), 1_000_000.0)
+        at_limit = self._positions({0: (10, 100.0, 0), 1: (10, 100.0, 0)})
+        portfolio_after, _, _ = self._run_fixed_slot_add(at_limit, signal_low=50.0, max_splits=2)
+        self.assertEqual(float(portfolio_after[0, 0].item()), 1_000_000.0)
+
     def test_additional_buy_rejects_invalid_priority_code(self):
         portfolio_state = cp.array([[1_000_000.0, 100_000.0]], dtype=cp.float32)
         positions_state = cp.zeros((1, 1, 3, 3), dtype=cp.float32)
