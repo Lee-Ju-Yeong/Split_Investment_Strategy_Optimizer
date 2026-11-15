@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -260,6 +261,47 @@ class TestUsListed(unittest.TestCase):
         self.assertEqual(rdiv["leverage_multiple"], 1.0)
         self.assertFalse(rdiv["needs_review"])
 
+    def test_buffer_variants_are_options_and_excluded(self):
+        # Codex 검토 회귀: \bBUFFER\b가 Buffer10·Buffer100·Buffered·DynaBuffer를 놓쳐 D1을 통과했다.
+        for sym, name in [("APRT", "AllianzIM U.S. Large Cap Buffer10 Apr ETF"),
+                          ("AIOO", "AllianzIM U.S. Equity Buffer100 Protection ETF"),
+                          ("ACJL", "Buffered Bulldog ETF by C.J. Lawrence, a division of Apollon"),
+                          ("MPDB", "m+ DynaBuffer ETF"),
+                          ("SIXD", "AllianzIM U.S. Large Cap 6 Month Buffer10 Jun/Dec ETF")]:
+            r = C(us(sym, name, "", opt="1", status="not_selected_in_this_price_stage"))
+            self.assertTrue(r["is_options_strategy"], name)
+            self.assertFalse(r["d1_eligible"], name)
+            self.assertEqual(r["d1_exclusion_reasons"], "options_strategy", name)
+            self.assertFalse(r["needs_review"], name)
+
+    def test_unresolved_source_hint_fails_closed(self):
+        # 원천 힌트는 옵션 전략인데 규칙 어휘가 못 잡는 이름: 검토 표시와 함께 D1에서도 뺀다.
+        r = C(us("ZZZZ", "Example Shield Strategy ETF", "", opt="1", status="not_selected_in_this_price_stage"))
+        self.assertFalse(r["is_options_strategy"])
+        self.assertTrue(r["needs_review"])
+        self.assertFalse(r["d1_eligible"])
+        self.assertEqual(r["d1_exclusion_reasons"], "options_hint_unresolved")
+        inv = C(us("ZZZY", "Example Downside Tracker ETF", "", inv="1", status="not_selected_in_this_price_stage"))
+        self.assertEqual(inv["d1_exclusion_reasons"], "inverse_hint_unresolved")
+
+    def test_source_hints_already_explained_by_rule_do_not_fail_closed(self):
+        ns = "not_selected_in_this_price_stage"
+        # 이름의 배수 숫자를 규칙이 읽은 경우(1X 인버스, 1.25x)
+        bear1 = C(us("AAPD", "Direxion Daily AAPL Bear 1X ETF", "", lev="1", inv="1", status=ns))
+        self.assertEqual((bear1["leverage_multiple"], bear1["d1_exclusion_reasons"]), (-1.0, "inverse"))
+        self.assertFalse(bear1["needs_review"])
+        x125 = C(us("TSLL", "GraniteShares 1.25x Long TSLA Daily ETF", "", lev="1", status=ns))
+        self.assertEqual((x125["leverage_multiple"], x125["d1_eligible"]), (1.25, True))
+        # 초단기 채권의 Short는 인버스가 아님
+        bond = C(us("VUSB", "Vanguard Ultra-Short Bond ETF", "Vanguard", inv="1", status=ns))
+        self.assertTrue(bond["d1_eligible"])
+        self.assertFalse(bond["needs_review"])
+        # 롱숏 주식은 배수 미확인으로 제외하고 검토 표시
+        ls = C(us("FTLS", "First Trust Long/Short Equity", "", inv="1", status=ns))
+        self.assertIsNone(ls["leverage_multiple"])
+        self.assertEqual(ls["d1_exclusion_reasons"], "leverage_unknown")
+        self.assertTrue(ls["needs_review"])
+
     def test_generic_other_issuers(self):
         bull = C(us("TSMX", "Direxion Daily TSM Bull 2X ETF", "", status="not_selected_in_this_price_stage"))
         self.assertEqual(bull["leverage_multiple"], 2.0)
@@ -316,6 +358,36 @@ class TestNormalizationAndIO(unittest.TestCase):
         rows = [["KR", "069500", "KODEX �200", "1", "", "", "", "downloaded", "0", "0", "0", "0"]]
         with self.assertRaises(ValueError):
             md.load_universe(self._write(self._csv(rows)))
+
+    def test_load_universe_rejects_header_only(self):
+        with self.assertRaises(ValueError):
+            md.load_universe(self._write(self._csv([])))
+
+    def test_main_failure_keeps_previous_output(self):
+        # Codex 검토 회귀: 헤더만 있는 입력이 기존 산출물을 먼저 덮어쓴 뒤 실패했다.
+        out = Path(tempfile.mkdtemp()) / "etf_metadata.csv"
+        self.addCleanup(lambda: __import__("shutil").rmtree(out.parent, ignore_errors=True))
+        out.write_text("previous good output\n", encoding="utf-8")
+        empty = self._write(self._csv([]))
+        with self.assertRaises(ValueError):
+            md.main(["--universe", str(empty), "--output", str(out)])
+        self.assertEqual(out.read_text(encoding="utf-8"), "previous good output\n")
+        self.assertEqual([p.name for p in out.parent.iterdir()], ["etf_metadata.csv"])
+
+    def test_write_atomic_failure_keeps_previous_output(self):
+        out = Path(tempfile.mkdtemp()) / "etf_metadata.csv"
+        self.addCleanup(lambda: __import__("shutil").rmtree(out.parent, ignore_errors=True))
+        out.write_text("previous good output\n", encoding="utf-8")
+        meta = md.build_metadata(pd.DataFrame([kr("069500", "KODEX 200", "1")]))
+        with mock.patch.object(pd.DataFrame, "to_csv", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                md.write_atomic(meta, out)
+        self.assertEqual(out.read_text(encoding="utf-8"), "previous good output\n")
+        self.assertEqual([p.name for p in out.parent.iterdir()], ["etf_metadata.csv"])
+        with self.assertRaises(ValueError):
+            md.write_atomic(meta.iloc[0:0], out)
+        md.write_atomic(meta, out)
+        self.assertEqual(pd.read_csv(out, dtype={"symbol": str}, encoding="utf-8-sig")["symbol"].tolist(), ["069500"])
 
     def test_summarize_counts(self):
         df = pd.DataFrame([
