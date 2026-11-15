@@ -18,6 +18,12 @@ from src.research.etf import fx  # noqa: E402
 
 UTC = "UTC"
 
+try:  # 달력 생성 경로는 고정 버전 라이브러리가 있을 때만 검사한다.
+    import exchange_calendars as _xc
+    _HAS_PINNED_XC = f"exchange_calendars=={_xc.__version__}" == cal.PINNED_LIBRARY
+except ImportError:
+    _HAS_PINNED_XC = False
+
 
 def ts(s: str) -> pd.Timestamp:
     return pd.Timestamp(s, tz=UTC)
@@ -72,6 +78,29 @@ class TestCalendarRows(unittest.TestCase):
         csat = out[1]
         self.assertEqual((csat["open_local"], csat["close_local"]), ("10:00", "16:30"))
         self.assertTrue(csat["source"].startswith("override:"))
+
+    def test_overrides_outside_requested_range_are_ignored(self):
+        # 회귀: 기간을 2024-01-03 하루로 제한해도 2026-11-19 수능 보정이 행으로 추가되던 문제
+        rows = [cal._row("KRX", date(2024, 1, 3), time(9), time(15, 30), "lib")]
+        out = cal.apply_overrides(rows, cal.KRX_OVERRIDES, "2024-01-03", "2024-01-03")
+        self.assertEqual([r["date"] for r in out], ["2024-01-03"])
+        inside = cal.apply_overrides([], cal.KRX_OVERRIDES, "2026-11-01", "2026-11-30")
+        self.assertEqual([r["date"] for r in inside], ["2026-11-19"])
+
+    def test_check_within_range_rejects_outside_rows(self):
+        rows = [cal._row("KRX", d, time(9), time(15, 30), "t") for d in (date(2024, 1, 3), date(2026, 11, 19))]
+        with self.assertRaises(ValueError):
+            cal.check_within_range(rows, "2024-01-03", "2024-01-03")
+        cal.check_within_range(rows, "2024-01-01", "2026-12-31")
+
+    @unittest.skipUnless(_HAS_PINNED_XC, "exchange_calendars==4.13.3 없음(생성 단계 전용)")
+    def test_build_calendar_respects_range(self):
+        one = cal.build_calendar("KRX", "2024-01-03", "2024-01-03")
+        self.assertEqual(list(one["date"]), ["2024-01-03"])
+        nov = cal.build_calendar("KRX", "2026-11-16", "2026-11-20")
+        r = nov.set_index("date").loc["2026-11-19"]
+        self.assertEqual((r["open_local"], r["close_local"]), ("10:00", "16:30"))
+        self.assertNotIn("2026-07-17", list(cal.build_calendar("KRX", "2026-07-13", "2026-07-20")["date"]))
 
     def test_known_overrides_are_present(self):
         kinds = {(o.day, o.kind) for o in cal.KRX_OVERRIDES}
@@ -199,6 +228,31 @@ class TestDexkous(unittest.TestCase):
         for at, v in zip(q[1:], got.iloc[1:]):
             self.assertEqual(fx.asof(self.t, at)["value"], v)
 
+    def test_asof_series_rejects_naive_times(self):
+        # 회귀: 시간대 없는 한국시간 벽시계 값을 UTC로 간주해 9시간 뒤(미래) 값을 돌려주던 문제
+        t = pd.DataFrame({
+            "observation_date": ["2024-01-02", "2024-01-03"],
+            "value": [1310.0, 1400.0],
+            "available_at_utc": [ts("2024-01-03 15:00"), ts("2024-01-04 08:00")],
+        })
+        kst_9am = pd.Timestamp("2024-01-04 09:00", tz="Asia/Seoul")  # = 2024-01-04 00:00 UTC
+        self.assertEqual(list(fx.asof_series(t, [kst_9am])), [1310.0])
+        self.assertEqual(list(fx.asof_series(t, pd.DatetimeIndex([kst_9am]))), [1310.0])
+        self.assertEqual(fx.asof(t, kst_9am)["value"], 1310.0)
+        naive_inputs = (
+            [pd.Timestamp("2024-01-04 09:00")],
+            ["2024-01-04 09:00"],
+            pd.DatetimeIndex(["2024-01-04 09:00"]),
+            pd.Series(pd.to_datetime(["2024-01-04 09:00"])),
+            [kst_9am, pd.Timestamp("2024-01-04 09:00")],  # 섞인 입력
+            [kst_9am, pd.NaT],
+        )
+        for bad in naive_inputs:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                fx.asof_series(t, bad)
+        with self.assertRaises(ValueError):
+            fx.asof(t, "2024-01-04 09:00")
+
 
 class TestSmbsAndRates(unittest.TestCase):
     XML = ("<chart><set color='c' label='99.12.30' value='1138.0' />"
@@ -211,13 +265,24 @@ class TestSmbsAndRates(unittest.TestCase):
         self.assertEqual(list(df["date"].dt.year), [1999, 2000, 2024, 2024])
         self.assertEqual(df["value"].iloc[-1], 1299.3)
 
-    def test_smbs_available_after_previous_trading_day(self):
+    def test_smbs_available_from_value_date_morning(self):
         t = fx.smbs_table(fx.parse_smbs_xml(self.XML))
-        self.assertEqual(len(t), 3)  # 첫 행은 기준 거래일을 몰라 제외
+        self.assertEqual(len(t), 4)
         r = t.set_index("value_date").loc["2024-01-03"]
         self.assertEqual(r["based_on_trading_date"], "2024-01-02")
-        self.assertEqual(r["available_at_utc"], ts("2024-01-02 09:00"))  # 18:00 KST
-        self.assertEqual(fx.asof(t, ts("2024-01-02 08:59"))["value_date"], "2024-01-02")
+        self.assertEqual(r["available_at_utc"], ts("2024-01-03 00:00"))  # 적용일 09:00 KST
+        # 적용일 08:59 KST에는 아직 전날 값
+        self.assertEqual(fx.asof(t, ts("2024-01-02 23:59"))["value_date"], "2024-01-02")
+        self.assertEqual(fx.asof(t, ts("2024-01-03 00:00"))["value_date"], "2024-01-03")
+
+    def test_smbs_missing_row_does_not_advance_availability(self):
+        # 회귀: 01-03 행이 빠지면 01-04 값이 01-02 18:00 KST부터 보이던 문제
+        xml = ("<set label='24.01.02' value='1289.4' /><set label='24.01.04' value='1310.0' />")
+        t = fx.smbs_table(fx.parse_smbs_xml(xml))
+        self.assertEqual(t.set_index("value_date").loc["2024-01-04", "available_at_utc"], ts("2024-01-04 00:00"))
+        for at in (ts("2024-01-02 09:00"), ts("2024-01-03 12:00"), ts("2024-01-03 23:59")):
+            self.assertEqual(fx.asof(t, at)["value_date"], "2024-01-02")
+        self.assertEqual(fx.asof(t, ts("2024-01-04 00:00"))["value_date"], "2024-01-04")
 
     def test_read_fred_csv_drops_missing(self):
         with tempfile.TemporaryDirectory() as d:

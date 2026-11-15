@@ -14,7 +14,8 @@
 자료 원천(키 없음):
 - FRED DEXKOUS: 뉴욕 정오 매수율. 연준 H.10 주간 공표(월요일 16:15, 월요일이 연방 공휴일이면 다음 영업일).
 - 서울외국환중개(SMBS) 매매기준율(시장평균환율, MAR): 전 영업일 09:00~15:30 거래의 거래량 가중평균.
-  그래프용 XML 주소(`StdExRate_xml.jsp`)로 받는다. 비공식 주소라 지속성은 보장되지 않는다.
+  적용일 아침 08:30경 고시(SMBS 고객 안내). 그래프용 XML 주소(`StdExRate_xml.jsp`)로 받는다.
+  비공식 주소라 지속성은 보장되지 않는다.
 - FRED DTB3(미국 3개월 국채, 일별), EFFR(연방기금 실효금리, 일별).
 - FRED/OECD 한국 월별 금리: IR3TCD01KRM156N(CD 3개월, 2023-12에서 끊김),
   IR3TIB01KRM156N(3개월 은행간, OECD 정의), IRSTCI01KRM156N(콜금리).
@@ -39,9 +40,10 @@ RULES = {
         "다음 영업일. 2009-01-01 이전에는 연준이 매일 공표했지만 정확한 시각 자료가 없어 같은 주간 규칙을 "
         "보수적으로(실제보다 늦게) 적용한다. 2015년 이후는 ALFRED 과거 시점 자료로 검증."
     ),
-    "smbs_mar_prev_close": (
-        "SMBS 매매기준율: 적용일 d의 값은 전 영업일(표의 바로 앞 행) 09:00~15:30 KST 거래로 정해진다. "
-        "정확한 고시 시각 문서를 찾지 못해 전 영업일 18:00 KST부터 쓸 수 있다고 보수적으로 둔다."
+    "smbs_mar_value_date_0900kst": (
+        "SMBS 매매기준율: 적용일 d의 값은 전 영업일 09:00~15:30 KST 거래로 정해지고, SMBS 고객 안내"
+        "(http://www.smbs.biz/Customer/CusMain.jsp, 2026-11-15 확인)에 따라 '매 영업일 아침 오전 8시 30분경' "
+        "고시된다. '경'을 감안해 30분 여유를 두고 적용일 d 09:00 KST부터 사용한다."
     ),
     "next_us_business_day_1615et": (
         "미국 일별 금리(DTB3·EFFR): 관측일 다음 미국 영업일 16:15 ET(연준 H.15 공표 시각)부터 사용."
@@ -54,7 +56,7 @@ RULES = {
 
 H10_RELEASE_TIME = time(16, 15)
 H10_WEEKLY_SINCE = date(2009, 1, 1)
-SMBS_AVAILABLE_TIME_KST = time(18, 0)
+SMBS_AVAILABLE_TIME_KST = time(9, 0)  # 공식 고시 '08:30경' + 30분 여유
 
 
 # ---------------------------------------------------------------------------
@@ -185,17 +187,21 @@ def dexkous_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def smbs_table(df: pd.DataFrame) -> pd.DataFrame:
-    """SMBS 매매기준율에 기준 거래일(전 영업일)과 이용 가능 시각을 붙인다. 첫 행은 기준일을 몰라 뺀다."""
+    """SMBS 매매기준율에 이용 가능 시각(적용일 SMBS_AVAILABLE_TIME_KST)을 붙인다.
+
+    이용 가능 시각은 적용일(value_date)만으로 정한다. 앞 행에 기대지 않으므로 행이 빠져도 시각이
+    앞당겨지지 않는다. based_on_trading_date(바로 앞 행 날짜)는 비교·설명용이며, 앞 행이 빠졌으면
+    실제 기준 거래일과 다를 수 있다.
+    """
     df = df.sort_values("date").reset_index(drop=True)
     prev = df["date"].shift(1)
-    out = pd.DataFrame({
+    return pd.DataFrame({
         "value_date": df["date"].dt.strftime("%Y-%m-%d"),
         "value": df["value"],
         "based_on_trading_date": prev.dt.strftime("%Y-%m-%d"),
-        "available_at_utc": [None if pd.isna(p) else _at(p.date(), SMBS_AVAILABLE_TIME_KST, SEOUL) for p in prev],
-        "rule": "smbs_mar_prev_close",
+        "available_at_utc": [_at(d.date(), SMBS_AVAILABLE_TIME_KST, SEOUL) for d in df["date"]],
+        "rule": "smbs_mar_value_date_0900kst",
     })
-    return out.iloc[1:].reset_index(drop=True)
 
 
 def us_daily_rate_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -250,12 +256,36 @@ def asof(table: pd.DataFrame, at_utc, value_col: str = "value"):
     return known.sort_values(["available_at_utc", key], kind="mergesort").iloc[-1]
 
 
-def asof_series(table: pd.DataFrame, at_utc: pd.Series | pd.DatetimeIndex, value_col: str = "value") -> pd.Series:
-    """여러 시각에 대해 asof를 한꺼번에(merge_asof). 결과 인덱스는 입력 순서."""
+def _require_tz_aware(values) -> pd.DatetimeIndex:
+    """모든 조회 시각에 시간대가 있는지 확인하고 UTC DatetimeIndex로 바꾼다.
+
+    시간대 없는 값을 UTC로 간주하면 한국시간 벽시계 입력이 9시간 뒤로 조회되어 미래 값이 섞인다.
+    """
+    if isinstance(values, (pd.DatetimeIndex, pd.Series)) and isinstance(values.dtype, pd.DatetimeTZDtype):
+        if pd.isna(values).any():
+            raise ValueError("조회 시각에 NaT가 있습니다.")
+        return pd.DatetimeIndex(values).tz_convert("UTC")
+    stamps = []
+    for v in list(values):
+        t = pd.Timestamp(v)
+        if pd.isna(t):
+            raise ValueError("조회 시각에 NaT가 있습니다.")
+        if t.tzinfo is None:
+            raise ValueError(f"조회 시각에 시간대가 없습니다(미래 정보 방지): {v!r}")
+        stamps.append(t.tz_convert("UTC"))
+    return pd.DatetimeIndex(stamps, tz="UTC") if stamps else pd.DatetimeIndex([], tz="UTC")
+
+
+def asof_series(table: pd.DataFrame, at_utc, value_col: str = "value") -> pd.Series:
+    """여러 시각에 대해 asof를 한꺼번에(merge_asof). 결과 인덱스는 입력 순서.
+
+    asof와 똑같이 시간대 없는 시각은 거부한다(섞여 있어도 거부).
+    """
+    when = _require_tz_aware(at_utc)
     key = [c for c in ("observation_date", "value_date", "observation_month") if c in table.columns][0]
     t = table.sort_values(["available_at_utc", key], kind="mergesort")
     t = t.drop_duplicates("available_at_utc", keep="last")[["available_at_utc", value_col]]
-    q = pd.DataFrame({"at": pd.DatetimeIndex(pd.to_datetime(at_utc, utc=True))})
+    q = pd.DataFrame({"at": when})
     q["_i"] = range(len(q))
     merged = pd.merge_asof(q.sort_values("at"), t, left_on="at", right_on="available_at_utc",
                            direction="backward")
