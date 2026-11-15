@@ -1,7 +1,20 @@
 """ETF 분류 메타데이터 (M1 데이터 단계, 계획 3.2절 보류 분할과 7절 D1·D7).
 
-입력: ChatGPT 연구 자료의 `etf_universe_with_price_audit_2026-11-15.csv`(국내 1,188·미국 5,787행).
+입력:
+- ChatGPT 연구 자료의 `etf_universe_with_price_audit_2026-11-15.csv`(국내 1,188·미국 5,787행, 현재 상장).
+- 폐지 국내 ETF: `<MAGICSPLIT_ETF_DATA_ROOT>/kr_universe/kr_etf_history_scoped.csv`의 `delisted=True` 행.
+  KRX 월말 스냅샷(UTF-8 BOM)에서 만든 표다. 이름은 폐지 직전 이름(`last_name`)을 쓰고, 마지막으로 보인
+  스냅샷의 이름과 같은지 확인한다(다르면 멈춘다).
 출력: `<MAGICSPLIT_ETF_DATA_ROOT>/metadata/etf_metadata.csv`.
+
+폐지 ETF도 생존 ETF와 같은 `classify()`로 판정한다. 다만 원천에 없는 값 두 가지는 이렇게 채운다.
+- 네이버 탭: 폐지 ETF는 네이버 목록에 없다. KRX 기초지수명으로 탭을 추정한다(`infer_tab_from_krx_index`,
+  `naver_tab_source=krx_index_name`). 같은 추정을 생존 ETF 1,188개에 적용해 실제 탭과 비교하면 자산군이
+  1,181개 같고 D1 판정은 모두 같았다(2026-11-15). 다른 7개 중 4개는 기초지수명이 없어 `기타`로 검토 표시된다.
+- 이름 힌트: 이력표의 `flags`(별도 이름 규칙: inverse·lev2x·option)를 원천 힌트 자리에 넣는다. 규칙과
+  어긋나면 생존 ETF와 똑같이 `*_hint_unresolved`로 D1에서 뺀다.
+`listing_status`(listed/delisted)와 `has_price_history`는 가격 저장소 CURRENT 묶음의 inventory와 맞는지
+확인한다(다르거나 묶음을 찾지 못하면 쓰지 않고 멈춘다). 그래서 가격 저장소를 먼저 돌린다.
 
 판단은 상품명·운용사 분류(issuer_category)·네이버 ETF 탭 번호·기초지수명 규칙으로만 한다.
 규칙이 애매하면 값을 추측해 채우지 않고 `needs_review=True`와 `review_reasons`를 남긴다.
@@ -16,8 +29,9 @@
 
 열 정의
 -------
-- `leverage_multiple`: 기초 대비 일간 목표 배수. 1, 2, 3, -1, -2, -3. 이름으로 확정할 수 없으면 빈 값.
-  국내 상장 `레버리지`는 국내 규정상 2배, `인버스2X`는 -2배로 본다. 미국은 ProShares 이름 규칙
+- `leverage_multiple`: 기초 대비 일간 목표 배수. 1, 2, 3, -1, -2, -3(폐지 국내 ETF에는 1.5도 있다).
+  이름으로 확정할 수 없으면 빈 값. 국내 상장은 이름에 배수 숫자(`1.5X`, `2X`)가 있으면 그 값을 쓰고,
+  숫자 없는 `레버리지`는 국내 규정상 2배, `인버스`는 -1배로 본다(`인버스2X`는 -2배). 미국은 ProShares 이름 규칙
   (Ultra 2, UltraPro 3, Short -1, UltraShort -2, UltraPro Short -3)과 일반 `2X/3X` 표기를 쓴다.
 - `is_inverse`, `is_etn`, `is_options_strategy`(커버드콜·버퍼·바이라이트·목표헤지 등),
   `is_futures_based`(**이름·운용사 분류에 선물 근거가 있을 때만 True**. False는 "근거 없음"이지
@@ -53,6 +67,9 @@
 - `d1_eligible`, `d1_exclusion_reasons`: 계획 D1의 상품 성격 필터만 적용한다(인버스·ETN·옵션 전략·
   3배 이상 제외, 2배까지 포함, 배수 미확인 제외). 원천 이름 힌트(인버스·레버리지·옵션)는 1인데 규칙이 0이면
   규칙이 놓친 제외 대상일 수 있으므로 `*_hint_unresolved`로 제외하고 needs_review로 남긴다. 이력 3년·거래대금 조건은 가격 자료로 따로 계산한다.
+  만기형(이름의 `26-04` 같은 만기)은 여기서 빼지 않는다.
+- `listing_status`: listed(현재 상장) / delisted(폐지 국내 ETF). 미국은 현재 상장 목록뿐이다(생존 편향 한계).
+- `naver_tab_source`: naver(네이버 목록의 탭) / krx_index_name(KRX 기초지수명으로 추정) / 빈 값(탭 없음).
 """
 from __future__ import annotations
 
@@ -93,8 +110,15 @@ OUTPUT_COLUMNS = [
     "leverage_multiple", "is_inverse", "is_etn", "is_options_strategy", "is_futures_based",
     "is_single_stock", "asset_class", "region", "index_family", "index_family_basis",
     "kr_tax_class", "kr_tax_basis", "d1_eligible", "d1_exclusion_reasons",
-    "needs_review", "review_reasons",
+    "needs_review", "review_reasons", "listing_status", "naver_tab_source",
 ]
+
+KR_HISTORY_FILENAME = "kr_etf_history_scoped.csv"
+KR_UNIVERSE_DIR = "kr_universe"
+KR_SNAPSHOT_SUBDIR = "snapshots"
+LISTED, DELISTED = "listed", "delisted"
+# 이력표 flags(이름 규칙) → 원천 이름 힌트 자리
+_FLAG_TO_HINT = {"lev2x": "leveraged_name_hint", "inverse": "inverse_name_hint", "option": "options_strategy_name_hint"}
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +141,130 @@ def load_universe(path: str | Path) -> pd.DataFrame:
     return df
 
 
+# 폐지 국내 ETF는 네이버 탭이 없다. KRX 기초지수명으로 네이버 탭에 해당하는 값을 추정한다.
+# 순서: 채권·단기금리(6) → 원자재(5) → 해외 표시만 있음(4) → 국내 표시·한글 지수명·국내 지수 회사(2) → 모름("").
+_IDX_BOND = re.compile(r"채권|국고채|국채|통안채|회사채|금융채|BOND|MONEY ?MARKET|금리|KOFR|CD\s?\d|단기|머니|TREASURY", re.I)
+_IDX_COMMODITY = re.compile(r"GSCI|원유|(?<!철강)금속|GOLD|금현물|골드|은선물|구리|농산물|COMMODITY|WTI|CRUDE", re.I)
+_IDX_KOREA = re.compile(r"KOREA|코리아|한국|KRX|코스피|코스닥|KOSPI|KOSDAQ|K-|^K|\bK[A-Z가-힣]", re.I)
+_IDX_FOREIGN = re.compile(
+    r"S&P|MSCI|NASDAQ|나스닥|DOW ?JONES|\bDJ\b|NYSE|HANG ?SENG|항셍|\bCSI\b|NIKKEI|니케이|TOPIX|STOXX|FTSE|RUSSELL|"
+    r"BNY|INDXX|BLOOMBERG|MORNINGSTAR|NIFTY|미국|중국|차이나|일본|인도|베트남|글로벌|GLOBAL|\bU\.?S\.?\b|CHINA|"
+    r"JAPAN|INDIA|EURO|유럽|선진|신흥|WORLD|ASIA|아시아|브라질|BRAZIL|BRIC|필리핀|PHILIPPINES", re.I)
+_IDX_KR_VENDOR = re.compile(r"MKF|FNGUIDE|FNKOREA|WISE|ISELECT|AKROS|KEDI|DEEPSEARCH|NICE|KAP", re.I)
+
+
+def infer_tab_from_krx_index(index_name: str) -> str:
+    """KRX 기초지수명 → 네이버 탭 번호 추정("6" 채권, "5" 원자재, "4" 해외 주식, "2" 국내, "" 모름).
+
+    1과 2(시장지수·업종테마)는 분류 규칙에서 차이가 없으므로 국내는 "2"로 둔다.
+    """
+    ix = (index_name or "").strip()
+    if not ix:
+        return ""
+    if _IDX_BOND.search(ix):
+        return "6"
+    if _IDX_COMMODITY.search(ix):
+        return "5"
+    korea = bool(_IDX_KOREA.search(ix))
+    if _IDX_FOREIGN.search(ix) and not korea:
+        return "4"
+    if korea or re.search(r"[가-힣]", ix) or _IDX_KR_VENDOR.search(ix):
+        return "2"
+    return ""
+
+
+def _snapshot_names(snapshots_dir: Path, date: str) -> dict[str, str]:
+    path = snapshots_dir / f"{date.replace('-', '')}.csv"
+    if not path.is_file():
+        raise FileNotFoundError(f"폐지 ETF 이름 대조용 KRX 스냅샷이 없습니다: {path}")
+    snap = pd.read_csv(path, dtype=str, encoding="utf-8-sig", keep_default_na=False, usecols=["ISU_SRT_CD", "ISU_ABBRV"])
+    return dict(zip(snap["ISU_SRT_CD"], snap["ISU_ABBRV"]))
+
+
+def load_kr_delisted(history_path: str | Path, snapshots_dir: str | Path | None = None) -> pd.DataFrame:
+    """폐지 국내 ETF를 유니버스 CSV와 같은 열로 만든다(`classify()` 입력).
+
+    - 이력표는 UTF-8(BOM)로 엄격하게 읽는다. 이름에 대체 문자(U+FFFD)가 있으면 멈춘다.
+    - `snapshots_dir`를 주면 마지막으로 보인 스냅샷의 이름(ISU_ABBRV)과 `last_name`이 같은지 확인한다.
+    - `history_download_status`는 Naver 일봉이 있으면(`has_daily=True`) downloaded. 가격 저장소와의
+      일치는 `check_price_bundle()`이 확인한다.
+    """
+    history = pd.read_csv(history_path, dtype=str, encoding="utf-8-sig", keep_default_na=False)
+    needed = {"code", "last_name", "index_name", "last_seen", "delisted", "flags", "has_daily"}
+    missing = sorted(needed - set(history.columns))
+    if missing:
+        raise ValueError(f"폐지 이력표에 필요한 열이 없습니다: {missing}")
+    if history["code"].duplicated().any():
+        raise ValueError("폐지 이력표에 종목코드 중복이 있습니다")
+    for column, allowed in (("delisted", {"True", "False"}), ("has_daily", {"True", "False"})):
+        if not history[column].isin(allowed).all():
+            raise ValueError(f"폐지 이력표 {column} 값은 True/False여야 합니다")
+    delisted = history[history["delisted"] == "True"]
+    if delisted.empty:
+        raise ValueError(f"폐지 이력표에 폐지 ETF가 없습니다: {history_path}")
+    bad = delisted[delisted["last_name"].str.contains("�", regex=False) | (delisted["last_name"].str.strip() == "")]
+    if len(bad):
+        raise ValueError(f"폐지 ETF 이름이 비었거나 대체 문자(U+FFFD)가 있습니다: {bad['code'].tolist()[:5]}")
+    if snapshots_dir is not None:
+        cache: dict[str, dict[str, str]] = {}
+        for code, name, seen in delisted[["code", "last_name", "last_seen"]].itertuples(index=False):
+            names = cache.setdefault(seen, _snapshot_names(Path(snapshots_dir), seen))
+            if names.get(code) != name:
+                raise ValueError(f"{code}: 이력표 이름({name!r})이 {seen} KRX 스냅샷 이름({names.get(code)!r})과 다릅니다")
+    rows = []
+    for item in delisted.to_dict("records"):
+        flags = set(filter(None, item["flags"].split(";")))
+        unknown = flags - set(_FLAG_TO_HINT) - {"term"}
+        if unknown:
+            raise ValueError(f"{item['code']}: 알 수 없는 flags {sorted(unknown)}")
+        tab = infer_tab_from_krx_index(item["index_name"])
+        row = {
+            "market": "KR", "symbol": item["code"], "name": item["last_name"], "raw_category_code": tab,
+            "issuer": "", "issuer_category": "", "underlying_benchmark": item["index_name"],
+            "history_download_status": "downloaded" if item["has_daily"] == "True" else "no_naver_daily",
+            "explicit_etn_name": "0", "listing_status": DELISTED,
+            "naver_tab_source": "krx_index_name" if tab else "",
+        }
+        for flag, hint in _FLAG_TO_HINT.items():
+            row[hint] = "1" if flag in flags else "0"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def combine_universe(listed: pd.DataFrame, delisted: pd.DataFrame) -> pd.DataFrame:
+    """현재 상장 유니버스와 폐지 국내 ETF를 합친다. 같은 (market, symbol)이 양쪽에 있으면 멈춘다."""
+    listed = listed.copy()
+    listed["listing_status"] = LISTED
+    both = pd.concat([listed, delisted], ignore_index=True).fillna("")
+    dup = both[both.duplicated(["market", "symbol"], keep=False)]
+    if len(dup):
+        raise ValueError(f"현재 상장 목록과 폐지 목록에 같은 종목이 있습니다: {dup['symbol'].unique().tolist()[:5]}")
+    return both
+
+
+def check_price_bundle(meta: pd.DataFrame, bundle: Path) -> dict:
+    """분류표의 `has_price_history`·`listing_status`가 가격 묶음 inventory와 같은지 확인한다(다르면 ValueError)."""
+    result = {}
+    for market in sorted(meta["market"].unique()):
+        path = Path(bundle) / f"{market.lower()}_inventory.csv"
+        if not path.is_file():
+            raise ValueError(f"가격 묶음에 {market} inventory가 없습니다: {path}")
+        inv = pd.read_csv(path, dtype={"symbol": str}, keep_default_na=False)
+        status = dict(zip(inv["symbol"], inv["listing_status"])) if "listing_status" in inv else {}
+        priced = meta[(meta["market"] == market) & meta["has_price_history"]]
+        meta_set, inv_set = set(priced["symbol"]), set(inv["symbol"])
+        if meta_set != inv_set:
+            raise ValueError(
+                f"{market}: has_price_history와 가격 묶음 종목이 다릅니다 "
+                f"(분류표에만 {sorted(meta_set - inv_set)[:5]}, 가격에만 {sorted(inv_set - meta_set)[:5]})")
+        if status:
+            wrong = [s for s, st in zip(priced["symbol"], priced["listing_status"]) if status.get(s) != st]
+            if wrong:
+                raise ValueError(f"{market}: listing_status가 가격 묶음과 다릅니다: {wrong[:5]}")
+        result[market] = len(meta_set)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # 이름 정규화
 # ---------------------------------------------------------------------------
@@ -133,7 +281,7 @@ _KR_MIX_TOKENS = re.compile(
 )
 _KR_MODIFIERS = [
     r"\(합성H\)", r"\(합성\)", r"\(H\)",
-    r"단일종목", r"레버리지", r"인버스2X", r"인버스", r"2X",
+    r"단일종목", r"레버리지", r"인버스2X", r"인버스", r"2X", r"(?<![\d.])[1-9]\.\d+X",  # 1.5X(폐지 HANARO)
     r"선물", r"액티브", r"적격", r"ENHANCED", r"엔화노출",
     r"(?:데일리|위클리|타겟|고정|변동성확대시|월간)*(?:타겟)?(?:데일리)?커버드콜(?:OTM|ATM)?",
     r"버퍼\d+월", r"월간목표헤지", r"\d호$",
@@ -188,6 +336,7 @@ _US_OPTIONS = re.compile(
 )
 _KR_OPTIONS = re.compile(r"커버드콜|버퍼|목표헤지|콜옵션|풋옵션")
 _US_SHORT_NON_INVERSE = re.compile(r"SHORT[- ](TERM|DURATION|MATURITY|DATED)")
+_KR_MULTIPLE = re.compile(r"(?<![\d.])([1-9](?:\.\d+)?)X(?![A-Z])")
 
 
 def classify_leverage(market: str, name: str, issuer: str) -> tuple[float | None, bool, list[str]]:
@@ -198,9 +347,13 @@ def classify_leverage(market: str, name: str, issuer: str) -> tuple[float | None
         if re.search(r"롱.*숏", rest):
             reasons.append("롱숏 상품: 순 배수가 이름 규칙으로 정해지지 않음")
             return None, False, reasons
+        # 이름의 배수 숫자가 우선이다(폐지 ETF 'HANARO 200선물레버리지1.5X'는 1.5배).
+        m = _KR_MULTIPLE.search(rest)
         if "인버스" in rest:
-            return (-2.0 if "2X" in rest else -1.0), True, reasons
-        if "레버리지" in rest or "2X" in rest:
+            return -(float(m.group(1)) if m else 1.0), True, reasons
+        if m:
+            return float(m.group(1)), False, reasons
+        if "레버리지" in rest:
             return 2.0, False, reasons
         return 1.0, False, reasons
 
@@ -288,7 +441,7 @@ _KR_DOMESTIC_OVERRIDE = {
 
 
 def _kr_asset_class(rest: str, base: str, tab: str, reasons: list[str]) -> str:
-    if re.search(r"TDF|TRF|자산배분|멀티에셋|주식혼합|채권혼합|미국채혼합|국채혼합|혼합50|커버드콜혼합|커버드콜밸런스|&GOLD$|인컴TOP10", rest) \
+    if re.search(r"TDF|TRF|자산배분|멀티에셋|주식혼합|채권혼합|미국채혼합|국채혼합|혼합50|커버드콜혼합|커버드콜밸런스|&GOLD$|주식&골드|인컴TOP10", rest) \
             or rest.endswith("혼합") or "리츠부동산인프라채권" in rest:
         if "인컴TOP10" in rest:
             reasons.append("ACE 글로벌인컴TOP10: 편입 자산 구성(주식·리츠·채권)이 이름만으로 불명확")
@@ -306,7 +459,8 @@ def _kr_asset_class(rest: str, base: str, tab: str, reasons: list[str]) -> str:
         return "리츠"
     if re.fullmatch(r"(KRX)?금현물|골드|국제금|금|KRX금", base) or base.startswith(("골드", "금현물", "국제금")):
         return "금"
-    if re.fullmatch(r"은|금은|구리|구리실물|WTI원유|원유|3대농산물|농산물|콩|팔라듐", base) or "탄소배출권" in base:
+    # 금속: 폐지 TIGER 금속선물(H)(S&P GSCI Industrial Metals)
+    if re.fullmatch(r"은|금은|구리|구리실물|금속|WTI원유|원유|3대농산물|농산물|콩|팔라듐", base) or "탄소배출권" in base:
         return "원자재"
     if "우선증권" in rest:
         return "우선증권"
@@ -463,6 +617,7 @@ KR_BASE_FAMILY = {
     "미국S&P500성장주": "US_EQ_LARGE_GROWTH",
     "미국러셀2000": "US_EQ_SMALL_BLEND",
     "미국나스닥100": "US_NASDAQ100",
+    "미국나스닥100ETF": "US_NASDAQ100",  # 폐지 TIGER 미국나스닥100ETF선물
     "미국다우존스30": "US_DOW30",
     "미국배당다우존스": "US_DIV_DJ_US_DIVIDEND100", "미국배당": "US_DIV_DJ_US_DIVIDEND100",
     "미국배당100": "US_DIV_DJ_US_DIVIDEND100", "미국S&P500모멘텀": "US_EQ_SP500_MOMENTUM",
@@ -599,7 +754,8 @@ FOREIGN_THEMES: list[tuple[str, str, str]] = [
     ("GLOBAL_THEME_ROBOT", r"휴머노이드|로봇|피지컬AI", r"ROBOTICS"),
     ("GLOBAL_THEME_OBESITY", r"비만", r"OBESITY"),
     ("GLOBAL_THEME_POWER_INFRA", r"전력|GRID", r"GRID"),
-    ("GLOBAL_THEME_CLEAN_ENERGY", r"클린에너지|친환경그린|수소|태양광", r"CLEAN ENERGY|^SOLAR$|KENSHO GRID|CLEAN POWER"),
+    # '(?<!내)수소': '차이나내수소비'의 '수소'를 수소 테마로 잡지 않는다(폐지 454180).
+    ("GLOBAL_THEME_CLEAN_ENERGY", r"클린에너지|친환경그린|(?<!내)수소|태양광", r"CLEAN ENERGY|^SOLAR$|KENSHO GRID|CLEAN POWER"),
     ("US_THEME_NATGAS_INFRA", r"천연가스", r"^$"),
     ("US_THEME_AI_SOFTWARE", r"미국AI소프트웨어", r"TECH-SOFTWARE SECTOR|SOFTWARE & SERVICES"),
     ("US_BIGTECH", r"미국.*(빅테크|테크TOP|AI테크TOP|테크TOP\d+)|^미국테크TOP", r"^$"),
@@ -881,6 +1037,11 @@ def classify(row: Mapping[str, str]) -> dict:
         if re.search(r"DOWNSIDE HEDGED|HEDGE REPLICATION|INFLATION EXPECTATIONS|DECLINE OF", name.upper()):
             reasons.append("헤지·차익형 전략: 노출 구조가 일반 지수형과 달라 자산군·묶음 확인 필요")
 
+    # KRX 기초지수명으로 추정한 탭이 국내(1·2·3)가 아닌데 이름 규칙이 국내주식으로 떨어지면(탭 5·7의 기본값),
+    # 추정 근거와 결과가 어긋난 것이므로 확정하지 않고 검토로 남긴다.
+    if market == "KR" and row.get("naver_tab_source") == "krx_index_name" and tab not in ("1", "2", "3") \
+            and asset_class == "국내주식":
+        reasons.append(f"KRX 기초지수명으로 추정한 탭 {tab}({NAVER_TABS.get(tab, '?')})과 자산군(국내주식)이 다름")
     if asset_class == "기타":
         reasons.append("자산군을 규칙으로 정하지 못함")
     if region == "미확인":
@@ -899,7 +1060,8 @@ def classify(row: Mapping[str, str]) -> dict:
     ultra_short_bond = market == "US" and issuer != "ProShares" and "ULTRA" in up_name \
         and not re.search(r"\d(\.\d+)?\s*X\b|LEVERAGED", up_name)
     # 규칙이 이름의 배수 숫자(1X·1.5x 등)를 직접 읽었으면 원천 레버리지 힌트는 더할 정보가 없다.
-    explicit_multiple = market == "US" and bool(re.search(r"\d(\.\d+)?\s*X\b", up_name))
+    explicit_multiple = bool(re.search(r"\d(\.\d+)?\s*X\b", up_name)) if market == "US" \
+        else bool(_KR_MULTIPLE.search(kr_rest(name)))
     # Ultra Short·Ultrashort는 초단기 채권이다(원천 인버스 힌트가 Short 단어로 1이 됨).
     ultra_short_word = market == "US" and bool(re.search(r"ULTRA[- ]?SHORT", up_name)) and issuer != "ProShares"
     # 이 불일치는 규칙이 놓친 제외 대상일 수 있으므로 해소 전까지 D1에서도 뺀다(fail closed).
@@ -951,6 +1113,8 @@ def classify(row: Mapping[str, str]) -> dict:
         "d1_exclusion_reasons": ";".join(d1),
         "needs_review": bool(reasons),
         "review_reasons": " | ".join(dict.fromkeys(reasons)),
+        "listing_status": row.get("listing_status") or LISTED,
+        "naver_tab_source": row.get("naver_tab_source") or ("naver" if tab else ""),
     }
 
 
@@ -978,6 +1142,12 @@ def summarize(meta: pd.DataFrame) -> dict:
         "leverage_2x_long_priced_by_market": lev2[lev2["leverage_multiple"] > 0].groupby("market").size().to_dict(),
         "d1_eligible_priced_by_market": priced[priced["d1_eligible"]].groupby("market").size().to_dict(),
         "kr_tax_class": priced[priced["market"] == "KR"].groupby("kr_tax_class").size().to_dict(),
+        "listing_status": meta.groupby(["market", "listing_status"]).size().to_dict(),
+        "priced_by_listing_status": priced.groupby(["market", "listing_status"]).size().to_dict(),
+        "d1_eligible_priced_by_listing_status":
+            priced[priced["d1_eligible"]].groupby(["market", "listing_status"]).size().to_dict(),
+        "needs_review_priced_by_listing_status":
+            priced[priced["needs_review"]].groupby(["market", "listing_status"]).size().to_dict(),
     }
 
 
@@ -1007,12 +1177,30 @@ def main(argv: Iterable[str] | None = None) -> int:
                         help=f"유니버스 CSV 경로(기본: $%s/../%s)" % (paths.ENV_RAW_ROOT, UNIVERSE_FILENAME))
     parser.add_argument("--output", type=Path, default=None,
                         help=f"출력 CSV 경로(기본: $%s/%s/%s)" % (paths.ENV_DATA_ROOT, paths.METADATA_DIR, OUTPUT_FILENAME))
+    parser.add_argument("--kr-history", type=Path, default=None,
+                        help="폐지 국내 ETF 이력표(기본: $%s/%s/%s). 같은 폴더의 snapshots/로 이름을 대조한다."
+                        % (paths.ENV_DATA_ROOT, KR_UNIVERSE_DIR, KR_HISTORY_FILENAME))
+    parser.add_argument("--prices-bundle", type=Path, default=None,
+                        help="has_price_history·listing_status를 대조할 가격 묶음 폴더(기본: 가격 저장소 CURRENT)")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     universe_path = args.universe or default_universe_path()
-    out_path = args.output or (paths.output_dir(paths.METADATA_DIR) / OUTPUT_FILENAME)
-    meta = build_metadata(load_universe(universe_path))
+    listed = load_universe(universe_path)
+    history_path = args.kr_history or (paths.data_root() / KR_UNIVERSE_DIR / KR_HISTORY_FILENAME)
+    snapshots = Path(history_path).parent / KR_SNAPSHOT_SUBDIR
+    if not snapshots.is_dir():
+        raise FileNotFoundError(f"폐지 ETF 이름 대조용 KRX 스냅샷 폴더가 없습니다: {snapshots}")
+    delisted = load_kr_delisted(history_path, snapshots)
+    meta = build_metadata(combine_universe(listed, delisted))
+    bundle = args.prices_bundle
+    if bundle is None:
+        from .price_store import current_bundle  # 가격 저장소 묶음 위치는 이 함수로만 얻는다
+        # CURRENT가 없거나 손상됐으면 FileNotFoundError로 멈춘다(대조 없이 쓰지 않는다).
+        bundle = current_bundle(paths.data_root() / paths.PRICES_DIR)
+    checked = check_price_bundle(meta, bundle)
+    print(f"price bundle check OK: {bundle} {checked}")
     summary = summarize(meta)  # 검증·요약이 끝난 뒤에만 쓴다.
+    out_path = args.output or (paths.output_dir(paths.METADATA_DIR) / OUTPUT_FILENAME)
     write_atomic(meta, out_path)
     print(f"wrote {out_path} ({len(meta)} rows)")
     for key, value in summary.items():
