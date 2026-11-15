@@ -120,10 +120,22 @@ def _row(market: str, day: date, open_local: time, close_local: time, source: st
     }
 
 
-def apply_overrides(rows: list[dict], overrides: Iterable[Override]) -> list[dict]:
-    """공지 보정을 적용한다. closed는 행 삭제, hours는 시각 교체(없던 날이면 추가)."""
+def _as_date(x) -> date:
+    return pd.Timestamp(x).date()
+
+
+def apply_overrides(rows: list[dict], overrides: Iterable[Override],
+                    start: str | date | None = None, end: str | date | None = None) -> list[dict]:
+    """공지 보정을 적용한다. closed는 행 삭제, hours는 시각 교체(없던 날이면 추가).
+
+    start/end를 주면 그 기간(양끝 포함) 안의 보정만 적용한다. 기간 밖 보정이 행을 추가하지 않게 한다.
+    """
+    lo = _as_date(start) if start is not None else date.min
+    hi = _as_date(end) if end is not None else date.max
     by_day = {r["date"]: r for r in rows}
     for ov in overrides:
+        if not lo <= ov.day <= hi:
+            continue
         key = ov.day.isoformat()
         if ov.kind == "closed":
             by_day.pop(key, None)
@@ -143,15 +155,30 @@ def build_calendar(market: str, start: str = CALENDAR_START, end: str = CALENDAR
     version = getattr(xc, "__version__", "unknown")
     if f"exchange_calendars=={version}" != PINNED_LIBRARY:
         raise RuntimeError(f"{PINNED_LIBRARY}로 고정했는데 설치된 버전은 {version}입니다.")
-    sched = xc.get_calendar(name, start=start, end=end).schedule
+    # 라이브러리는 start < end를 요구하므로 앞쪽을 넓혀 받은 뒤 요청 기간으로 자른다.
+    lo, hi = pd.Timestamp(start), pd.Timestamp(end)
+    if hi < lo:
+        raise ValueError(f"end({end})가 start({start})보다 빠릅니다.")
+    sched = xc.get_calendar(name, start=lo - pd.Timedelta(days=7), end=hi).schedule
+    sched = sched[(sched.index >= lo) & (sched.index <= hi)]
     rows = []
     for session, rec in sched.iterrows():
         day = session.date()
         open_local = rec["open"].tz_convert(tz).time()
         close_local = rec["close"].tz_convert(tz).time()
         rows.append(_row(market, day, open_local, close_local, PINNED_LIBRARY))
-    overrides = KRX_OVERRIDES if market == "KRX" else ()
-    return pd.DataFrame(apply_overrides(rows, overrides))
+    overrides = [o for o in KRX_OVERRIDES if o.market == market]
+    out = apply_overrides(rows, overrides, start, end)
+    check_within_range(out, start, end)
+    return pd.DataFrame(out)
+
+
+def check_within_range(rows: list[dict], start, end) -> None:
+    """결과의 모든 거래일이 요청 기간(양끝 포함) 안에 있는지 확인한다."""
+    lo, hi = _as_date(start), _as_date(end)
+    outside = [r["date"] for r in rows if not lo <= date.fromisoformat(r["date"]) <= hi]
+    if outside:
+        raise ValueError(f"요청 기간 {lo}~{hi} 밖의 거래일이 있습니다: {outside[:5]}")
 
 
 def calendar_path(out_dir: Path, market: str) -> Path:
