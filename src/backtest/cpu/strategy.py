@@ -15,11 +15,13 @@ try:
     from ...candidate_runtime_policy import normalize_runtime_candidate_policy
     from ...data_handler import build_pit_failure_record
     from ...execution_price_policy import adjust_price_up, get_tick_size
+    from ...split_slot_policy import FIXED_SLOT_V1_POLICY, normalize_split_slot_policy
     from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 except ImportError:  # pragma: no cover
     from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
     from data_handler import build_pit_failure_record  # type: ignore
     from execution_price_policy import adjust_price_up, get_tick_size  # type: ignore
+    from split_slot_policy import FIXED_SLOT_V1_POLICY, normalize_split_slot_policy  # type: ignore
     from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -78,13 +80,16 @@ class MagicSplitStrategy(Strategy):
         candidate_lookup_error_policy="raise",
         buy_commission_rate=0.00015,
         enable_candidate_rank_trace=False,
+        split_slot_policy="legacy",
     ):
         """기준 기간과 분할매매 조건을 받는다. 비율은 0.05처럼 소수로 지정한다.
 
         주문 투자금은 매월 직전 평가 자산에 order_investment_ratio를 곱한다.
         cooldown_period_days는 거래일 수, max_inactivity_period는 기존
-        비활성 청산 판정의 거래일 기준값이다. 허용하지 않는 후보/등급/우선순위
-        설정은 ValueError다. 신호는 주문이며 체결과 비용 처리는 실행기가 맡는다.
+        비활성 청산 판정의 거래일 기준값이다. split_slot_policy는 차수 번호와
+        빈칸 처리 규칙(legacy | fixed_slot_v1)이다. 허용하지 않는 후보/등급/
+        우선순위/차수 설정은 ValueError다. 신호는 주문이며 체결과 비용 처리는
+        실행기가 맡는다.
         """
         self.max_stocks = max_stocks
         self.order_investment_ratio = order_investment_ratio
@@ -97,7 +102,8 @@ class MagicSplitStrategy(Strategy):
         self.stop_loss_rate = stop_loss_rate
         self.max_splits_limit = max_splits_limit
         self.max_inactivity_period = max_inactivity_period
-        
+        self.split_slot_policy = normalize_split_slot_policy(split_slot_policy)
+
         # [Issue #67]
         normalized_mode, normalized_weekly_gate = normalize_runtime_candidate_policy(
             candidate_source_mode,
@@ -147,6 +153,38 @@ class MagicSplitStrategy(Strategy):
                 f"{value!r}. supported=[lowest_order, highest_drop]"
             )
         return key
+
+    @property
+    def uses_fixed_slots(self):
+        return self.split_slot_policy == FIXED_SLOT_V1_POLICY
+
+    @staticmethod
+    def _opened_on_or_after(positions, current_date):
+        return any(p.open_date is not None and p.open_date >= current_date for p in positions)
+
+    @staticmethod
+    def _require_free_slot(ticker, positions, order):
+        if any(p.order == order for p in positions):
+            raise RuntimeError(
+                f"fixed_slot_v1: {ticker} {order}차를 이미 보유 중인데 같은 차수 매수 신호가 생겼습니다."
+            )
+
+    def _can_reenter_first_slot(self, ticker, positions, current_date, current_day_idx):
+        """fixed_slot_v1에서 보유 중이지만 1차가 빈 종목의 1차 재진입 가능 여부(규칙 6·7)."""
+        if not self.uses_fixed_slots or any(p.order == 1 for p in positions):
+            return False
+        if self.cooldown_tracker.get(ticker) == current_day_idx:
+            return False
+        return not self._opened_on_or_after(positions, current_date)
+
+    def _fixed_slot_add_target(self, positions):
+        """fixed_slot_v1 추가 매수 대상 (차수, 기준 차수). 없으면 None (규칙 2·3)."""
+        held = {p.order: p for p in positions}
+        target = next((order for order in range(2, int(self.max_splits_limit) + 1)
+                       if order not in held), None)
+        if target is None or (target - 1) not in held:
+            return None
+        return target, held[target - 1]
 
     def _resolve_signal_date(self, current_date, trading_dates, current_day_idx, data_handler):
         if current_day_idx is None:
@@ -279,6 +317,12 @@ class MagicSplitStrategy(Strategy):
 
         # 신규 매수 신호 생성 로직 (기존 generate_buy_signals의 2번 로직)
         available_slots = self.max_stocks - len(portfolio.positions)
+        # fixed_slot_v1: 보유 중이지만 1차가 빈 종목은 종목 자리를 새로 쓰지 않고 1차를 다시 살 수 있다(규칙 6).
+        reentry_tickers = {
+            ticker
+            for ticker, positions in portfolio.positions.items()
+            if self._can_reenter_first_slot(ticker, positions, current_date, current_day_idx)
+        }
         if (current_date - self.backtest_start_date).days < 15:
             from tqdm import tqdm
             log_msg = (
@@ -289,7 +333,7 @@ class MagicSplitStrategy(Strategy):
             )
             tqdm.write(log_msg)
         
-        if available_slots > 0:
+        if available_slots > 0 or reentry_tickers:
             candidate_codes = []
             
             # --- [Issue #67] Candidate Source Logic Start ---
@@ -395,7 +439,9 @@ class MagicSplitStrategy(Strategy):
                     if (current_day_idx - self.cooldown_tracker.get(code)) < self.cooldown_period_days:
                         is_in_cooldown = True
 
-                if code in portfolio.positions or is_in_cooldown:
+                if is_in_cooldown:
+                    continue
+                if code in portfolio.positions and code not in reentry_tickers:
                     continue
                 active_candidates.append(code)
             self.last_entry_context["active_candidate_count"] = len(active_candidates)
@@ -498,12 +544,16 @@ class MagicSplitStrategy(Strategy):
                     self.candidate_rank_history.extend(
                         self._build_candidate_rank_rows(current_date, signal_date, sorted_candidates)
                     )
-            # 슬롯이 찰 때까지만 신호 생성
+            # 슬롯이 찰 때까지만 신호 생성. 1차 재진입은 종목 자리를 쓰지 않는다.
             num_new_entries = 0
             temp_cash = float(portfolio.cash)
             for candidate in sorted_candidates:
-                if num_new_entries >= available_slots: break
                 ticker = candidate["ticker"]
+                is_reentry = ticker in reentry_tickers
+                if not is_reentry and num_new_entries >= available_slots:
+                    if not reentry_tickers:
+                        break
+                    continue
                 signal_close_price = candidate["signal_close_price"]
                 if signal_close_price > 0 and self.investment_per_order > 0:
                     if temp_cash < float(self.investment_per_order):
@@ -530,6 +580,8 @@ class MagicSplitStrategy(Strategy):
                     total_cost = gross_cost + commission
                     if temp_cash < total_cost:
                         continue
+                    if is_reentry:
+                        self._require_free_slot(ticker, portfolio.positions[ticker], 1)
                     new_pos = Position(signal_close_price, 0, 1, self.additional_buy_drop_rate, self.sell_profit_rate)
                     buy_signals.append(
                         self._create_buy_signal(
@@ -542,12 +594,13 @@ class MagicSplitStrategy(Strategy):
                                 -candidate["entry_composite_score_q"],
                                 -candidate["market_cap_q"],
                             ),
-                            "신규 진입",
+                            "1차 재진입" if is_reentry else "신규 진입",
                             signal_close_price,
                         )
                     )
                     temp_cash -= total_cost
-                    num_new_entries += 1
+                    if not is_reentry:
+                        num_new_entries += 1
             self.last_entry_context["selected_count"] = len(buy_signals)
         else:
             self.last_entry_context = self._build_entry_context(
@@ -606,15 +659,25 @@ class MagicSplitStrategy(Strategy):
                 continue
 
             positions = portfolio.positions[ticker]
-            if len(positions) >= self.max_splits_limit:
-                continue
+            if self.uses_fixed_slots:
+                # 규칙 7: 그날 이 종목을 샀으면(신규·재진입 포함) 추가 매수하지 않는다.
+                if self._opened_on_or_after(positions, current_date):
+                    continue
+                add_target = self._fixed_slot_add_target(positions)
+                if add_target is None:
+                    continue
+                target_order, anchor_position = add_target
+            else:
+                if len(positions) >= self.max_splits_limit:
+                    continue
 
-            first_position = next((p for p in positions if p.order == 1), None)
-            if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
-                continue
+                first_position = next((p for p in positions if p.order == 1), None)
+                if first_position is None or first_position.open_date is None or first_position.open_date >= current_date:
+                    continue
+                target_order, anchor_position = len(positions) + 1, positions[-1]
 
             eligible_tickers.append(ticker)
-            eligible_positions[ticker] = positions
+            eligible_positions[ticker] = (positions, target_order, anchor_position)
 
         signal_rows_by_ticker = {}
         get_stock_rows_as_of = getattr(data_handler, "get_stock_rows_as_of", None)
@@ -630,7 +693,7 @@ class MagicSplitStrategy(Strategy):
 
         # 추가 매수 신호 생성 로직
         for ticker in eligible_tickers:
-            positions = eligible_positions[ticker]
+            positions, target_order, anchor_position = eligible_positions[ticker]
             if ticker in signal_rows_by_ticker:
                 signal_row = signal_rows_by_ticker[ticker]
             else:
@@ -648,19 +711,21 @@ class MagicSplitStrategy(Strategy):
             if signal_close <= 0 or signal_low <= 0:
                 continue
 
-            last_pos = portfolio.positions[ticker][-1]
+            # legacy: 번호가 가장 큰 차수, fixed_slot_v1: 대상 차수 바로 앞 차수(규칙 3).
             buy_trigger_price = self._mul_f32(
-                last_pos.buy_price,
+                anchor_position.buy_price,
                 np.float32(1.0) - np.float32(self.additional_buy_drop_rate),
             )
-            
+
             if signal_low <= buy_trigger_price:
                 if self.investment_per_order > 0:
-                    new_pos = Position(signal_close, 0, len(portfolio.positions[ticker]) + 1, self.additional_buy_drop_rate, self.sell_profit_rate)
+                    if self.uses_fixed_slots:
+                        self._require_free_slot(ticker, positions, target_order)
+                    new_pos = Position(signal_close, 0, target_order, self.additional_buy_drop_rate, self.sell_profit_rate)
                     if self.additional_buy_priority == "lowest_order":
-                        sort_metric = len(portfolio.positions[ticker])
+                        sort_metric = len(positions)
                     elif self.additional_buy_priority == "highest_drop":
-                        sort_metric = -((last_pos.buy_price - signal_close) / last_pos.buy_price)
+                        sort_metric = -((anchor_position.buy_price - signal_close) / anchor_position.buy_price)
                     else:
                         raise ValueError(
                             "Unsupported additional_buy_priority="

@@ -122,6 +122,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - `cooldown_period_days`: 재진입 쿨다운(거래일)
 - `stop_loss_rate`: 손절 기준 (음수)
 - `max_splits_limit`: 최대 분할 매수 단계
+- `split_slot_policy`: 차수 번호·빈칸 처리 규칙 (`legacy` 기본 | `fixed_slot_v1` CPU 전용, GPU 경로는 거부). [명세](todos/2026_11_15-fixed-split-slot-v1.md)
 - `max_inactivity_period`: 비활성 청산 기간(거래일)
 
 **Note (`additional_buy_priority`):**

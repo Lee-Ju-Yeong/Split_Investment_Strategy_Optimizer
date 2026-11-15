@@ -48,6 +48,7 @@ _STRATEGY_PARAM_KEYS = {
     "min_tier12_coverage_ratio",
     "tier_hysteresis_mode",
     "candidate_lookup_error_policy",
+    "split_slot_policy",
 }
 
 _EXECUTION_PARAM_KEYS = {
