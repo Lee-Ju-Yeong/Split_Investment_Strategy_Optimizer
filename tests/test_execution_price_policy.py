@@ -1,15 +1,13 @@
-import json
 import os
 import sys
-import tempfile
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src import main_backtest
+# CPU 고정 검사(requirements-review.txt)에서 돌므로 yaml이 필요한 main_backtest는 가져오지 않는다.
+# 진입점 허용 목록·실행 기록 검사는 tests/test_main_backtest_execution_policy.py에 있다.
 from src.backtest.cpu.execution import BasicExecutionHandler
 from src.backtest.cpu.portfolio import Portfolio, Position
 from src.backtest.cpu.strategy import MagicSplitStrategy
@@ -49,24 +47,6 @@ class TestSellPriceTickRoundingKey(unittest.TestCase):
                 normalize_sell_price_tick_rounding(value)
         with self.assertRaises(ValueError):
             BasicExecutionHandler(sell_price_tick_rounding="floor")
-
-    def test_cpu_entry_point_forwards_the_key(self):
-        self.assertIn("sell_price_tick_rounding", main_backtest._EXECUTION_PARAM_KEYS)
-
-    def test_run_manifest_records_applied_value(self):
-        with tempfile.TemporaryDirectory() as result_dir:
-            path = main_backtest._write_run_manifest(
-                result_dir=result_dir,
-                strategy_params={},
-                backtest_settings={"start_date": "2024-01-02", "end_date": "2024-01-03"},
-                universe_mode="optimistic_survivor",
-                price_basis="adjusted",
-                adjusted_gate="2013-11-20",
-                sell_price_tick_rounding="down",
-            )
-            with open(path, encoding="utf-8") as f:
-                manifest = json.load(f)
-        self.assertEqual(manifest["execution_policy"], {"sell_price_tick_rounding": "down"})
 
 
 class TestTickPriceFunctions(unittest.TestCase):
