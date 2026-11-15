@@ -9,6 +9,21 @@ import numpy as np
 import logging
 from .portfolio import Trade, Position
 
+try:
+    from ...execution_price_policy import (
+        adjust_price_up,
+        adjust_sell_price,
+        get_tick_size,
+        normalize_sell_price_tick_rounding,
+    )
+except ImportError:  # pragma: no cover
+    from execution_price_policy import (  # type: ignore
+        adjust_price_up,
+        adjust_sell_price,
+        get_tick_size,
+        normalize_sell_price_tick_rounding,
+    )
+
 logger = logging.getLogger(__name__)
 
 # --- 타입 힌트를 위한 임포트 ---
@@ -21,28 +36,27 @@ class BasicExecutionHandler:
     def __init__(self,
                  buy_commission_rate=0.00015,
                  sell_commission_rate=0.00015,
-                 sell_tax_rate=0.0018):
+                 sell_tax_rate=0.0018,
+                 sell_price_tick_rounding=None):
         self.buy_commission_rate = buy_commission_rate
         self.sell_commission_rate = sell_commission_rate
         self.sell_tax_rate = sell_tax_rate
+        self.sell_price_tick_rounding = normalize_sell_price_tick_rounding(sell_price_tick_rounding)
 
     def _get_tick_size(self, price):
-        if price < 2000: return 1
-        elif price < 5000: return 5
-        elif price < 20000: return 10
-        elif price < 50000: return 50
-        elif price < 200000: return 100
-        elif price < 500000: return 500
-        else: return 1000
+        return get_tick_size(price)
 
     def _adjust_price_up(self, price):
-        tick_size = self._get_tick_size(price)
-        divided = price / tick_size
-        rounded = round(divided, 5)
-        return math.ceil(rounded) * tick_size
+        return adjust_price_up(price)
+
+    def _adjust_sell_price(self, price):
+        return adjust_sell_price(price, self.sell_price_tick_rounding)
 
     def execute_order(self, order_event: dict, portfolio: 'Portfolio', data_handler: 'DataHandler', current_day_idx):
-        """BUY/SELL 주문을 당일 시가의 호가 단위 올림 가격으로 처리한다.
+        """BUY/SELL 주문을 당일 시가 기준 호가 단위 가격으로 처리한다.
+
+        매수가는 호가 단위 올림이다. 매도가는 `sell_price_tick_rounding`
+        ("up" 기본=올림, "down"=내림, 단 최소 1호가)을 따른다.
 
         금액은 원, 수량은 주다. 매수 수량은 투자금/체결가의 버림이며 수수료까지
         현금으로 낼 수 있어야 한다. 매도 순수취액은 기존 float32 비용 모델로
@@ -161,7 +175,7 @@ class BasicExecutionHandler:
         if is_profit_taking:
             target_price = buy_price * (np.float32(1.0) + sell_profit_rate)
 
-        execution_price = self._adjust_price_up(price_basis)
+        execution_price = self._adjust_sell_price(price_basis)
 
         # 계산 로직은 변경 없음
         quantity = position_to_sell.quantity

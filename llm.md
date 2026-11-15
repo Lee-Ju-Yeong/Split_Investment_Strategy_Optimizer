@@ -151,7 +151,7 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 
 - **Lookahead Bias 절대 금지**: 모든 시뮬레이션은 시간 순서 엄격 준수
 - **float32 정밀도**: CPU-GPU 일관성을 위해 명시적으로 float32 사용
-- **호가 단위**: 모든 체결가는 한국 주식 시장 호가 단위에 맞춰 올림 처리 (`adjust_price_up`)
+- **호가 단위**: 모든 체결가는 한국 주식 시장 호가 단위에 맞춤. 매수는 올림(`adjust_price_up`), 매도는 `execution_params.sell_price_tick_rounding`(`up` 기본=올림, `down`=내림·최소 1호가)을 CPU·GPU가 동일하게 따름 (`src/execution_price_policy.py`)
 - **설정 중앙화**: 모든 매직 넘버는 `config.yaml`에서 관리, 하드코딩 금지
 - **Evidence SSOT**: 모든 전략 승격은 `todos/*.md`에 링크된 결과 리포트와 Parity 검증 증적을 동반해야 함
 
