@@ -136,14 +136,14 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_cpu_split_demo.py` | 합성 매매·현금·입력·외부 연결 없음·CLI·CSV | 20개 |
 | `test_cpu_fixed_split_slot.py` | 차수 번호 규칙: `legacy` 현행 고정, `fixed_slot_v1` 빈칸 채우기·기준가·1차 재진입·추가 매수 우선순위·GPU 실행 설정 전달 | 18개 |
 | `test_cpu_fixed_slot_product_parity.py` | `fixed_slot_v1` 추가 매수 차수·기준 차수를 split-trader V2 `decide` 결과(커밋 `1bd2d32`)와 사례로 대조 | 10개 |
-| `test_research_etf_price_store.py` | ETF 연구 가격 저장소: 행 보존·품질 표시, 분배금·분할 형식 오류 표시, 묶음 단위 교체와 실패 시 이전 묶음 보존 | 11개 |
+| `test_research_etf_price_store.py` | ETF 연구 가격 저장소: 행 보존·품질 표시, 분배금·분할 형식 오류 표시, 묶음 단위 교체와 실패 시 이전 묶음 보존, 폐지 국내 ETF 원천(상장 상태·폐지 표시 행·안전한 XML 읽기) | 23개 |
 | `test_research_etf_kr_universe.py` | 국내 ETF 상장 이력 수집: 월말 캐시, 끝나지 않은 달 제외, 잘린 파일 재수집 | 7개 |
 | `test_research_etf_fx_calendars.py` | 환율·금리 이용 가능 시각(미래 정보 차단), KRX·NYSE 거래일 달력 | 30개 |
 | `test_research_etf_krx_gold.py` | KRX 금현물 일봉 정리: 원본 보존, 동시 실행 잠금, 무한대 값 차단 | 25개 |
-| `test_research_etf_metadata.py` | ETF 분류(레버리지·자산군·지수 묶음·국내 과세 유형)와 D1 유니버스 필터 | 32개 |
+| `test_research_etf_metadata.py` | ETF 분류(레버리지·자산군·지수 묶음·국내 과세 유형)와 D1 유니버스 필터, 폐지 ETF 분류 | 43개 |
 | `test_research_etf_protocol.py` | 연구 프로토콜 JSON 검증·해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 18개 |
 
-최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 + ETF 연구 데이터 123개 = 235개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
+최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 + ETF 연구 데이터 146개 = 258개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
 
 이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/done_2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/done_2026_11_06-cpu-checks-ci.md)에 남깁니다.
 
