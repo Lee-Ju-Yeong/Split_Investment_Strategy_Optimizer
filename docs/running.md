@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 외부 연결 없는 CPU 예제·고정 검사 | Python 3.12, `requirements-review.txt` | [72개·예제 2개 구성과 실행 기록](../tests/README.md#cpu-example). 전체 제품 환경과 구분 |
 | 전체 CPU 실행 | `requirement.txt`의 라이브러리, MySQL, 실행에 맞는 설정·입력 데이터 | 미실행 |
+| GPU 검사 2개 모듈 | CUDA GPU, CuPy·cuDF가 있는 `rapids-env` | 2026-11-15 WSL2·RTX 5060에서 34개 중 31개 통과, 3개는 성능 측정 원본 부재로 실패. [아래 절](#gpu-check) |
 | GPU·WFO 실행 | 별도 CUDA/RAPIDS, CuPy·cuDF, 호환 GPU·드라이버, 데이터·설정 | 미실행 |
 | 실제 수집 | 해당 제공처에 허용된 접근과 인증, DB, 요청 간격·조회 범위 설정 | 미실행 |
 
@@ -16,6 +17,23 @@
 기존 `environment.yml`은 Python 3.9를 지정합니다. 그러나 `src/config_loader.py`의 `str | None` 등 현재 코드에는 더 새로운 Python 문법이 있습니다. 따라서 이 파일만으로 현재 전체 실행 환경이 재현된다고 안내하지 않습니다. 이번에는 기존 환경 파일을 이관하거나 변경하지 않았습니다.
 
 `rapids-env`는 기존 기록에 사용된 환경 이름입니다. 저장소의 `environment.yml`이나 `requirements-review.txt`로 생성되지 않습니다.
+
+<a id="gpu-check"></a>
+## GPU 검사 환경 확인 기록
+
+2026-11-15에 Windows 11 + WSL2 Ubuntu 24.04, GeForce RTX 5060(compute capability 12.0)에서 이미 있던 `rapids-env`로 GPU 검사 두 모듈을 실행했습니다. 새로 설치한 패키지는 없습니다. 주요 구성은 Python 3.10.18, CUDA 런타임 12.9, CuPy 13.5.1, cuDF 25.06.00입니다. RTX 50 시리즈는 CUDA 12.8 이상이 필요합니다.
+
+```bash
+# WSL 안, 저장소 루트에서. conda activate rapids-env 후 python으로 실행해도 같습니다.
+python -m unittest -v tests.test_backtest_strategy_gpu tests.test_cpu_gpu_parity_topk
+```
+
+| 모듈 | 결과 |
+| --- | --- |
+| `tests.test_backtest_strategy_gpu` | 21개 중 18개 통과. 3개는 Git 제외 대상인 `results/issue98_measure/.../summary.json`이 없어 실패 |
+| `tests.test_cpu_gpu_parity_topk` | 13개 모두 통과 |
+
+두 모듈은 DB가 필요 없고 건너뛴 검사는 없습니다. 이 결과를 GPU 탐색·WFO·성능 재측정 검증으로 확대하지 않습니다. 장비·드라이버·패키지 버전, 실패 원인, 하지 않은 범위는 [확인 기록](../todos/2026_11_15-issue20-gpu-env-wsl.md)에, 당시 패키지 목록은 [스냅샷](environments/rapids-env-wsl-rtx5060.yml)에 있습니다.
 
 ## 설정 파일 두 경로
 
