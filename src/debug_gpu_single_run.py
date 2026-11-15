@@ -22,6 +22,7 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
 from .config_loader import load_config
 from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
 from .gpu_execution_policy import build_gpu_execution_params
+from .split_slot_policy import require_gpu_supported_split_slot_policy
 from .price_policy import (
     is_adjusted_price_basis,
     resolve_price_policy,
@@ -45,6 +46,7 @@ config = load_config()
 db_config = config['database']
 backtest_settings = config['backtest_settings']
 strategy_params = config['strategy_params']
+require_gpu_supported_split_slot_policy(strategy_params)
 execution_params = config['execution_params'].copy()
 
 # GPU 커널에 쿨다운 기간 전달을 위해 execution_params에 추가

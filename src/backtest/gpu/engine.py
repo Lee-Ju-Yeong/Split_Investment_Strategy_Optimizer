@@ -11,6 +11,7 @@ import pandas as pd
 
 from ...candidate_runtime_policy import normalize_runtime_candidate_policy
 from ...execution_price_policy import normalize_sell_price_tick_rounding
+from ...split_slot_policy import require_gpu_supported_split_slot_policy
 from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .data import (
     _collect_candidate_rank_metrics_asof,
@@ -282,7 +283,9 @@ def run_magic_split_strategy_on_gpu(
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
-    
+    # 마지막 방어선: 어떤 경로든 CPU 전용 차수 규칙을 실행 설정에 담아 오면 계산하지 않는다.
+    require_gpu_supported_split_slot_policy(execution_params)
+
     # Config from exec_params
     candidate_source_mode, use_weekly_alpha_gate = normalize_runtime_candidate_policy(
         execution_params.get("candidate_source_mode", "tier"),

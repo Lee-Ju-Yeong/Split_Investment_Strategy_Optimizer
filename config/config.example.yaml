@@ -44,7 +44,11 @@ strategy_params:
   stop_loss_rate: -0.15
   max_splits_limit: 10
   max_inactivity_period: 90
-  
+  # 차수 번호·빈칸 처리 규칙 (todos/2026_11_15-fixed-split-slot-v1.md)
+  # - legacy: 기존 결과 재현용 기본값. 새 차수 = 보유 개수+1, 1차가 없으면 추가 매수 중단.
+  # - fixed_slot_v1: 고정 차수 1..N, 가장 낮은 빈칸·바로 앞 차수 기준, 1차 재진입. 현재 CPU 전용(GPU는 거부).
+  split_slot_policy: "legacy"
+
   # [Issue #67/#97] Strict-only runtime candidate policy
   # - runtime 표면은 candidate_source_mode='tier' 하나만 사용합니다.
   # - use_weekly_alpha_gate는 strict-only runtime에서 설정하지 않습니다.

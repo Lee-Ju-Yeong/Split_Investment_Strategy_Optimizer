@@ -17,9 +17,11 @@ from typing import Any, Dict, Tuple
 
 try:
     from ...config_loader import load_config
+    from ...split_slot_policy import require_gpu_supported_split_slot_policy
 except ImportError:  # pragma: no cover
     # Legacy mode: imported as top-level `optimization.*` with `src/` on sys.path.
     from config_loader import load_config
+    from split_slot_policy import require_gpu_supported_split_slot_policy
 
 
 PARAM_ORDER: Tuple[str, ...] = (
@@ -198,6 +200,7 @@ def _get_context() -> _SimulationContext:
 
     backtest_settings = dict(config["backtest_settings"])
     strategy_params = dict(config["strategy_params"])
+    require_gpu_supported_split_slot_policy(strategy_params)
     execution_params_base = dict(config["execution_params"])
 
     db_connection_str = _build_db_connection_str(config["database"])
