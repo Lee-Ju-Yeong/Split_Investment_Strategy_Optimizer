@@ -134,7 +134,7 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_execution_halt_guard.py` | 거래 불가 시가 처리 | 3개 |
 | `test_execution_price_policy.py` | 호가 단위 매수 올림·매도 올림/내림 설정 | 12개 |
 | `test_cpu_split_demo.py` | 합성 매매·현금·입력·외부 연결 없음·CLI·CSV | 20개 |
-| `test_cpu_fixed_split_slot.py` | 차수 번호 규칙: `legacy` 현행 고정, `fixed_slot_v1` 빈칸 채우기·기준가·1차 재진입·추가 매수 우선순위·GPU 거부 | 18개 |
+| `test_cpu_fixed_split_slot.py` | 차수 번호 규칙: `legacy` 현행 고정, `fixed_slot_v1` 빈칸 채우기·기준가·1차 재진입·추가 매수 우선순위·GPU 실행 설정 전달 | 18개 |
 | `test_cpu_fixed_slot_product_parity.py` | `fixed_slot_v1` 추가 매수 차수·기준 차수를 split-trader V2 `decide` 결과(커밋 `1bd2d32`)와 사례로 대조 | 10개 |
 
 최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 = 112개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
