@@ -62,6 +62,7 @@ N은 `max_splits_limit`이다.
   - `test_backtest_strategy_gpu.py`에 커널 단위 검사 4개를 추가했다. 25개 중 22개 통과, 3개는 기존 성능 원본 파일 부재 실패다.
   - `test_cpu_gpu_parity_topk` 13개, `test_gpu_new_entry_signals` 7개, `test_gpu_engine_prep_path` 11개, `test_gpu_price_adjustment` 14개, `test_gpu_execution_policy` 2개 통과.
   - Windows CPU 검사 99개와 예제 2개 통과. `test_wfo_lane_execution`·`test_wfo_cpu_certification`·`test_wfo_holdout_policy` 통과.
+- main 병합(2026-11-15): #119(split-trader V2 대조 10개, 규칙 8 우선순위 3개)와 `tests/README.md` 표만 겹쳐 둘 다 살렸다. 병합 뒤 CPU 검사 112개와 예제 2개 통과, WSL GPU 검사 결과는 위와 같다.
 - 확인하지 않은 것: 실제 DB 기간 데이터로 CPU-GPU 대조(`cpu_gpu_parity_topk` 실행), GPU 탐색 처리 속도 변화. 이 PC에 DB 설정(`config/config.yaml`)이 없다.
 
 ## 이번 단계 범위 밖
