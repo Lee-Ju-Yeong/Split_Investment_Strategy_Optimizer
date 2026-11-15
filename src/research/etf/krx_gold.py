@@ -24,7 +24,8 @@ import hashlib
 import io
 import json
 import math
-import shutil
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,9 +115,12 @@ def _to_number(text: str, *, column: str, line: int) -> float:
     if cleaned in ("", "-"):
         return math.nan
     try:
-        return float(cleaned)
+        value = float(cleaned)
     except ValueError as exc:
         raise KrxGoldFormatError(f"{line}행 {column} 값이 숫자가 아닙니다: {text!r}") from exc
+    if not math.isfinite(value):   # 'inf', 'nan', '1e999' 같은 값은 KRX 원천에 나올 수 없다
+        raise KrxGoldFormatError(f"{line}행 {column} 값이 유한한 숫자가 아닙니다: {text!r}")
+    return value
 
 
 def parse_krx_gold_csv(data: bytes) -> pd.DataFrame:
@@ -168,22 +172,54 @@ def _utc_iso(ts: float | None = None) -> str:
 
 
 def preserve_raw(source: Path, raw_dir: Path, *, move: bool = False) -> SourceFile:
-    """원본 바이트를 그대로 raw_dir에 복사(또는 이동)한다. 같은 이름·다른 내용이면 덮어쓰지 않고 멈춘다."""
+    """원본 바이트를 그대로 raw_dir에 복사(또는 이동)한다. 같은 이름·다른 내용이면 덮어쓰지 않고 멈춘다.
+
+    보존본은 배타적 생성(``open(..., "xb")``)으로만 만든다. 확인과 생성 사이에 다른 실행이 같은 이름을
+    먼저 만들어도 덮어쓰지 않고, 이미 있는 파일의 해시를 비교한다. 원본 삭제는 보존본 해시를 확인한 뒤에만 한다.
+    """
     data = source.read_bytes()
     digest = _sha256(data)
-    downloaded_at = _utc_iso(source.stat().st_mtime)
+    st = source.stat()
+    downloaded_at = _utc_iso(st.st_mtime)
     raw_dir.mkdir(parents=True, exist_ok=True)
     target = raw_dir / source.name
-    if target.exists():
-        if _sha256(target.read_bytes()) != digest:
-            raise FileExistsError(f"raw에 같은 이름의 다른 파일이 있습니다: {target}")
-    else:
-        shutil.copy2(source, target)   # 수정 시각 보존
-        if _sha256(target.read_bytes()) != digest:
-            raise IOError(f"복사본 해시가 원본과 다릅니다: {target}")
-    if move and source.resolve() != target.resolve():
+    same_file = target.exists() and source.resolve() == target.resolve()
+    if not same_file:
+        try:
+            with open(target, "xb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))   # 다운로드 시각(수정 시각) 보존
+        except FileExistsError:
+            pass   # 이미 있으면 아래에서 내용 비교
+    if _sha256(target.read_bytes()) != digest:
+        raise FileExistsError(f"raw에 같은 이름의 다른 파일이 있습니다: {target}")
+    if move and not same_file:
         source.unlink()
     return SourceFile(source.name, digest, len(data), downloaded_at, target)
+
+
+@contextmanager
+def product_lock(out_dir: Path, product: str):
+    """같은 상품 적재를 한 번에 하나만 실행한다(충돌 검사 → raw 보존 → 산출물 게시를 직렬화).
+
+    잠금 파일이 남아 있으면 다른 실행이 진행 중이거나 비정상 종료한 것이다. 진행 중인 실행이 없다면
+    잠금 파일을 지우고 다시 실행한다.
+    """
+    lock = out_dir / f".{product}.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise RuntimeError(
+            f"다른 적재가 진행 중입니다(잠금 파일 {lock}). 진행 중인 실행이 없으면 이 파일을 지우세요."
+        ) from exc
+    try:
+        os.write(fd, f"pid={os.getpid()} started={_utc_iso()}\n".encode())
+        os.close(fd)
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def normalize(
@@ -271,6 +307,9 @@ def quality_checks(
     numeric = ["open", "high", "low", "close", "volume", "value"]
     missing = d[d[numeric].isna().any(axis=1)]
     report["missing_value_dates"] = _dates(missing["date"])
+    # 파서가 막지만, 다른 경로로 만든 표도 검사할 수 있게 무한대 값을 차단 문제로 센다.
+    infinite = d[np.isinf(d[numeric + ["change", "change_pct"]].to_numpy(dtype=float)).any(axis=1)]
+    report["non_finite_value_dates"] = _dates(infinite["date"])
     nonpositive_price = d[(d[list(PRICE_COLUMNS)] <= 0).any(axis=1)]
     report["nonpositive_price_dates"] = _dates(nonpositive_price["date"])
     negative_volume = d[(d[["volume", "value"]] < 0).any(axis=1)]
@@ -333,6 +372,7 @@ def quality_checks(
     }
     issues = (
         report["missing_value_dates"]
+        + report["non_finite_value_dates"]
         + report["nonpositive_price_dates"]
         + report["negative_volume_or_value_dates"]
         + report["ohlc_inconsistent_dates"]
@@ -395,12 +435,36 @@ def ingest(
     etf_path: Path | None = None,
     jump_threshold: float = DEFAULT_JUMP_THRESHOLD,
 ) -> dict:
+    """수동 다운로드 CSV를 적재한다.
+
+    순서: (1) raw 기존 파일 + 새 파일 읽기·검사·병합 → (2) 달력·ETF 읽기와 품질 계산 →
+    (3) 모든 산출물을 임시 파일로 쓰기 → (4) raw 보존(이동) → (5) 임시 파일을 제자리로 교체(manifest 마지막).
+    (1)~(3)에서 실패하면 raw와 기존 산출물은 그대로다. 같은 상품 적재는 잠금으로 한 번에 하나만 돈다.
+    """
+    if product not in PRODUCTS:
+        raise ValueError(f"알 수 없는 상품: {product} (가능: {sorted(PRODUCTS)})")
     out = output_dir(KRX_GOLD_DIR)
+    with product_lock(out, product):
+        return _ingest_locked(
+            files, out=out, product=product, move=move, calendar_path=calendar_path,
+            etf_path=etf_path, jump_threshold=jump_threshold,
+        )
+
+
+def _ingest_locked(
+    files: Sequence[Path],
+    *,
+    out: Path,
+    product: str,
+    move: bool,
+    calendar_path: Path | None,
+    etf_path: Path | None,
+    jump_threshold: float,
+) -> dict:
     raw_dir = out / "raw" / product
     ingested_at = _utc_iso()
 
     # 일봉은 매번 raw에 보존된 모든 파일 + 새 파일로 다시 만든다(일부 기간만 다시 넣어도 이력이 줄지 않는다).
-    # 형식 검사·이름 충돌·중복 날짜 충돌 검사를 모두 통과한 뒤에만 raw로 복사·이동한다.
     def _describe(path: Path) -> tuple[SourceFile, pd.DataFrame]:
         data = path.read_bytes()
         src = SourceFile(path.name, _sha256(data), len(data), _utc_iso(path.stat().st_mtime), raw_dir / path.name)
@@ -412,17 +476,19 @@ def ingest(
         src, frame = _describe(path)
         if src.name in existing and existing[src.name][0].sha256 != src.sha256:
             raise FileExistsError(f"raw에 같은 이름의 다른 파일이 있습니다: {raw_dir / src.name}")
+        clash = [p for p, s, _ in staged if s.name == src.name and s.sha256 != src.sha256]
+        if clash:
+            raise FileExistsError(f"이름이 같고 내용이 다른 입력 파일입니다: {clash[0]}, {path}")
         staged.append((path, src, frame))
     combined = dict(existing)
     for _, src, frame in staged:
         combined.setdefault(src.name, (src, frame))
     daily = normalize(list(combined.values()), product=product, ingested_at_utc=ingested_at)
-    for path, _, _ in staged:
-        preserve_raw(path, raw_dir, move=move)
     parsed = list(combined.values())
     daily_path = out / f"{product}_daily.csv"
-    out_frame = daily.assign(date=daily["date"].dt.strftime("%Y-%m-%d"))
-    out_frame.to_csv(daily_path, index=False, encoding="utf-8")
+    jumps_path = out / f"{product}_jumps.csv"
+    quality_path = out / f"{product}_quality.json"
+    manifest_path = out / f"{product}_manifest.json"
 
     calendar = None
     if calendar_path is None:
@@ -431,8 +497,6 @@ def ingest(
     if calendar_path is not None:
         calendar = load_trading_calendar(calendar_path)
     report, jumps = quality_checks(daily, calendar=calendar, jump_threshold=jump_threshold)
-    jumps_path = out / f"{product}_jumps.csv"
-    jumps.assign(date=jumps["date"].dt.strftime("%Y-%m-%d")).to_csv(jumps_path, index=False)
 
     if etf_path is None:
         try:
@@ -450,8 +514,6 @@ def ingest(
         "checks": report,
         "etf_comparison": {"symbol": ETF_GOLD_SYMBOL, "path": etf_path, **(etf_cmp or {})} if etf_cmp else None,
     }
-    quality_path = out / f"{product}_quality.json"
-    quality_path.write_text(json.dumps(quality, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
     manifest = {
         "product": product,
@@ -478,8 +540,31 @@ def ingest(
             for s, f in parsed
         ],
     }
-    manifest_path = out / f"{product}_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+
+    # 모든 산출물을 같은 폴더의 임시 파일로 먼저 쓴 뒤, raw 보존이 끝나면 한꺼번에 교체한다.
+    # 같은 세대인지는 daily의 ingested_at_utc, quality의 generated_at_utc, manifest의 ingested_at_utc로 확인한다.
+    def _json(obj) -> str:
+        return json.dumps(obj, ensure_ascii=False, indent=2, default=_json_default)
+
+    payloads = [
+        (daily_path, daily.assign(date=daily["date"].dt.strftime("%Y-%m-%d")).to_csv(index=False)),
+        (jumps_path, jumps.assign(date=jumps["date"].dt.strftime("%Y-%m-%d")).to_csv(index=False)),
+        (quality_path, _json(quality)),
+        (manifest_path, _json(manifest)),   # 마지막에 교체: manifest가 바뀌었으면 나머지도 바뀐 것
+    ]
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for final, text in payloads:
+            tmp = final.with_name(f".{final.name}.tmp")
+            tmp.write_text(text, encoding="utf-8", newline="")
+            temps.append((tmp, final))
+        for path, _, _ in staged:
+            preserve_raw(path, raw_dir, move=move)
+        for tmp, final in temps:
+            os.replace(tmp, final)
+    finally:
+        for tmp, _ in temps:
+            tmp.unlink(missing_ok=True)
     return {"manifest": manifest, "quality": quality}
 
 
