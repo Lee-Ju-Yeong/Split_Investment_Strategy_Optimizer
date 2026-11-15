@@ -32,7 +32,7 @@ jobs:
       - name: Install review dependencies
         run: |
           python -m venv .venv-ci
-          .venv-ci/bin/python -m pip install -r requirements-review.txt
+          .venv-ci/bin/python -m pip install -r requirements-review.txt -r requirements-research-etf-calendar.txt
           .venv-ci/bin/python -m pip check
       - name: Record environment
         env:
