@@ -45,6 +45,7 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
+from .split_slot_policy import require_gpu_supported_split_slot_policy
 from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
@@ -602,6 +603,7 @@ def main() -> None:
     from .backtest.gpu.engine import run_magic_split_strategy_on_gpu
 
     config = load_config()
+    require_gpu_supported_split_slot_policy(config.get("strategy_params", {}))
     start_date = _parse_date(args.start_date) if args.start_date else str(config["backtest_settings"]["start_date"])
     end_date = _parse_date(args.end_date) if args.end_date else str(config["backtest_settings"]["end_date"])
     initial_cash = float(args.initial_cash) if args.initial_cash is not None else float(config["backtest_settings"]["initial_cash"])
