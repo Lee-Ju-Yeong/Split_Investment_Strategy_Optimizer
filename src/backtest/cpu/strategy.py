@@ -14,11 +14,13 @@ import uuid
 try:
     from ...candidate_runtime_policy import normalize_runtime_candidate_policy
     from ...data_handler import build_pit_failure_record
+    from ...execution_price_policy import adjust_price_up, get_tick_size
     from ...split_slot_policy import FIXED_SLOT_V1_POLICY, normalize_split_slot_policy
     from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 except ImportError:  # pragma: no cover
     from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
     from data_handler import build_pit_failure_record  # type: ignore
+    from execution_price_policy import adjust_price_up, get_tick_size  # type: ignore
     from split_slot_policy import FIXED_SLOT_V1_POLICY, normalize_split_slot_policy  # type: ignore
     from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
 
@@ -266,26 +268,12 @@ class MagicSplitStrategy(Strategy):
 
     @staticmethod
     def _get_tick_size(price):
-        if price < 2000:
-            return 1
-        if price < 5000:
-            return 5
-        if price < 20000:
-            return 10
-        if price < 50000:
-            return 50
-        if price < 200000:
-            return 100
-        if price < 500000:
-            return 500
-        return 1000
+        return get_tick_size(price)
 
-    @classmethod
-    def _adjust_price_up(cls, price):
-        tick_size = cls._get_tick_size(price)
-        divided = price / tick_size
-        rounded = round(divided, 5)
-        return math.ceil(rounded) * tick_size
+    @staticmethod
+    def _adjust_price_up(price):
+        # 신규 진입 현금 점검용 매수 예상가: 체결(BasicExecutionHandler)과 같은 매수 올림.
+        return adjust_price_up(price)
 
     @staticmethod
     def _mul_f32(a, b):
