@@ -2,6 +2,8 @@
 
 대표 상품의 상품명·네이버 탭·운용사 분류만으로 기대값을 확인한다. 외부 자료·DB·네트워크를 쓰지 않는다.
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -398,6 +400,185 @@ class TestNormalizationAndIO(unittest.TestCase):
         self.assertEqual(s["priced_rows"], 4)
         self.assertEqual(s["leverage_2x_priced_by_market"], {"KR": 1, "US": 1})
         self.assertEqual(s["families_priced"], 2)
+
+
+HISTORY_HEADER = "code,first_name,last_name,index_name,first_seen,last_seen,delisted,flags,has_daily"
+UNIVERSE_ROW = ["KR", "069500", "KODEX 200", "1", "", "", "", "downloaded", "0", "0", "0", "0"]
+
+
+class TestDelistedKr(unittest.TestCase):
+    """폐지 국내 ETF: 같은 classify() 규칙 + KRX 기초지수명으로 탭 추정."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir, ignore_errors=True))
+        (self.dir / "snapshots").mkdir()
+
+    def _history(self, rows, snapshot_rows=None):
+        path = self.dir / "kr_etf_history_scoped.csv"
+        path.write_bytes(("\n".join([HISTORY_HEADER] + rows) + "\n").encode("utf-8-sig"))
+        snap = ["trade_date,ISU_SRT_CD,ISU_ABBRV,TDD_CLSPRC"] + (snapshot_rows or [])
+        (self.dir / "snapshots" / "20240131.csv").write_bytes(("\n".join(snap) + "\n").encode("utf-8-sig"))
+        return path
+
+    def test_infer_tab_from_krx_index(self):
+        cases = {
+            "코스피 200": "2", "MKF 중형 가치": "2", "FnGuide-RAFI 코리아 대형 지수": "2",
+            "S&P KOREA Dividend Opportunity Index": "2", "Akros 한국 HBM 반도체 지수": "2", "KRX/S&P 탄소효율 그린뉴딜지수": "2",
+            "KAP 단기채권 지수(총수익)": "6", "FTSE Korean Government Bond Index(TR)": "6",
+            "S&P GSCI Industrial Metals Select Index(TR)": "5", "FnGuide 철강금속+ 지수": "2",
+            "S&P500 Yen Hedged Index(PR)": "4", "DJ Brazil 20": "4", "MSCI Philippines IMI Index": "4",
+            "SZSE ChiNext Price Index": "", "": "",
+        }
+        for index_name, tab in cases.items():
+            self.assertEqual(md.infer_tab_from_krx_index(index_name), tab, index_name)
+
+    def test_kr_explicit_multiple(self):
+        r = C(kr("486780", "HANARO 200선물레버리지1.5X", "2", lev="1"))
+        self.assertEqual(r["leverage_multiple"], 1.5)
+        self.assertEqual(r["index_family"], C(kr("069500", "KODEX 200", "1"))["index_family"])  # 배수 표시를 뗀 묶음
+        self.assertTrue(r["d1_eligible"])  # 배수 숫자를 규칙이 읽었으므로 힌트 불일치가 아니다
+        self.assertFalse(r["needs_review"])
+        self.assertEqual(C(kr("252670", "KODEX 200선물인버스2X", "3", inv="1", lev="1"))["leverage_multiple"], -2.0)
+        self.assertEqual(C(kr("122630", "KODEX 레버리지", "3", lev="1"))["leverage_multiple"], 2.0)
+        self.assertEqual(C(kr("114800", "KODEX 인버스", "3", inv="1"))["leverage_multiple"], -1.0)
+        self.assertEqual(C(kr("381170", "TIGER 미국테크TOP10 INDXX", "4"))["leverage_multiple"], 1.0)
+
+    def test_family_regressions_found_in_delisted(self):
+        china = C(kr("454180", "KIWOOM 차이나내수소비TOP CSI", "4"))
+        self.assertNotEqual(china["index_family"], "GLOBAL_THEME_CLEAN_ENERGY")  # '내수소비' ≠ 수소
+        self.assertEqual(C(kr("483240", "TIGER 미국나스닥100ETF선물", "4"))["index_family"], "US_NASDAQ100")
+
+    def test_commodity_and_mixed_delisted_not_domestic_equity(self):
+        # Codex 검토 회귀: 추정 탭 5에서 이름 규칙이 국내주식으로 떨어져 국내주식형으로 확정되던 실제 폐지 상품.
+        path = self._history([
+            "139310,TIGER 금속선물(H),TIGER 금속선물(H),S&P GSCI Industrial Metals Select Index(TR),2011-04-29,2024-01-31,True,,True",
+            "166060,KODEX 주식&골드(H),KODEX 주식&골드(H),주식골드지수,2012-10-31,2024-01-31,True,,True",
+            "999991,TIGER 이상한원자재,TIGER 이상한원자재,S&P GSCI Crude Oil,2012-10-31,2024-01-31,True,,True",
+        ])
+        meta = md.build_metadata(md.load_kr_delisted(path)).set_index("symbol")
+        self.assertEqual((meta.loc["139310", "asset_class"], meta.loc["139310", "kr_tax_class"]), ("원자재", "기타"))
+        self.assertEqual((meta.loc["166060", "asset_class"], meta.loc["166060", "kr_tax_class"]), ("혼합", "기타"))
+        # 규칙이 모르는 이름이 추정 탭 5에서 국내주식이 되면 확정하지 않고 검토로 남긴다.
+        self.assertEqual(meta.loc["999991", "asset_class"], "국내주식")
+        self.assertTrue(meta.loc["999991", "needs_review"])
+        self.assertIn("추정한 탭 5", meta.loc["999991", "review_reasons"])
+        # 네이버 실제 탭(생존 ETF)에는 이 검토 사유를 붙이지 않는다(생존 판정 불변).
+        self.assertNotIn("추정한 탭", C(kr("X1", "TIGER 이상한원자재", "5"))["review_reasons"])
+
+    def test_main_fails_without_price_bundle(self):
+        # Codex 검토 회귀: CURRENT가 없으면 가격 대조 없이 쓰지 않는다.
+        history = self._history(["091210,TIGER KRX100,TIGER KRX100,KRX 100,2005-06-30,2024-01-31,True,,True"],
+                                ["2024-01-31,091210,TIGER KRX100,1"])
+        out = self.dir / "etf_metadata.csv"
+        out.write_text("previous\n", encoding="utf-8")
+        data_root = self.dir / "data"
+        (data_root / "prices").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"MAGICSPLIT_ETF_DATA_ROOT": str(data_root)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(FileNotFoundError):
+                md.main(["--universe", str(self._universe()), "--kr-history", str(history), "--output", str(out)])
+        self.assertEqual(out.read_text(encoding="utf-8"), "previous\n")
+
+    def test_load_kr_delisted_maps_hints_tab_and_status(self):
+        path = self._history([
+            "091210,TIGER KRX100,TIGER KRX100,KRX 100,2005-06-30,2024-01-31,True,,True",
+            "123930,KOSEF 인버스,KOSEF 인버스,코스피 200 선물지수,2010-01-29,2024-01-31,True,inverse,True",
+            "486780,HANARO 200선물레버리지1.5X,HANARO 200선물레버리지1.5X,코스피 200 선물지수,2024-07-31,2024-01-31,True,lev2x,True",
+            "137930,마이다스 200커버드콜5%OTM,마이다스 200커버드콜5%OTM,코스피 200 커버드콜 5% OTM,2011-01-31,2024-01-31,True,option,True",
+            "069550,KOSEF50,KOSEF50,코스피 50,2002-10-31,2024-01-31,True,,False",
+            "0001S0,TIGER 26-04 회사채(A+이상)액티브,TIGER 26-04 회사채(A+이상)액티브,KAP 26-04 크레딧 채권,2024-12-31,2024-01-31,True,term,True",
+            "069500,KODEX 200,KODEX 200,코스피 200,2002-10-31,2026-10-31,False,,True",
+        ], snapshot_rows=[
+            "2024-01-31,091210,TIGER KRX100,1", "2024-01-31,123930,KOSEF 인버스,1",
+            "2024-01-31,486780,HANARO 200선물레버리지1.5X,1", "2024-01-31,137930,마이다스 200커버드콜5%OTM,1",
+            "2024-01-31,069550,KOSEF50,1", "2024-01-31,0001S0,TIGER 26-04 회사채(A+이상)액티브,1",
+        ])
+        delisted = md.load_kr_delisted(path, self.dir / "snapshots")
+        self.assertEqual(len(delisted), 6)  # 생존(069500)은 빼고 읽는다
+        meta = md.build_metadata(md.combine_universe(md.load_universe(self._universe()), delisted))
+        self.assertEqual(list(meta.columns), md.OUTPUT_COLUMNS)
+        meta = meta.set_index("symbol")
+        self.assertEqual(meta.loc["069500", "listing_status"], "listed")
+        self.assertEqual(meta.loc["069500", "naver_tab_source"], "naver")
+        krx100 = meta.loc["091210"]
+        self.assertEqual((krx100["listing_status"], krx100["naver_tab"], krx100["naver_tab_source"]),
+                         ("delisted", "2", "krx_index_name"))
+        self.assertEqual((krx100["asset_class"], krx100["index_family"], krx100["kr_tax_class"]),
+                         ("국내주식", meta.loc["069500", "index_family"], "국내주식형"))
+        self.assertTrue(krx100["d1_eligible"])
+        self.assertEqual(meta.loc["123930", "d1_exclusion_reasons"], "inverse")
+        self.assertEqual(meta.loc["486780", "leverage_multiple"], 1.5)
+        self.assertTrue(meta.loc["486780", "d1_eligible"])
+        self.assertEqual(meta.loc["137930", "d1_exclusion_reasons"], "options_strategy")
+        self.assertFalse(meta.loc["069550", "has_price_history"])  # Naver 빈 응답
+        self.assertEqual(meta.loc["0001S0", "asset_class"], "채권")
+        self.assertEqual(meta.loc["0001S0", "name"], "TIGER 26-04 회사채(A+이상)액티브")  # 한글·기호 보존
+
+    def _universe(self):
+        path = self.dir / "universe.csv"
+        rows = [",".join(md.REQUIRED_COLUMNS), ",".join(UNIVERSE_ROW)]
+        path.write_bytes(("\n".join(rows) + "\n").encode("utf-8-sig"))
+        return path
+
+    def test_unresolved_flag_hint_fails_closed_for_delisted(self):
+        # 이력표 flags는 인버스인데 이름 규칙이 못 잡으면 생존 ETF와 같이 D1에서 뺀다.
+        path = self._history(["999990,ARIRANG 숏전략,ARIRANG 숏전략,코스피 200,2010-01-29,2024-01-31,True,inverse,True"])
+        meta = md.build_metadata(md.load_kr_delisted(path))
+        self.assertIn("inverse_hint_unresolved", meta.loc[0, "d1_exclusion_reasons"])
+        self.assertTrue(meta.loc[0, "needs_review"])
+
+    def test_load_kr_delisted_rejects_bad_names_and_flags(self):
+        good = "091210,TIGER KRX100,TIGER KRX100,KRX 100,2005-06-30,2024-01-31,True,,True"
+        snapshot = ["2024-01-31,091210,TIGER KRX100(구),1"]
+        with self.assertRaises(ValueError):  # 마지막 스냅샷 이름과 다름
+            md.load_kr_delisted(self._history([good], snapshot), self.dir / "snapshots")
+        with self.assertRaises(ValueError):  # 대체 문자
+            md.load_kr_delisted(self._history(["091210,TIGER �,TIGER �,KRX 100,2005-06-30,2024-01-31,True,,True"]))
+        with self.assertRaises(ValueError):  # 모르는 flags
+            md.load_kr_delisted(self._history([good.replace("True,,True", "True,weird,True")]))
+        with self.assertRaises(FileNotFoundError):  # 대조할 스냅샷 파일이 없음
+            md.load_kr_delisted(self._history([good.replace("2024-01-31", "2023-12-31")]), self.dir / "snapshots")
+        with self.assertRaises(ValueError):  # 폐지 행 없음
+            md.load_kr_delisted(self._history([good.replace(",True,,True", ",False,,True")]))
+
+    def test_combine_rejects_symbol_in_both_lists(self):
+        delisted = md.load_kr_delisted(self._history(["069500,KODEX 200,KODEX 200,코스피 200,2002-10-31,2024-01-31,True,,True"]))
+        with self.assertRaises(ValueError):
+            md.combine_universe(md.load_universe(self._universe()), delisted)
+
+    def _bundle(self, kr_rows):
+        bundle = self.dir / "bundle"
+        bundle.mkdir(exist_ok=True)
+        pd.DataFrame(kr_rows, columns=["symbol", "listing_status"]).to_csv(bundle / "kr_inventory.csv", index=False)
+        return bundle
+
+    def test_check_price_bundle(self):
+        path = self._history(["091210,TIGER KRX100,TIGER KRX100,KRX 100,2005-06-30,2024-01-31,True,,True",
+                              "069550,KOSEF50,KOSEF50,코스피 50,2002-10-31,2024-01-31,True,,False"])
+        meta = md.build_metadata(md.combine_universe(md.load_universe(self._universe()), md.load_kr_delisted(path)))
+        ok = self._bundle([["069500", "listed"], ["091210", "delisted"]])
+        self.assertEqual(md.check_price_bundle(meta, ok), {"KR": 2})
+        for rows in ([["069500", "listed"]],                                           # 폐지 ETF가 가격에 없음
+                     [["069500", "listed"], ["091210", "delisted"], ["069550", "delisted"]],  # 가격에만 있음
+                     [["069500", "listed"], ["091210", "listed"]]):                    # 상장 상태가 다름
+            with self.assertRaises(ValueError, msg=rows):
+                md.check_price_bundle(meta, self._bundle(rows))
+
+    def test_main_writes_delisted_rows_and_fails_closed_on_bundle_mismatch(self):
+        history = self._history(["091210,TIGER KRX100,TIGER KRX100,KRX 100,2005-06-30,2024-01-31,True,,True"],
+                                ["2024-01-31,091210,TIGER KRX100,1"])
+        out = self.dir / "etf_metadata.csv"
+        args = ["--universe", str(self._universe()), "--kr-history", str(history), "--output", str(out)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            md.main(args + ["--prices-bundle", str(self._bundle([["069500", "listed"], ["091210", "delisted"]]))])
+        written = pd.read_csv(out, dtype={"symbol": str}, encoding="utf-8-sig").set_index("symbol")
+        self.assertEqual(written.loc["091210", "listing_status"], "delisted")
+        self.assertEqual(written.loc["091210", "name"], "TIGER KRX100")
+        before = out.read_bytes()
+        with self.assertRaises(ValueError), contextlib.redirect_stdout(io.StringIO()):
+            md.main(args + ["--prices-bundle", str(self._bundle([["069500", "listed"]]))])
+        self.assertEqual(out.read_bytes(), before)  # 대조 실패면 기존 산출물을 그대로 둔다
 
 
 if __name__ == "__main__":
