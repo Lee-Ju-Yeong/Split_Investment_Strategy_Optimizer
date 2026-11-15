@@ -9,11 +9,11 @@ KRX 로그인이 필요하다. pykrx>=1.2가 환경 변수 KRX_ID·KRX_PW로 로
 이 모듈은 계정 정보를 읽거나 기록하지 않고, 두 변수가 있는지만 확인한다.
 
 실행(저장소 루트, pykrx>=1.2 환경):
-    python -m src.research.etf.kr_universe collect --start 2002-10 --end 2026-11
+    python -m src.research.etf.kr_universe collect --start 2002-10
     python -m src.research.etf.kr_universe build
 
 출력: $MAGICSPLIT_ETF_DATA_ROOT/kr_universe/
-    snapshots/YYYYMMDD.csv   날짜별 원자료(재실행 시 있는 날짜는 건너뜀)
+    snapshots/YYYYMMDD.csv   월말 원자료(재실행 시 온전한 파일은 건너뜀, 끝나지 않은 달은 받지 않음)
     collect_manifest.json    수집 기록
     kr_etf_history.csv       종목별 처음·마지막 확인일, 이름, 폐지 여부
 """
@@ -42,7 +42,9 @@ CANARY_DATE = "20210325"
 CANARY_DELISTED_CODE = "295820"
 
 NUMERIC_COLUMNS = ("TDD_CLSPRC", "ACC_TRDVOL", "ACC_TRDVAL", "MKTCAP", "LIST_SHRS", "NAV")
-MAX_HOLIDAY_STEPBACK_DAYS = 10
+# KRX는 휴장일에도 그날 기준 상장 목록을 준다(가격 칸만 '-'). 그래서 빈 응답은 휴장이 아니라
+# 실패로 보고 같은 날짜를 다시 요청한다. 다른 날짜로 대신하지 않는다.
+EMPTY_RESPONSE_RETRIES = 3
 
 
 def month_end_dates(start_month: str, end_month: str) -> list[dt.date]:
@@ -92,42 +94,82 @@ def _check_canary(fetch=fetch_all_etf_quotes) -> None:
         )
 
 
+def _previous_manifest_rows(out: Path) -> dict[str, int]:
+    path = out / MANIFEST_FILE
+    if not path.exists():
+        return {}
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {r["file"]: r["rows"] for r in old.get("snapshots", []) if r.get("file") and r.get("rows")}
+
+
+def _cached_rows(path: Path, expected_rows: int | None) -> int | None:
+    """저장된 스냅샷이 온전하면 행 수, 아니면 None(다시 받는다)."""
+    try:
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        return None
+    if df.empty or "ISU_SRT_CD" not in df.columns or df["ISU_SRT_CD"].isna().any():
+        return None
+    if expected_rows is not None and len(df) != expected_rows:
+        return None
+    return len(df)
+
+
+def _write_atomic(df: pd.DataFrame, path: Path) -> None:
+    """임시 파일에 다 쓴 뒤 교체한다. 중단돼도 부분 파일이 정상 스냅샷으로 남지 않는다."""
+    tmp = path.with_name(path.name + ".tmp")
+    df.to_csv(tmp, index=False, encoding="utf-8-sig")
+    os.replace(tmp, path)
+
+
 def collect(start_month: str, end_month: str, out: Path, delay: float = 1.0,
-            fetch=fetch_all_etf_quotes, check_canary: bool = True) -> dict:
-    """월말마다(휴장이면 직전 거래일) 전종목 시세를 받아 snapshots/에 저장한다."""
+            fetch=fetch_all_etf_quotes, check_canary: bool = True,
+            today: dt.date | None = None) -> dict:
+    """끝난 달의 말일마다 전종목 시세(상장 목록)를 받아 snapshots/에 저장한다.
+
+    말일이 오늘 이후인 달은 아직 목록이 확정되지 않았으므로 받지 않는다. 월말 전 자료가
+    그 달 확정본처럼 캐시에 남아 이후 상장·폐지를 놓치는 것을 막는다.
+    """
+    today = today or dt.date.today()
     snap_dir = out / SNAPSHOT_SUBDIR
     snap_dir.mkdir(parents=True, exist_ok=True)
     if check_canary:
         _check_canary(fetch)
+    expected = _previous_manifest_rows(out)
 
     records = []
     for target in month_end_dates(start_month, end_month):
-        existing = sorted(snap_dir.glob(f"{target:%Y%m}*.csv"))
-        if existing:
-            records.append({"target": target.isoformat(), "file": existing[-1].name, "status": "cached"})
+        name = f"{target:%Y%m%d}.csv"
+        if target >= today:
+            records.append({"target": target.isoformat(), "status": "month_not_complete"})
+            print(f"{target}: 아직 끝나지 않은 달이라 건너뜀", flush=True)
             continue
-        found = None
-        for back in range(MAX_HOLIDAY_STEPBACK_DAYS):
-            day = target - dt.timedelta(days=back)
-            if day.month != target.month:
-                break
-            df = fetch(day.strftime("%Y%m%d"))
+        path = snap_dir / name
+        if path.exists():
+            rows = _cached_rows(path, expected.get(name))
+            if rows is not None:
+                records.append({"target": target.isoformat(), "file": name, "rows": rows, "status": "cached"})
+                continue
+            print(f"{target}: 저장된 파일이 온전하지 않아 다시 받음", flush=True)
+        df = pd.DataFrame()
+        for _ in range(EMPTY_RESPONSE_RETRIES):
+            df = fetch(target.strftime("%Y%m%d"))
             if delay:
                 time.sleep(delay)
             if not df.empty:
-                found = (day, df)
                 break
-        if found is None:
-            records.append({"target": target.isoformat(), "status": "no_trading_day_found"})
-            print(f"{target}: 거래일 자료 없음", flush=True)
+        if df.empty:
+            records.append({"target": target.isoformat(), "status": "empty_response"})
+            print(f"{target}: 빈 응답({EMPTY_RESPONSE_RETRIES}회). 다시 실행하세요", flush=True)
             continue
-        day, df = found
         df = df.copy()
-        df.insert(0, "trade_date", day.isoformat())
-        name = f"{day:%Y%m%d}.csv"
-        df.to_csv(snap_dir / name, index=False, encoding="utf-8-sig")
+        df.insert(0, "trade_date", target.isoformat())
+        _write_atomic(df, path)
         records.append({"target": target.isoformat(), "file": name, "rows": len(df), "status": "downloaded"})
-        print(f"{day}: ETF {len(df)}개", flush=True)
+        print(f"{target}: ETF {len(df)}개", flush=True)
 
     manifest = {
         "source": "KRX data.krx.co.kr MDCSTAT04301 ([13101] ETF 전종목 시세) via pykrx",
@@ -135,11 +177,18 @@ def collect(start_month: str, end_month: str, out: Path, delay: float = 1.0,
         "run_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "start_month": start_month,
         "end_month": end_month,
-        "rule": "매월 말일, 휴장이면 같은 달 안에서 직전 거래일",
+        "rule": "끝난 달의 말일(휴장일이어도 그날 기준 상장 목록). 빈 응답은 같은 날짜로 재시도",
         "snapshots": records,
     }
-    (out / MANIFEST_FILE).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = out / (MANIFEST_FILE + ".tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, out / MANIFEST_FILE)
     return manifest
+
+
+def _previous_month(today: dt.date) -> str:
+    first = today.replace(day=1)
+    return (first - dt.timedelta(days=1)).strftime("%Y-%m")
 
 
 def _pykrx_version() -> str | None:
@@ -205,7 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("collect", help="월말 전종목 시세 스냅샷 수집(KRX 로그인 필요)")
     c.add_argument("--start", default="2002-10", help="YYYY-MM (ETF 시장 개설 2002-10)")
-    c.add_argument("--end", default=dt.date.today().strftime("%Y-%m"), help="YYYY-MM")
+    c.add_argument("--end", default=_previous_month(dt.date.today()),
+                   help="YYYY-MM (기본: 지난달. 끝나지 않은 달은 지정해도 받지 않음)")
     c.add_argument("--delay", type=float, default=1.0, help="요청 사이 대기 초")
     sub.add_parser("build", help="스냅샷에서 상장·폐지 이력 생성(로그인 불필요)")
     args = parser.parse_args(argv)
