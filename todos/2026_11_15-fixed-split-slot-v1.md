@@ -49,6 +49,7 @@ N은 `max_splits_limit`이다.
 - 추가 매수: [strategy.py](../src/backtest/cpu/strategy.py)의 `generate_additional_buy_signals`가 정책에 따라 (대상 차수, 기준 차수)를 고른다. `legacy`는 `len+1`·마지막 차수로 기존 계산을 그대로 둔다.
 - 1차 재진입: `generate_new_entry_signals`가 1차가 빈 보유 종목을 후보에 포함하고, 재진입은 `max_stocks` 자리 수에 세지 않는다. 거래 사유는 `1차 재진입`.
 - 검사: [test_cpu_fixed_split_slot.py](../tests/test_cpu_fixed_split_slot.py) 15개. `legacy` 고정 4개, `fixed_slot_v1` 9개(여러 종목 재진입 1개 포함), GPU 거부 2개(정책 함수, 공통 실행 설정). `run_cpu_checks.py`에 추가해 전체 87개·예제 2개 통과(Windows·Python 3.11.9, 2026-11-15). 기존 `test_gpu_execution_policy.py` 2개도 통과. 실행 도구 자체 검사 24개 중 프로세스 신호·자식 정리 관련 2개(실패 2·오류 2)는 이 Windows PC에서 main 기준으로도 똑같이 실패해 이번 변경과 무관하다. CI(ubuntu)에서 다시 확인한다.
+- main 병합(2026-11-15): #117(매도 체결가 반올림 설정 `sell_price_tick_rounding`)과 import·검사 개수가 겹쳐 둘 다 살려 합쳤다. 병합 뒤 CPU 검사 99개·예제 2개 통과, WSL GPU 검사 34개 중 31개 통과(기존 실패 3개 동일).
 - 확인하지 않은 것: 규칙 8(`highest_drop` 우선순위) 전용 테스트, 실제 DB 기간 백테스트에서 `legacy`와 `fixed_slot_v1`의 성과 차이, GPU.
 
 ## 이번 단계 범위 밖
