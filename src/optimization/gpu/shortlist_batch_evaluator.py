@@ -111,6 +111,8 @@ def _build_runtime_contract(
         "candidate_source_mode": run_exec_params.get("candidate_source_mode"),
         "use_weekly_alpha_gate": bool(run_exec_params.get("use_weekly_alpha_gate", False)),
         "tier_hysteresis_mode": run_exec_params.get("tier_hysteresis_mode"),
+        # 한 GPU 배치는 실행 설정 하나를 공유하므로 후보마다 차수 규칙이 같아야 한다.
+        "split_slot_policy": run_exec_params.get("split_slot_policy"),
         "min_liquidity_20d_avg_value": int(
             params_dict.get("min_liquidity_20d_avg_value", 0) or 0
         ),

@@ -45,7 +45,10 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.strategy import MagicSplitStrategy
 from .config_loader import load_config
 from .data_handler import DataHandler
-from .split_slot_policy import require_gpu_supported_split_slot_policy
+from .split_slot_policy import (
+    apply_split_slot_policy_to_gpu_execution_params,
+    require_gpu_supported_split_slot_policy,
+)
 from .tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .optimization.gpu.data_loading import (
     preload_all_data_to_gpu as preload_all_data_to_gpu_shared,
@@ -673,6 +676,7 @@ def main() -> None:
     exec_params["cooldown_period_days"] = config.get("strategy_params", {}).get("cooldown_period_days", 5)
     exec_params["candidate_source_mode"] = "tier"
     exec_params["parity_mode"] = str(args.parity_mode).strip().lower()
+    apply_split_slot_policy_to_gpu_execution_params(exec_params, config.get("strategy_params", {}))
     exec_params["tier_hysteresis_mode"] = normalize_tier_hysteresis_mode(
         config.get("strategy_params", {}).get("tier_hysteresis_mode", "strict_hysteresis_v1")
     )
