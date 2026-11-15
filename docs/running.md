@@ -6,7 +6,7 @@
 
 | 범위 | 환경과 의존성 | 이번 확인 |
 | --- | --- | --- |
-| 외부 연결 없는 CPU 예제·고정 검사 | Python 3.12, `requirements-review.txt` | [99개·예제 2개 구성과 실행 기록](../tests/README.md#cpu-example). 전체 제품 환경과 구분 |
+| 외부 연결 없는 CPU 예제·고정 검사 | Python 3.12, `requirements-review.txt` | [112개·예제 2개 구성과 실행 기록](../tests/README.md#cpu-example). 전체 제품 환경과 구분 |
 | 전체 CPU 실행 | `requirement.txt`의 라이브러리, MySQL, 실행에 맞는 설정·입력 데이터 | 미실행 |
 | GPU 검사 2개 모듈 | CUDA GPU, CuPy·cuDF가 있는 `rapids-env` | 2026-11-15 WSL2·RTX 5060에서 34개 중 31개 통과, 3개는 성능 측정 원본 부재로 실패. [아래 절](#gpu-check) |
 | GPU·WFO 실행 | 별도 CUDA/RAPIDS, CuPy·cuDF, 호환 GPU·드라이버, 데이터·설정 | 미실행 |
