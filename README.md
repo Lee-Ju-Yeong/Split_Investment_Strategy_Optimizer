@@ -79,7 +79,7 @@ CPU 예제는 실제 엔진·전략·체결·자산 계산을 사용합니다. �
 
 | 자동 검사 | 확인하는 범위 | 실행 기록 |
 | --- | --- | --- |
-| CPU 기본 검사 | 기존 34개·관련 CPU 18개·예제 검사 20개·체결가 호가 검사 12개·차수 규칙 15개 = 99개와 예제 2개, 실행 도구 자체 24개. 누락·건너뜀도 실패 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml) |
+| CPU 기본 검사 | 기존 34개·관련 CPU 18개·예제 검사 20개·체결가 호가 검사 12개·차수 규칙 18개·제품 대조 10개 = 112개와 예제 2개, 실행 도구 자체 24개. 누락·건너뜀도 실패 | [CPU checks](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/cpu-checks.yml) |
 | 격리 DB 통합 검사 | 매번 새 MySQL의 합성 CPU 시나리오 3개, 연결 제한·실패 처리 14개 | [DB integration](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/db-integration.yml) |
 | 문서 화면 검사 | Jekyll 생성·주요 링크·한국어 정보·넓은/좁은 화면·키보드 탐색 | [Docs preview](https://github.com/Lee-Ju-Yeong/Split_Investment_Strategy_Optimizer/actions/workflows/docs-preview.yml) |
 

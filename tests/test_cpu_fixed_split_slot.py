@@ -326,5 +326,60 @@ class FixedSlotV1Tests(unittest.TestCase):
                 build_gpu_execution_params(base, params, "strict_pit")
 
 
+# 규칙 8용 두 번째 종목: D1 1차 10000, D4 저가·종가 8200(1차 대비 18% 하락), D5 시가 8200.
+# 고가가 1차 익절가 11000에 닿지 않고, D4 전에는 저가가 트리거 9500보다 높아 추가 매수가 없다.
+PRIORITY_PEER = ((10000, 10000, 10000, 10000),) * 4 + ((9000, 9000, 8200, 8200),) + ((8200, 8200, 8200, 8200),) * 2
+
+
+class FixedSlotAdditionalBuyPriorityTests(unittest.TestCase):
+    """규칙 8: 현금이 한 종목 몫만 있을 때 additional_buy_priority가 먼저 살 종목을 정한다.
+
+    A001 = INTERIOR_GAP → D5 시점 보유 {1, 3}, 대상 2차, 기준 1차 10000, D4 종가 8000 → 하락률 20%.
+    (번호가 가장 큰 3차 9500을 기준으로 잘못 잡으면 15.8%라 B001보다 작아진다.)
+    B001 = PRIORITY_PEER → D5 시점 보유 {1}, 대상 2차, 기준 1차 10000, D4 종가 8200 → 하락률 18%.
+    max_stocks=2로 두 종목이 D1에 함께 들어온다. 신호일(D4) 저가는 둘 다 트리거 9500 이하다.
+    """
+
+    TIERS = {"A001": ALL_TIER1, "B001": ALL_TIER1}
+
+    def run_priority(self, priority, ratio):
+        strategy = build_strategy("fixed_slot_v1", max_stocks=2, order_investment_ratio=ratio,
+                                  additional_buy_priority=priority)
+        portfolio = run_multi({"A001": INTERIOR_GAP, "B001": PRIORITY_PEER}, self.TIERS, strategy)
+        return [(t.code, t.date.strftime("%Y-%m-%d"), t.trade_type, int(t.order),
+                 int(t.buy_price if t.trade_type == "BUY" else t.sell_price), int(t.quantity))
+                for t in portfolio.trade_history]
+
+    # 주문 금액 22만원(1,000,000 × 0.22). 수수료 0.015% 내림, 매도세 0.18%.
+    # D1 A001·B001 1차 22주@10000 (각 220,033) → 현금 559,934.
+    # D2 A001 2차 24주@9000 (216,032) → 343,902. D3 A001 3차 23주@9500 (218,532) → 125,370.
+    # D4 A001 2차 익절 24주@10000 (+239,532) → 364,902. 같은 날 매도라 A001 추가 매수 없음(규칙 7).
+    # D5 둘 다 2차 대상이지만 현금 364,902로는 한 종목만 산다.
+    SETUP = [
+        ("A001", D[1], "BUY", 1, 10000, 22), ("B001", D[1], "BUY", 1, 10000, 22),
+        ("A001", D[2], "BUY", 2, 9000, 24), ("A001", D[3], "BUY", 3, 9500, 23),
+        ("A001", D[4], "SELL", 2, 10000, 24),
+    ]
+
+    def test_lowest_order_buys_ticker_with_fewer_held_orders(self):
+        # B001(보유 1개)이 A001(보유 2개)보다 먼저: 26주@8200(213,231) → 현금 151,671.
+        # A001은 27주@8000(216,032)이 필요해 D5·D6 모두 현금 부족으로 체결되지 않는다.
+        self.assertEqual(self.run_priority("lowest_order", 0.22),
+                         self.SETUP + [("B001", D[5], "BUY", 2, 8200, 26)])
+
+    def test_highest_drop_uses_previous_order_as_anchor(self):
+        # A001 하락률 20%(기준 1차) > B001 18% → A001 먼저: 27주@8000(216,032) → 현금 148,870.
+        # B001은 213,231이 필요해 체결되지 않는다. 3차를 기준으로 썼다면 B001이 먼저였다.
+        self.assertEqual(self.run_priority("highest_drop", 0.22),
+                         self.SETUP + [("A001", D[5], "BUY", 2, 8000, 27)])
+
+    def test_both_buy_in_priority_order_when_cash_is_ample(self):
+        # 대조군: 주문 금액 10만원이면 D5에 둘 다 사고, 체결 순서가 우선순위를 그대로 보여 준다.
+        for priority, first, second in (("lowest_order", "B001", "A001"), ("highest_drop", "A001", "B001")):
+            with self.subTest(priority=priority):
+                d5_buys = [row[0] for row in self.run_priority(priority, 0.1) if row[1] == D[5]]
+                self.assertEqual(d5_buys, [first, second])
+
+
 if __name__ == "__main__":
     unittest.main()
