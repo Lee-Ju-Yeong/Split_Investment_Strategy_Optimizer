@@ -51,13 +51,16 @@
   인버스·커버드콜 포함). 해외주식·채권·혼합·원자재·금·통화·단기금리·국내외주식은 기타.
   합성(스왑)·단일종목 레버리지·국내 리츠는 분류가 불확실해 needs_review.
 - `d1_eligible`, `d1_exclusion_reasons`: 계획 D1의 상품 성격 필터만 적용한다(인버스·ETN·옵션 전략·
-  3배 이상 제외, 2배까지 포함, 배수 미확인 제외). 이력 3년·거래대금 조건은 가격 자료로 따로 계산한다.
+  3배 이상 제외, 2배까지 포함, 배수 미확인 제외). 원천 이름 힌트(인버스·레버리지·옵션)는 1인데 규칙이 0이면
+  규칙이 놓친 제외 대상일 수 있으므로 `*_hint_unresolved`로 제외하고 needs_review로 남긴다. 이력 3년·거래대금 조건은 가격 자료로 따로 계산한다.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -109,6 +112,8 @@ def load_universe(path: str | Path) -> pd.DataFrame:
     dup = df[df.duplicated(["market", "symbol"], keep=False)]
     if len(dup):
         raise ValueError(f"(market, symbol) 중복: {dup[['market', 'symbol']].values.tolist()[:5]}")
+    if df.empty:
+        raise ValueError(f"유니버스 CSV에 데이터 행이 없습니다: {path}")
     return df
 
 
@@ -177,7 +182,8 @@ def _name_key(text: str) -> str:
 # 배수·인버스·ETN·옵션·선물
 # ---------------------------------------------------------------------------
 _US_OPTIONS = re.compile(
-    r"COVERED CALL|BUY-?WRITE|\bBUFFER\b|PREMIUM INCOME|OPTION INCOME|\bOPTIONS?\b|AUTOCALLABLE|DEFINED OUTCOME|"
+    # BUFFER는 접두어·숫자가 붙는 이름이 많아(Buffer10, Buffer100, Buffered, DynaBuffer) 단어 경계를 두지 않는다.
+    r"COVERED CALL|BUY-?WRITE|BUFFER|PREMIUM INCOME|OPTION INCOME|\bOPTIONS?\b|AUTOCALLABLE|DEFINED OUTCOME|"
     r"EQUITY PREMIUM|\bCOLLAR\b|PUT ?WRITE|HIGH INCOME ETF|TARGET INCOME|YIELDMAX|\bFLOOR\b|\bBARRIER\b|0DTE"
 )
 _KR_OPTIONS = re.compile(r"커버드콜|버퍼|목표헤지|콜옵션|풋옵션")
@@ -215,7 +221,10 @@ def classify_leverage(market: str, name: str, issuer: str) -> tuple[float | None
         return 1.0, False, reasons
 
     # 일반 규칙(가격 자료가 없는 다른 운용사 상품에 주로 해당)
-    inverse = bool(re.search(r"\b(INVERSE|BEAR|BEARISH)\b", up))
+    if re.search(r"LONG/SHORT|LONG-SHORT", up):
+        reasons.append("롱숏 전략: 순 노출 배수가 이름 규칙으로 정해지지 않음")
+        return None, False, reasons
+    inverse =bool(re.search(r"\b(INVERSE|BEAR|BEARISH)\b", up))
     short_word = bool(re.search(r"\bSHORT\b", up)) and not _US_SHORT_NON_INVERSE.search(up) \
         and not re.search(r"ULTRA[- ]SHORT|LONG/SHORT|LONG-SHORT", up)
     inverse = inverse or short_word
@@ -886,14 +895,25 @@ def classify(row: Mapping[str, str]) -> dict:
     rule_lev = lev is not None and abs(lev) >= 2
     # 원천 레버리지 힌트는 Ultra 단어에도 1이 된다(예: Ultra Short Duration 채권, RDIV "Ultra Dividend").
     # ProShares가 아닌 상품의 Ultra는 배수 근거가 아니므로 이 불일치는 표시하지 않는다.
-    ultra_short_bond = market == "US" and issuer != "ProShares" and "ULTRA" in name.upper() \
-        and not re.search(r"\d(\.\d+)?\s*X\b|LEVERAGED", name.upper())
-    if hint_inv and not inverse:
+    up_name = name.upper()
+    ultra_short_bond = market == "US" and issuer != "ProShares" and "ULTRA" in up_name \
+        and not re.search(r"\d(\.\d+)?\s*X\b|LEVERAGED", up_name)
+    # 규칙이 이름의 배수 숫자(1X·1.5x 등)를 직접 읽었으면 원천 레버리지 힌트는 더할 정보가 없다.
+    explicit_multiple = market == "US" and bool(re.search(r"\d(\.\d+)?\s*X\b", up_name))
+    # Ultra Short·Ultrashort는 초단기 채권이다(원천 인버스 힌트가 Short 단어로 1이 됨).
+    ultra_short_word = market == "US" and bool(re.search(r"ULTRA[- ]?SHORT", up_name)) and issuer != "ProShares"
+    # 이 불일치는 규칙이 놓친 제외 대상일 수 있으므로 해소 전까지 D1에서도 뺀다(fail closed).
+    # 롱숏(배수 미확인)은 leverage_unknown으로 이미 제외되므로 따로 표시하지 않는다.
+    unresolved: list[str] = []
+    if hint_inv and not inverse and not ultra_short_word and lev is not None:
         reasons.append("원천 인버스 힌트(1)와 규칙 판단(0)이 다름")
-    if hint_lev and not rule_lev and lev is not None and not ultra_short_bond:
+        unresolved.append("inverse_hint_unresolved")
+    if hint_lev and not rule_lev and lev is not None and not ultra_short_bond and not explicit_multiple:
         reasons.append(f"원천 레버리지 힌트(1)와 규칙 배수({lev:g})가 다름")
+        unresolved.append("leverage_hint_unresolved")
     if hint_opt and not options:
         reasons.append("원천 옵션 전략 힌트(1)와 규칙 판단(0)이 다름")
+        unresolved.append("options_hint_unresolved")
 
     d1 = []
     if inverse:
@@ -906,6 +926,7 @@ def classify(row: Mapping[str, str]) -> dict:
         d1.append("leverage_unknown")
     elif abs(lev) >= 3:
         d1.append("leverage_3x_or_more")
+    d1 += unresolved
 
     return {
         "market": market,
@@ -960,6 +981,22 @@ def summarize(meta: pd.DataFrame) -> dict:
     }
 
 
+def write_atomic(meta: pd.DataFrame, out_path: Path) -> None:
+    """같은 폴더의 임시 파일에 쓴 뒤 교체한다. 실패하면 기존 산출물을 그대로 둔다."""
+    if meta.empty:
+        raise ValueError("메타데이터가 비어 있어 쓰지 않습니다.")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=out_path.name + ".", suffix=".tmp", dir=out_path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        meta.to_csv(tmp, index=False, encoding="utf-8-sig")
+        os.replace(tmp, out_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def default_universe_path() -> Path:
     return paths.raw_root().parent / UNIVERSE_FILENAME
 
@@ -975,9 +1012,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     universe_path = args.universe or default_universe_path()
     out_path = args.output or (paths.output_dir(paths.METADATA_DIR) / OUTPUT_FILENAME)
     meta = build_metadata(load_universe(universe_path))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    meta.to_csv(out_path, index=False, encoding="utf-8-sig")
-    summary = summarize(meta)
+    summary = summarize(meta)  # 검증·요약이 끝난 뒤에만 쓴다.
+    write_atomic(meta, out_path)
     print(f"wrote {out_path} ({len(meta)} rows)")
     for key, value in summary.items():
         print(f"{key}: {value}")
