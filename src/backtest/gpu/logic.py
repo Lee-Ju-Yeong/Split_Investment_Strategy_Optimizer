@@ -11,7 +11,9 @@ import cudf
 import pandas as pd
 import time 
 from ...candidate_runtime_policy import normalize_runtime_candidate_policy
+from ...execution_price_policy import normalize_sell_price_tick_rounding
 from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
+from .utils import adjust_sell_price_gpu as _adjust_sell_price_gpu_shared
 from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
 from .utils import _sort_candidates_by_atr_then_ticker as _sort_candidates_by_atr_then_ticker_gpu
 
@@ -79,6 +81,9 @@ def get_tick_size_gpu(price_array):
 def adjust_price_up_gpu(price_array):
     return _adjust_price_up_gpu_shared(price_array)
 
+def adjust_sell_price_gpu(price_array, sell_price_tick_rounding):
+    return _adjust_sell_price_gpu_shared(price_array, sell_price_tick_rounding)
+
 def _calculate_monthly_investment_gpu(portfolio_state, positions_state, param_combinations, evaluation_prices,current_date,debug_mode):
     """ Vectorized calculation of monthly investment amounts based on current market value. """
     if debug_mode:
@@ -143,12 +148,15 @@ def _process_sell_signals_gpu(
     all_tickers: list = None,
     trading_dates_pd_cpu: pd.DatetimeIndex = None,
     sell_mask_workspace: cp.ndarray = None,
+    sell_price_tick_rounding: str = None,
 ):
     """
     [수정된 로직 v2]
     1. 전체 청산(손절매, 최대 '매매 미발생' 기간) 조건을 먼저 처리합니다.
     2. 그 다음, 청산되지 않은 종목에 한해 부분 수익실현을 처리합니다.
+    매도 체결가는 당일 시가를 `sell_price_tick_rounding`("up" 기본/"down")으로 호가에 맞춥니다.
     """
+    sell_price_tick_rounding = normalize_sell_price_tick_rounding(sell_price_tick_rounding)
     quantities = positions_state[..., 0]
     buy_prices = positions_state[..., 1]
     sell_mask_shape = (positions_state.shape[0], positions_state.shape[1])
@@ -229,7 +237,7 @@ def _process_sell_signals_gpu(
                     idx = idx_cupy.item()
                     ticker = all_tickers[idx]
                     target_price = liquidation_price_basis[0, idx].item()
-                    exec_price = adjust_price_up_gpu(liquidation_price_basis[0, idx]).item()
+                    exec_price = adjust_sell_price_gpu(liquidation_price_basis[0, idx], sell_price_tick_rounding).item()
                     high_price = current_high_prices[idx].item()
                     if tier3_liquidation_mask[0, idx]:
                         reason = "Tier3"
@@ -250,7 +258,7 @@ def _process_sell_signals_gpu(
                         f"High: {high_price}"
                     )
 
-        adjusted_liquidation_prices_2d = adjust_price_up_gpu(liquidation_price_basis)
+        adjusted_liquidation_prices_2d = adjust_sell_price_gpu(liquidation_price_basis, sell_price_tick_rounding)
         revenue_matrix = quantities * adjusted_liquidation_prices_2d[:, :, cp.newaxis]
         liquidation_revenue_matrix = revenue_matrix * stock_liquidation_mask[:, :, cp.newaxis]
         if strict_cash_rounding:
@@ -276,7 +284,7 @@ def _process_sell_signals_gpu(
     open_day_idx = positions_state[..., 2]
     sellable_time_mask = open_day_idx < current_day_idx
 
-    execution_sell_prices_1d = adjust_price_up_gpu(current_open_prices)
+    execution_sell_prices_1d = adjust_sell_price_gpu(current_open_prices, sell_price_tick_rounding)
     execution_reachable_mask = current_open_prices_3d > 0
     profit_signal_mask = signal_high_prices_3d >= target_sell_prices
     profit_taking_mask = profit_signal_mask & execution_reachable_mask & valid_positions & sellable_time_mask

@@ -70,6 +70,12 @@ execution_params:
   buy_commission_rate: 0.00015
   sell_commission_rate: 0.00015
   sell_tax_rate: 0.0018
+  # 매도 체결가(당일 시가)를 호가 단위에 맞추는 방향. 매수는 항상 올림.
+  # - up: 올림(키가 없을 때 기본값, 기존 결과 재현). 수정주가처럼 호가에 맞지 않는
+  #   시가에서는 매도 금액을 실제보다 높게 잡을 수 있음.
+  # - down: 내림(보수적, 단 양수 가격은 최소 1호가). 원주가 시가처럼 이미 호가에
+  #   맞는 가격에서는 up과 결과가 같음.
+  sell_price_tick_rounding: "up"
 
 paths:
   results_dir: "results"

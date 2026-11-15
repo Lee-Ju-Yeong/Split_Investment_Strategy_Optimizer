@@ -25,6 +25,7 @@ from .backtest.cpu.portfolio import Portfolio
 from .backtest.cpu.execution import BasicExecutionHandler
 from .backtest.cpu.backtester import BacktestEngine
 from .config_loader import load_config
+from .execution_price_policy import normalize_sell_price_tick_rounding
 from .price_policy import resolve_price_policy
 from .universe_policy import resolve_universe_mode
 # company_info_manager는 이제 DataHandler가 내부적으로 사용하므로 여기서 직접 임포트할 필요가 없습니다.
@@ -53,6 +54,7 @@ _EXECUTION_PARAM_KEYS = {
     "buy_commission_rate",
     "sell_commission_rate",
     "sell_tax_rate",
+    "sell_price_tick_rounding",
 }
 
 
@@ -64,6 +66,7 @@ def _write_run_manifest(
     universe_mode: str,
     price_basis: str,
     adjusted_gate: str,
+    sell_price_tick_rounding: str | None = None,
     run_metrics: dict | None = None,
     candidate_lookup_summary: dict | None = None,
     safety_guard: dict | None = None,
@@ -82,6 +85,9 @@ def _write_run_manifest(
         "price_policy": {
             "basis": str(price_basis),
             "adjusted_price_gate_start_date": str(adjusted_gate),
+        },
+        "execution_policy": {
+            "sell_price_tick_rounding": sell_price_tick_rounding,
         },
         "universe_policy": {
             "resolved_mode": str(universe_mode),
@@ -129,6 +135,7 @@ def _build_failure_result(
     adjusted_gate: str,
     paths: dict,
     candidate_lookup_summary: dict | None = None,
+    sell_price_tick_rounding: str | None = None,
 ) -> dict:
     pit_failure = build_pit_failure_record(error)
     if pit_failure:
@@ -171,6 +178,7 @@ def _build_failure_result(
             universe_mode=universe_mode,
             price_basis=price_basis,
             adjusted_gate=adjusted_gate,
+            sell_price_tick_rounding=sell_price_tick_rounding,
             run_metrics={},
             candidate_lookup_summary=candidate_lookup_summary or {},
             safety_guard=safety_guard,
@@ -260,6 +268,10 @@ def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) ->
         adjusted_gate,
     )
     logger.info("universe policy | mode=%s", universe_mode)
+    sell_price_tick_rounding = normalize_sell_price_tick_rounding(
+        execution_params.get("sell_price_tick_rounding")
+    )
+    logger.info("execution policy | sell_price_tick_rounding=%s", sell_price_tick_rounding)
 
     try:
         # DataHandler는 이제 종목명 조회를 위해 CompanyInfo DB를 내부적으로 로드합니다.
@@ -357,6 +369,7 @@ def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) ->
                 universe_mode=universe_mode,
                 price_basis=price_basis,
                 adjusted_gate=adjusted_gate,
+                sell_price_tick_rounding=sell_price_tick_rounding,
                 run_metrics=run_metrics,
                 candidate_lookup_summary=candidate_lookup_summary,
                 safety_guard=safety_guard,
@@ -433,6 +446,7 @@ def run_backtest_from_config(config: dict, *, persist_artifacts: bool = True) ->
             adjusted_gate=adjusted_gate,
             paths=paths,
             candidate_lookup_summary=candidate_lookup_summary,
+            sell_price_tick_rounding=sell_price_tick_rounding,
         )
 
 # ... display_results_in_terminal 과 main 함수는 기존과 동일하게 유지 ...
