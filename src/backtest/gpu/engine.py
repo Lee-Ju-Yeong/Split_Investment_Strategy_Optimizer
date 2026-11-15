@@ -10,6 +10,7 @@ import cupy as cp
 import pandas as pd
 
 from ...candidate_runtime_policy import normalize_runtime_candidate_policy
+from ...execution_price_policy import normalize_sell_price_tick_rounding
 from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
 from .data import (
     _collect_candidate_rank_metrics_asof,
@@ -289,6 +290,9 @@ def run_magic_split_strategy_on_gpu(
     )
     parity_mode = str(execution_params.get("parity_mode", "fast")).strip().lower()
     strict_cash_rounding = parity_mode == "strict"
+    sell_price_tick_rounding = normalize_sell_price_tick_rounding(
+        execution_params.get("sell_price_tick_rounding")
+    )
     tier_hysteresis_mode = normalize_tier_hysteresis_mode(
         execution_params.get("tier_hysteresis_mode", "strict_hysteresis_v1")
     )
@@ -466,6 +470,7 @@ def run_magic_split_strategy_on_gpu(
                 signal_tiers=signal_tiers_gpu if strict_hysteresis_enabled else None,
                 force_liquidate_tier3=force_liquidate_tier3,
                 strict_cash_rounding=strict_cash_rounding,
+                sell_price_tick_rounding=sell_price_tick_rounding,
                 debug_mode=debug_mode,
                 all_tickers=all_tickers,
                 trading_dates_pd_cpu=trading_dates_pd_cpu,

@@ -14,6 +14,7 @@ from datetime import datetime
 
 try:
     from ...candidate_runtime_policy import normalize_runtime_candidate_policy
+    from ...execution_price_policy import normalize_sell_price_tick_rounding
     from ...price_policy import (
         is_adjusted_price_basis,
         resolve_price_policy,
@@ -26,6 +27,7 @@ try:
     )
 except ImportError:  # pragma: no cover
     from candidate_runtime_policy import normalize_runtime_candidate_policy  # type: ignore
+    from execution_price_policy import normalize_sell_price_tick_rounding  # type: ignore
     from price_policy import (  # type: ignore
         is_adjusted_price_basis,
         resolve_price_policy,
@@ -239,6 +241,10 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
         f"adjusted_gate_start={adjusted_gate_start_date}"
     )
     print(f"Universe Policy: mode={universe_mode}")
+    print(
+        "Execution Policy: sell_price_tick_rounding="
+        f"{normalize_sell_price_tick_rounding(execution_params.get('sell_price_tick_rounding'))}"
+    )
     print("=" * 80)
 
     all_data_gpu = preload_all_data_to_gpu(

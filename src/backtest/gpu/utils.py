@@ -7,6 +7,8 @@ import math
 import cupy as cp
 import pandas as pd
 
+from ...execution_price_policy import SELL_PRICE_TICK_ROUNDING_DOWN
+
 _ADJUST_PRICE_FORCE_CHUNKED = False
 _ADJUST_PRICE_CHUNK_SIZE = 1_000_000
 _ADJUST_PRICE_LARGE_INPUT_ELEMS = 5_000_000
@@ -48,26 +50,43 @@ def get_tick_size_gpu(price_array):
     return result
 
 
-def _adjust_price_up_gpu_float64_inplace(price_array):
+def _adjust_price_gpu_float64_inplace(price_array, round_down=False):
+    """CPU `src/execution_price_policy.adjust_price_up/down`와 같은 계산.
+
+    가격/호가를 소수 5자리로 반올림한 뒤 올림(기본) 또는 내림한다.
+    내림에서 양수 가격이 0호가가 되면 최소 1호가로 올린다(0원 체결 방지).
+    """
     tick_size = get_tick_size_gpu(price_array)
     adjusted = price_array.astype(cp.float64, copy=True)
     cp.divide(adjusted, tick_size, out=adjusted)
     cp.round(adjusted, 5, out=adjusted)
-    cp.ceil(adjusted, out=adjusted)
+    if round_down:
+        cp.floor(adjusted, out=adjusted)
+        adjusted = cp.where((adjusted < 1.0) & (price_array > 0), 1.0, adjusted)
+    else:
+        cp.ceil(adjusted, out=adjusted)
     cp.multiply(adjusted, tick_size, out=adjusted)
     return adjusted.astype(cp.float32)
 
 
-def _adjust_price_up_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
+def _adjust_price_up_gpu_float64_inplace(price_array):
+    return _adjust_price_gpu_float64_inplace(price_array, round_down=False)
+
+
+def _adjust_price_down_gpu_float64_inplace(price_array):
+    return _adjust_price_gpu_float64_inplace(price_array, round_down=True)
+
+
+def _adjust_price_gpu_chunked(price_array, kernel, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
     safe_chunk_size = max(int(chunk_size), 1)
     if price_array.ndim == 0:
-        return _adjust_price_up_gpu_float64_inplace(price_array)
+        return kernel(price_array)
 
     if price_array.ndim == 1:
         output = cp.empty(price_array.shape[0], dtype=cp.float32)
         for start in range(0, price_array.shape[0], safe_chunk_size):
             end = min(start + safe_chunk_size, price_array.shape[0])
-            output[start:end] = _adjust_price_up_gpu_float64_inplace(price_array[start:end])
+            output[start:end] = kernel(price_array[start:end])
         return output
 
     # Avoid reshape(-1) because non-contiguous/broadcast arrays trigger a full copy allocation.
@@ -76,32 +95,62 @@ def _adjust_price_up_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZ
     output = cp.empty(price_array.shape, dtype=cp.float32)
     for start in range(0, price_array.shape[0], row_chunk):
         end = min(start + row_chunk, price_array.shape[0])
-        output[start:end] = _adjust_price_up_gpu_float64_inplace(price_array[start:end])
+        output[start:end] = kernel(price_array[start:end])
     return output
 
 
-def adjust_price_up_gpu(price_array):
-    """ Vectorized price adjustment on GPU. """
+def _adjust_price_up_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
+    return _adjust_price_gpu_chunked(price_array, _adjust_price_up_gpu_float64_inplace, chunk_size)
+
+
+def _adjust_price_down_gpu_chunked(price_array, chunk_size=_ADJUST_PRICE_CHUNK_SIZE):
+    return _adjust_price_gpu_chunked(price_array, _adjust_price_down_gpu_float64_inplace, chunk_size)
+
+
+def _adjust_price_gpu(price_array, round_down):
     global _ADJUST_PRICE_FORCE_CHUNKED
+    # 모듈 전역 이름으로 매번 찾아야 테스트의 patch가 적용된다.
+    if round_down:
+        full_kernel = _adjust_price_down_gpu_float64_inplace
+        chunked_kernel = _adjust_price_down_gpu_chunked
+    else:
+        full_kernel = _adjust_price_up_gpu_float64_inplace
+        chunked_kernel = _adjust_price_up_gpu_chunked
     if (
         price_array.size >= _ADJUST_PRICE_LARGE_INPUT_ELEMS
         and (price_array.ndim > 1 or not price_array.flags.c_contiguous)
     ):
-        return _adjust_price_up_gpu_chunked(price_array)
+        return chunked_kernel(price_array)
     if _ADJUST_PRICE_FORCE_CHUNKED:
-        return _adjust_price_up_gpu_chunked(price_array)
+        return chunked_kernel(price_array)
 
     try:
-        return _adjust_price_up_gpu_float64_inplace(price_array)
+        return full_kernel(price_array)
     except Exception as err:
         if not _is_gpu_oom_error(err):
             raise
         _ADJUST_PRICE_FORCE_CHUNKED = True
         print(
-            "[GPU_WARNING] adjust_price_up_gpu OOM on full vector path; "
+            "[GPU_WARNING] adjust_price_gpu OOM on full vector path; "
             "switching to chunked fallback."
         )
-        return _adjust_price_up_gpu_chunked(price_array)
+        return chunked_kernel(price_array)
+
+
+def adjust_price_up_gpu(price_array):
+    """ Vectorized buy/legacy-sell price adjustment on GPU (tick ceil). """
+    return _adjust_price_gpu(price_array, round_down=False)
+
+
+def adjust_price_down_gpu(price_array):
+    """ Vectorized conservative sell price adjustment on GPU (tick floor, min 1 tick). """
+    return _adjust_price_gpu(price_array, round_down=True)
+
+
+def adjust_sell_price_gpu(price_array, sell_price_tick_rounding):
+    if sell_price_tick_rounding == SELL_PRICE_TICK_ROUNDING_DOWN:
+        return adjust_price_down_gpu(price_array)
+    return adjust_price_up_gpu(price_array)
 
 
 def _resolve_signal_date_for_gpu(day_idx: int, trading_dates_pd_cpu: pd.DatetimeIndex):
