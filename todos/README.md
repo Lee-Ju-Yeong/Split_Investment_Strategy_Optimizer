@@ -16,7 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [고정 차수 규칙 `fixed_slot_v1` 명세](2026_11_15-fixed-split-slot-v1.md) | implementation | CPU 구현·검사 완료, GPU 미구현 |
+| [고정 차수 규칙 `fixed_slot_v1` 명세](2026_11_15-fixed-split-slot-v1.md) | implementation | CPU·GPU 구현, CPU-GPU 합성 대조 완료 |
 | [CPU 합성 시나리오 재현 단계](done_2026_11_06-cpu-split-demo.md) | implementation | CPU 구현·검증 완료·공개 결과는 PR #115 연결 |
 | [Issue #68: Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md) | implementation | 부분 구현·후속 확인 |
 | [Issue #72: Ticker Continuity & Position Inheritance](2026_02_09-issue72-ticker-continuity-position-inheritance.md) | implementation | 부분 구현·후속 확인 |

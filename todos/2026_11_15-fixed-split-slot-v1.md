@@ -1,6 +1,6 @@
 # 고정 차수 규칙 `fixed_slot_v1` 명세
 
-유형: implementation. 상태: CPU 구현·검사 완료, GPU 미구현(설정 시 GPU 경로는 거부). 기준: main `05bf3de37871e263306e601c09d95f4d1f4ae561`.
+유형: implementation. 상태: CPU 구현(#118 병합), GPU 구현·CPU-GPU 합성 대조 완료. 기본값은 여전히 `legacy`. 기준: main `05bf3de37871e263306e601c09d95f4d1f4ae561`.
 
 ## 배경
 
@@ -45,12 +45,24 @@ N은 `max_splits_limit`이다.
 ## CPU 구현 기록 (2026-11-15)
 
 - 설정: `strategy_params.split_slot_policy` (`legacy` 기본). 정규화·GPU 거부는 [split_slot_policy.py](../src/split_slot_policy.py). `main_backtest`가 키를 전략에 넘긴다.
-- GPU 차단: GPU는 `legacy` 커널만 있으므로 `fixed_slot_v1`이면 다음 단계에서 멈춘다. ① 공통 실행 설정 구성 `build_gpu_execution_params`(WFO 고정 후보 평가 `_build_runtime_contract`와 GPU 단일 실행이 사용), ② GPU 엔진 `run_magic_split_strategy_on_gpu` 진입(실행 설정에 키가 담겨 온 경우), ③ 설정 파일을 직접 읽는 GPU 탐색(`optimization/gpu/context.py`)·대조 도구(`cpu_gpu_parity_topk.py`, `parity_sell_event_dump.py`, `debug_gpu_single_run.py`). Codex 반론 검토(2026-11-15)가 처음에 ③만 있던 점을 지적해 ①②를 추가했다. WFO 후보 평가에 `fixed_slot_v1`을 넣으면 오류로 멈추는 것을 직접 확인했다. 변경 뒤 WSL `rapids-env`에서 GPU 검사 34개를 다시 돌려 31개 통과, 3개 실패로 변경 전 기록과 같다. 실패 3개는 성능 측정 원본 파일(`results/issue98_measure/`)이 없어서 나는 기존 실패다. ③의 GPU 스크립트(`debug_gpu_single_run.py` 등)는 DB가 필요해 직접 실행하지 않았다.
+- GPU 차단(이 단계 기준, 아래 GPU 구현에서 '설정 전달'로 바뀜): GPU는 `legacy` 커널만 있으므로 `fixed_slot_v1`이면 다음 단계에서 멈춘다. ① 공통 실행 설정 구성 `build_gpu_execution_params`(WFO 고정 후보 평가 `_build_runtime_contract`와 GPU 단일 실행이 사용), ② GPU 엔진 `run_magic_split_strategy_on_gpu` 진입(실행 설정에 키가 담겨 온 경우), ③ 설정 파일을 직접 읽는 GPU 탐색(`optimization/gpu/context.py`)·대조 도구(`cpu_gpu_parity_topk.py`, `parity_sell_event_dump.py`, `debug_gpu_single_run.py`). Codex 반론 검토(2026-11-15)가 처음에 ③만 있던 점을 지적해 ①②를 추가했다. WFO 후보 평가에 `fixed_slot_v1`을 넣으면 오류로 멈추는 것을 직접 확인했다. 변경 뒤 WSL `rapids-env`에서 GPU 검사 34개를 다시 돌려 31개 통과, 3개 실패로 변경 전 기록과 같다. 실패 3개는 성능 측정 원본 파일(`results/issue98_measure/`)이 없어서 나는 기존 실패다. ③의 GPU 스크립트(`debug_gpu_single_run.py` 등)는 DB가 필요해 직접 실행하지 않았다.
 - 추가 매수: [strategy.py](../src/backtest/cpu/strategy.py)의 `generate_additional_buy_signals`가 정책에 따라 (대상 차수, 기준 차수)를 고른다. `legacy`는 `len+1`·마지막 차수로 기존 계산을 그대로 둔다.
 - 1차 재진입: `generate_new_entry_signals`가 1차가 빈 보유 종목을 후보에 포함하고, 재진입은 `max_stocks` 자리 수에 세지 않는다. 거래 사유는 `1차 재진입`.
 - 검사: [test_cpu_fixed_split_slot.py](../tests/test_cpu_fixed_split_slot.py) 15개. `legacy` 고정 4개, `fixed_slot_v1` 9개(여러 종목 재진입 1개 포함), GPU 거부 2개(정책 함수, 공통 실행 설정). `run_cpu_checks.py`에 추가해 전체 87개·예제 2개 통과(Windows·Python 3.11.9, 2026-11-15). 기존 `test_gpu_execution_policy.py` 2개도 통과. 실행 도구 자체 검사 24개 중 프로세스 신호·자식 정리 관련 2개(실패 2·오류 2)는 이 Windows PC에서 main 기준으로도 똑같이 실패해 이번 변경과 무관하다. CI(ubuntu)에서 다시 확인한다.
 - main 병합(2026-11-15): #117(매도 체결가 반올림 설정 `sell_price_tick_rounding`)과 import·검사 개수가 겹쳐 둘 다 살려 합쳤다. 병합 뒤 CPU 검사 99개·예제 2개 통과, WSL GPU 검사 34개 중 31개 통과(기존 실패 3개 동일).
 - 확인하지 않은 것: 규칙 8(`highest_drop` 우선순위) 전용 테스트, 실제 DB 기간 백테스트에서 `legacy`와 `fixed_slot_v1`의 성과 차이, GPU.
+
+## GPU 구현 기록 (2026-11-15)
+
+- 설정 전달: GPU 엔진은 실행 설정의 `split_slot_policy`만 읽는다. 전략 설정의 값을 옮겨 싣는 `apply_split_slot_policy_to_gpu_execution_params`([split_slot_policy.py](../src/split_slot_policy.py))를 모든 GPU 진입점이 쓴다. 공통 실행 설정 구성(`build_gpu_execution_params`, WFO 고정 후보 평가·GPU 단일 실행), GPU 탐색(`parameter_simulation`), 대조 도구(`cpu_gpu_parity_topk`, `parity_sell_event_dump`, `debug_gpu_single_run`)가 해당한다. 실행 설정과 전략 설정이 서로 다른 값을 말하면 멈춘다. WFO 후보 배치는 실행 설정 하나를 공유하므로 `_build_runtime_contract`의 동일성 검사 항목에 차수 규칙을 넣었다. 예전 실행 함수 `logic.run_magic_split_strategy_on_gpu`(실제 경로 아님)는 `legacy`가 아니면 멈춘다.
+- 추가 매수 커널(`_process_additional_buy_signals_gpu`, `fixed_slot_policy=True`): 슬롯 1..N−1 중 가장 낮은 빈칸이 대상이다. 바로 앞 슬롯이 보유 중이어야 하고 그 매입가가 기준이다. 1차 보유는 요구하지 않는다. 그날 산 슬롯이 하나라도 있으면 제외하고, 대상 슬롯이 차 있으면 `RuntimeError`. N은 시뮬레이션마다 다른 `max_splits_limit`이다.
+- 신규 진입 커널(`_process_new_entry_signals_gpu`): 1차 재진입 후보 마스크(`_fixed_slot_reentry_mask_gpu`: 보유 중, 슬롯 0 빈칸, 그날 매도(`cooldown_state == 오늘`)·매수 없음)를 만든다. 새 종목은 남은 자리가 있어야 하고, 재진입은 자리를 줄이지 않는다. 재진입 후보가 있는 시뮬레이션은 자리가 차 있어도 후보 순회를 계속한다. 단일 시뮬레이션 엄격 대조 모드의 후보 재순위도 CPU처럼 재진입 후보를 포함한다.
+- 검사(WSL `rapids-env`):
+  - 새 [test_gpu_fixed_split_slot_parity.py](../tests/test_gpu_fixed_split_slot_parity.py): 실제 CPU 엔진과 GPU 엔진에 같은 가상 시나리오 7개를 넣고 두 규칙으로 각각 돌렸다. 14개 조합 모두 일별 자산이 원 단위까지 같았다. 같은 입력에서 두 규칙의 결과가 달라지는지도 확인했다.
+  - `test_backtest_strategy_gpu.py`에 커널 단위 검사 4개를 추가했다. 25개 중 22개 통과, 3개는 기존 성능 원본 파일 부재 실패다.
+  - `test_cpu_gpu_parity_topk` 13개, `test_gpu_new_entry_signals` 7개, `test_gpu_engine_prep_path` 11개, `test_gpu_price_adjustment` 14개, `test_gpu_execution_policy` 2개 통과.
+  - Windows CPU 검사 99개와 예제 2개 통과. `test_wfo_lane_execution`·`test_wfo_cpu_certification`·`test_wfo_holdout_policy` 통과.
+- 확인하지 않은 것: 실제 DB 기간 데이터로 CPU-GPU 대조(`cpu_gpu_parity_topk` 실행), GPU 탐색 처리 속도 변화. 이 PC에 DB 설정(`config/config.yaml`)이 없다.
 
 ## 이번 단계 범위 밖
 

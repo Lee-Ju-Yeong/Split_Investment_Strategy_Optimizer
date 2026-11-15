@@ -12,6 +12,7 @@ import pandas as pd
 import time 
 from ...candidate_runtime_policy import normalize_runtime_candidate_policy
 from ...execution_price_policy import normalize_sell_price_tick_rounding
+from ...split_slot_policy import LEGACY_SPLIT_SLOT_POLICY, normalize_split_slot_policy
 from .utils import adjust_price_up_gpu as _adjust_price_up_gpu_shared
 from .utils import adjust_sell_price_gpu as _adjust_sell_price_gpu_shared
 from .utils import get_tick_size_gpu as _get_tick_size_gpu_shared
@@ -340,6 +341,20 @@ def _process_sell_signals_gpu(
 
     return portfolio_state, positions_state, cooldown_state, last_trade_day_idx_state, sell_occurred_stock_mask
 
+def _fixed_slot_reentry_mask_gpu(positions_state: cp.ndarray, cooldown_state: cp.ndarray, current_day_idx: int):
+    """fixed_slot_v1 1차 재진입 후보 (sim, stock) 마스크. CPU `_can_reenter_first_slot`과 같은 조건.
+
+    보유 중이고 1차(슬롯 0)가 비었으며, 그날 이 종목에서 매도(cooldown_state == 오늘)나
+    매수(보유 슬롯의 open_day >= 오늘)가 없어야 한다(규칙 6·7). 대기 기간은 후보 단계에서 따로 본다.
+    """
+    has_positions = positions_state[..., 0] > 0
+    has_any_position = cp.any(has_positions, axis=2)
+    first_slot_empty = ~has_positions[..., 0]
+    opened_today = cp.any(has_positions & (positions_state[..., 2] >= current_day_idx), axis=2)
+    sold_today = cooldown_state == current_day_idx
+    return has_any_position & first_slot_empty & (~opened_today) & (~sold_today)
+
+
 def _process_additional_buy_signals_gpu(
     portfolio_state: cp.ndarray,
     positions_state: cp.ndarray,
@@ -363,8 +378,14 @@ def _process_additional_buy_signals_gpu(
     signal_date: pd.Timestamp = None,
     kernel_stage_totals: dict[str, float] | None = None,
     kernel_stage_timing_enabled: bool = False,
+    fixed_slot_policy: bool = False,
 ):
-    """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직 """
+    """ [수정] cumsum과 searchsorted를 활용한 완전 병렬 추가 매수 로직
+
+    fixed_slot_policy=True(fixed_slot_v1)이면 2..N 중 가장 낮은 빈 슬롯을 바로 앞 슬롯
+    매입가 기준으로 채운다. 1차가 비어도 계속하며, 그날 이 종목을 샀으면 하지 않는다.
+    False(legacy)는 첫 빈 슬롯·가장 최근 매수가 기준·1차 필수의 기존 동작이다.
+    """
     # 1. 추가 매수 조건에 맞는 모든 후보 탐색 (기존과 동일)
     add_buy_drop_rates = param_combinations[:, 2:3]
     max_splits_limits = param_combinations[:, 6:7]
@@ -405,13 +426,28 @@ def _process_additional_buy_signals_gpu(
     latest_split_indices = cp.argmax(latest_split_scores, axis=2).astype(cp.int32)
     sim_axis = cp.arange(has_positions.shape[0], dtype=cp.int32)[:, None]
     stock_axis = cp.arange(has_positions.shape[1], dtype=cp.int32)[None, :]
-    last_buy_prices = buy_prices_state[sim_axis, stock_axis, latest_split_indices]
-    trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
-    under_max_splits = num_positions < max_splits_limits
     can_add_buy = ~sell_occurred_today_mask
-    has_first_split = positions_state[..., 0, 0] > 0
-    first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
-    is_not_new_today = (first_open_day_idx < current_day_idx)
+    target_split_indices = None
+    if fixed_slot_policy:
+        # 규칙 2·3: 슬롯 1..N-1(2..N차) 중 가장 낮은 빈칸, 기준은 바로 앞 슬롯. N은 시뮬레이션별 값.
+        slot_limits = max_splits_limits.astype(cp.int32).reshape(-1, 1, 1)
+        eligible_slots = (~has_positions) & (split_axis >= 1) & (split_axis < slot_limits)
+        has_target_slot = cp.any(eligible_slots, axis=2)
+        target_split_indices = cp.argmax(eligible_slots, axis=2).astype(cp.int32)
+        anchor_split_indices = cp.maximum(target_split_indices - 1, 0)
+        anchor_held = has_positions[sim_axis, stock_axis, anchor_split_indices]
+        last_buy_prices = buy_prices_state[sim_axis, stock_axis, anchor_split_indices]
+        under_max_splits = has_target_slot & anchor_held
+        # 규칙 5: 1차 보유를 요구하지 않는다. 규칙 7: 그날 산 슬롯이 하나라도 있으면 제외.
+        has_first_split = has_any_position
+        is_not_new_today = latest_open_day[..., 0] < current_day_idx
+    else:
+        last_buy_prices = buy_prices_state[sim_axis, stock_axis, latest_split_indices]
+        under_max_splits = num_positions < max_splits_limits
+        has_first_split = positions_state[..., 0, 0] > 0
+        first_open_day_idx = cp.where(has_positions, open_day_indices, cp.inf).min(axis=2)
+        is_not_new_today = (first_open_day_idx < current_day_idx)
+    trigger_prices = last_buy_prices * (1 - add_buy_drop_rates)
     
     signal_lows_2d = cp.broadcast_to(signal_lows, trigger_prices.shape)
     signal_closes_2d = cp.broadcast_to(signal_close_prices, trigger_prices.shape)
@@ -632,15 +668,21 @@ def _process_additional_buy_signals_gpu(
 
     # 포지션 업데이트: 부분청산으로 split hole이 생길 수 있으므로 첫 empty slot에 기록
     slot_lookup_start = time.time() if kernel_stage_timing_enabled else None
-    split_slot_empty_mask = positions_state[final_sims, final_stocks, :, 0] <= 0
-    has_empty_slot = cp.any(split_slot_empty_mask, axis=1)
-    if not bool(cp.all(has_empty_slot)):
-        missing_slots = int(cp.sum(~has_empty_slot).item())
-        raise RuntimeError(
-            "No empty split slot for additional buy in GPU path. "
-            f"missing_slots={missing_slots}"
-        )
-    split_indices = cp.argmax(split_slot_empty_mask, axis=1).astype(cp.int32)
+    if fixed_slot_policy:
+        # 규칙 1: 대상 슬롯은 위에서 고른 빈칸이다. 차 있으면 중복 차수이므로 멈춘다.
+        split_indices = target_split_indices[final_sims, final_stocks]
+        if bool(cp.any(positions_state[final_sims, final_stocks, split_indices, 0] > 0)):
+            raise RuntimeError("fixed_slot_v1: GPU additional buy targeted an occupied split slot.")
+    else:
+        split_slot_empty_mask = positions_state[final_sims, final_stocks, :, 0] <= 0
+        has_empty_slot = cp.any(split_slot_empty_mask, axis=1)
+        if not bool(cp.all(has_empty_slot)):
+            missing_slots = int(cp.sum(~has_empty_slot).item())
+            raise RuntimeError(
+                "No empty split slot for additional buy in GPU path. "
+                f"missing_slots={missing_slots}"
+            )
+        split_indices = cp.argmax(split_slot_empty_mask, axis=1).astype(cp.int32)
     _record_gpu_probe_duration(
         kernel_stage_totals,
         "additional_buy_state_slot_lookup_s",
@@ -730,10 +772,16 @@ def _process_new_entry_signals_gpu(
     all_tickers: list = None,
     strict_cash_rounding: bool = False,
     # [삭제] trading_dates_pd_cpu
+    fixed_slot_policy: bool = False,
 ):
+    """신규 진입. fixed_slot_policy=True이면 1차가 빈 보유 종목의 1차 재진입도 처리한다.
+
+    재진입은 종목 자리(max_stocks)를 새로 쓰지 않고, 새 종목과 같은 후보 순위로 현금을 나눠 쓴다
+    (fixed_slot_v1 규칙 6). 재진입 후보가 있는 시뮬레이션은 자리가 차 있어도 후보를 계속 본다.
+    """
     def _next_active_sim_indices():
         return cp.where(
-            (temp_available_slots > 0)
+            ((temp_available_slots > 0) | has_reentry_any)
             & (temp_capital >= investment_per_order)
         )[0]
 
@@ -742,6 +790,11 @@ def _process_new_entry_signals_gpu(
     current_num_stocks = cp.sum(has_any_position, axis=1)
     max_stocks_per_sim = param_combinations[:, 0]
     available_slots = cp.maximum(0, max_stocks_per_sim - current_num_stocks).astype(cp.int32)
+    if fixed_slot_policy:
+        reentry_mask = _fixed_slot_reentry_mask_gpu(positions_state, cooldown_state, current_day_idx)
+    else:
+        reentry_mask = cp.zeros_like(has_any_position)
+    has_reentry_any = cp.any(reentry_mask, axis=1)
     # 백테스트 시작 후 10 거래일 동안만 슬롯 상태를 로깅 (sim 0 기준)
     if debug_mode and current_day_idx < 10:
         # trading_dates_pd_cpu를 가져오기 위해 함수 인자에 추가해야 하지만,
@@ -755,7 +808,7 @@ def _process_new_entry_signals_gpu(
         )
         print(log_msg)
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    if not cp.any(available_slots > 0) or candidate_tickers_for_day.size == 0:
+    if not cp.any((available_slots > 0) | has_reentry_any) or candidate_tickers_for_day.size == 0:
         return portfolio_state, positions_state, last_trade_day_idx_state
 
     # --- [수정] 1. 후보 우선순위 순회(입력 순서 고정) + 시뮬레이션 축 벡터화 ---
@@ -805,7 +858,14 @@ def _process_new_entry_signals_gpu(
         cooldown_ref = cooldown_state[active_sim_indices, stock_idx]
         is_holding = has_any_position[active_sim_indices, stock_idx]
         is_in_cooldown = (cooldown_ref != -1) & ((current_day_idx - cooldown_ref) < cooldown_period_days)
-        initial_buy_mask = (~is_holding) & (~is_in_cooldown)
+        if fixed_slot_policy:
+            # 새 종목은 남은 자리가 있어야 하고, 1차 재진입은 자리를 쓰지 않는다.
+            is_reentry = reentry_mask[active_sim_indices, stock_idx]
+            has_free_slot = temp_available_slots[active_sim_indices] > 0
+            initial_buy_mask = (((~is_holding) & has_free_slot) | is_reentry) & (~is_in_cooldown)
+        else:
+            is_reentry = None
+            initial_buy_mask = (~is_holding) & (~is_in_cooldown)
         if not cp.any(initial_buy_mask):
             continue
 
@@ -828,7 +888,13 @@ def _process_new_entry_signals_gpu(
 
         # [핵심] 실제 자본과 슬롯을 '즉시' 차감하여 다음 k 루프에 영향을 줌
         temp_capital[selected_sim_indices] -= final_costs
-        temp_available_slots[selected_sim_indices] -= 1
+        if is_reentry is None:
+            temp_available_slots[selected_sim_indices] -= 1
+        else:
+            selected_reentry = is_reentry[still_valid_mask]
+            if bool(cp.any(positions_state[selected_sim_indices[selected_reentry], stock_idx, 0, 0] > 0)):
+                raise RuntimeError("fixed_slot_v1: GPU first-slot re-entry targeted an occupied slot.")
+            temp_available_slots[selected_sim_indices[~selected_reentry]] -= 1
 
         positions_state[selected_sim_indices, stock_idx, 0, 0] = final_quantities
         positions_state[selected_sim_indices, stock_idx, 0, 1] = buy_price
@@ -947,7 +1013,11 @@ def run_magic_split_strategy_on_gpu(
     num_trading_days = len(trading_date_indices)
     num_tickers = len(all_tickers)
     cooldown_period_days = execution_params.get("cooldown_period_days", 5)
-    
+    # 이 예전 실행 함수는 legacy 차수 규칙만 넘긴다. 실제 경로는 engine.run_magic_split_strategy_on_gpu.
+    if normalize_split_slot_policy(execution_params.get("split_slot_policy")) != LEGACY_SPLIT_SLOT_POLICY:
+        raise ValueError("logic.run_magic_split_strategy_on_gpu supports split_slot_policy='legacy' only; "
+                         "use backtest.gpu.engine.run_magic_split_strategy_on_gpu.")
+
     # Config from exec_params
     candidate_source_mode, _ = normalize_runtime_candidate_policy(
         execution_params.get("candidate_source_mode", "tier"),

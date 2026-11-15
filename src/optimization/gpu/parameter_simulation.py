@@ -20,6 +20,7 @@ try:
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from ...split_slot_policy import apply_split_slot_policy_to_gpu_execution_params
     from ...tier_hysteresis_policy import normalize_tier_hysteresis_mode
     from ...universe_policy import (
         is_survivor_optimistic_mode,
@@ -33,6 +34,7 @@ except ImportError:  # pragma: no cover
         resolve_price_policy,
         validate_backtest_window_for_price_policy,
     )
+    from split_slot_policy import apply_split_slot_policy_to_gpu_execution_params  # type: ignore
     from tier_hysteresis_policy import normalize_tier_hysteresis_mode  # type: ignore
     from universe_policy import (  # type: ignore
         is_survivor_optimistic_mode,
@@ -218,6 +220,7 @@ def find_optimal_parameters(start_date: str, end_date: str, initial_cash: float)
     execution_params["candidate_source_mode"] = normalized_mode
     execution_params["use_weekly_alpha_gate"] = normalized_weekly_gate
     execution_params["tier_hysteresis_mode"] = execution_tier_hysteresis_mode
+    apply_split_slot_policy_to_gpu_execution_params(execution_params, strategy_params)
     if _env_flag_enabled("MAGICSPLIT_KERNEL_BREAKDOWN"):
         execution_params["kernel_stage_timing_enabled"] = True
     universe_mode = resolve_universe_mode(
