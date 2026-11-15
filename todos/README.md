@@ -16,7 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [ETF 변동성 맞춤 분할매매 연구 계획](2026_11_15-etf-vol-split-research-plan.md) | research | 설계 결정 확정·Codex 보완 반영, M1 착수 전 |
+| [ETF 변동성 맞춤 분할매매 연구 계획](2026_11_15-etf-vol-split-research-plan.md) | research | M1 데이터 대부분 완료·프로토콜 초안, 폐지 국내 ETF 반영 중 |
 | [고정 차수 규칙 `fixed_slot_v1` 명세](2026_11_15-fixed-split-slot-v1.md) | implementation | CPU·GPU 구현, CPU-GPU 합성 대조 완료 |
 | [CPU 합성 시나리오 재현 단계](done_2026_11_06-cpu-split-demo.md) | implementation | CPU 구현·검증 완료·공개 결과는 PR #115 연결 |
 | [Issue #68: Robust WFO / Ablation](2026_02_09-issue68-robust-wfo-ablation.md) | implementation | 부분 구현·후속 확인 |

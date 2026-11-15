@@ -111,7 +111,7 @@ python -m examples.short_selling_lag_demo
 python tools/ci/run_cpu_checks.py
 ```
 
-CI와 같은 명령입니다. 아래 8개 모듈과 예제 2개를 각각 별도 프로세스에서 실행하며, 동시에 실행하는 작업은 최대 3개입니다. 모듈·예제마다 2분 제한을 둡니다. 전체 `test_*.py`를 수집하지 않으므로 이 명령으로 GPU·DB 검사가 실행되지 않습니다.
+CI와 같은 명령입니다. 아래 17개 모듈과 예제 2개를 각각 별도 프로세스에서 실행하며, 동시에 실행하는 작업은 최대 3개입니다. 모듈·예제마다 2분 제한을 둡니다. 전체 `test_*.py`를 수집하지 않으므로 이 명령으로 GPU·DB 검사가 실행되지 않습니다.
 
 각 모듈에서 수집한 검사 식별자를 실제 시작·종료 기록과 대조합니다. 검사 0개·누락·중복·가져오기 실패, 실패·오류·건너뜀·예상된 실패, 결과 기록 누락, 비정상 종료·시간 초과는 모두 실패입니다. 한 작업이 실패해도 다른 독립 작업의 결과를 모으며, **모든 검사와 예제가 성공해야 종료 코드 0**입니다. 아래 34개는 최초 도입 기준이며 선택된 모듈에 추가된 검사도 자동 포함합니다.
 
@@ -136,8 +136,14 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_cpu_split_demo.py` | 합성 매매·현금·입력·외부 연결 없음·CLI·CSV | 20개 |
 | `test_cpu_fixed_split_slot.py` | 차수 번호 규칙: `legacy` 현행 고정, `fixed_slot_v1` 빈칸 채우기·기준가·1차 재진입·추가 매수 우선순위·GPU 실행 설정 전달 | 18개 |
 | `test_cpu_fixed_slot_product_parity.py` | `fixed_slot_v1` 추가 매수 차수·기준 차수를 split-trader V2 `decide` 결과(커밋 `1bd2d32`)와 사례로 대조 | 10개 |
+| `test_research_etf_price_store.py` | ETF 연구 가격 저장소: 행 보존·품질 표시, 분배금·분할 형식 오류 표시, 묶음 단위 교체와 실패 시 이전 묶음 보존 | 11개 |
+| `test_research_etf_kr_universe.py` | 국내 ETF 상장 이력 수집: 월말 캐시, 끝나지 않은 달 제외, 잘린 파일 재수집 | 7개 |
+| `test_research_etf_fx_calendars.py` | 환율·금리 이용 가능 시각(미래 정보 차단), KRX·NYSE 거래일 달력 | 30개 |
+| `test_research_etf_krx_gold.py` | KRX 금현물 일봉 정리: 원본 보존, 동시 실행 잠금, 무한대 값 차단 | 25개 |
+| `test_research_etf_metadata.py` | ETF 분류(레버리지·자산군·지수 묶음·국내 과세 유형)와 D1 유니버스 필터 | 32개 |
+| `test_research_etf_protocol.py` | 연구 프로토콜 JSON 검증·해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 18개 |
 
-최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 = 112개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
+최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 + ETF 연구 데이터 123개 = 235개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
 
 이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/done_2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/done_2026_11_06-cpu-checks-ci.md)에 남깁니다.
 
@@ -177,6 +183,6 @@ DB 통합 검사는 새 격리 환경에서 확인했습니다. 나머지 아래
 - `skipped`, 의존성 누락, 중단은 통과로 세지 않습니다.
 - GPU 검사를 CPU 흉내 객체로 통과시켜 실제 GPU 검사처럼 소개하지 않습니다.
 - [문서 화면 검사](../docs/pages-maintenance.md)는 제품 검사를 대신하지 않습니다.
-- GitHub Actions의 `CPU checks`는 위 8개 모듈·예제 2개와 도구 자체 검사, `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
+- GitHub Actions의 `CPU checks`는 위 17개 모듈·예제 2개와 도구 자체 검사, `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
 
 [프로젝트 소개](../README.md) · [세 가지 구현 근거](../docs/engineering-evidence.md) · [문서 안내](../docs/README.md)

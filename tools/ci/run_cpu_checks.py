@@ -36,6 +36,12 @@ TASKS = (
     Task("tests", "test_cpu_split_demo.py"),
     Task("tests", "test_cpu_fixed_split_slot.py"),
     Task("tests", "test_cpu_fixed_slot_product_parity.py"),
+    Task("tests", "test_research_etf_price_store.py"),
+    Task("tests", "test_research_etf_kr_universe.py"),
+    Task("tests", "test_research_etf_fx_calendars.py"),
+    Task("tests", "test_research_etf_krx_gold.py"),
+    Task("tests", "test_research_etf_metadata.py"),
+    Task("tests", "test_research_etf_protocol.py"),
     Task("example", "examples.short_selling_lag_demo"),
     Task("example", "examples.cpu_split_demo"),
 )
