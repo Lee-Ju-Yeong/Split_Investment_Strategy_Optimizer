@@ -16,6 +16,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  etf-m3-kernel:
+    name: ETF M3 C++ 정확성 대조
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install C++ headers
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends g++ libboost-dev
+      - name: Build exact kernel
+        run: python -m src.research.etf.fast_build --output-dir "$RUNNER_TEMP/etf-m3-build"
+      - name: Compare native kernel with M2 cases
+        run: python tools/ci/run_etf_m3_checks.py --build-dir "$RUNNER_TEMP/etf-m3-build"
   cpu-checks:
     name: CPU 기본 검사
     runs-on: ubuntu-24.04
