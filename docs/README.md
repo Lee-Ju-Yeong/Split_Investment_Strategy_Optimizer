@@ -9,6 +9,7 @@
 | 어떤 문제를 어떻게 해결했나 | [구현 근거](engineering-evidence.md) |
 | 무엇을 직접 실행할 수 있나 | [CPU 예제·검사](../tests/README.md) · [격리 MySQL 검사](testing-mysql.md) · [전체 실행 조건](running.md) |
 | 분할 매매는 어떤 규칙으로 계산하나 | [전략 원칙](MAGIC_SPLIT_STRATEGY_PRINCIPLES.md) |
+| ETF 연구의 비교 기준선은 무엇인가 | [M4 학습 고정 리밸런싱·보유·프런티어](research/etf_m4_baselines.md) |
 | 데이터를 어떻게 저장하나 | [DB 스키마](database/schema.md) · [종목 등급 계산 규칙](database/daily_stock_tier_rules.md) |
 | 코드는 어떤 순서로 읽나 | [src/ 읽기 안내](../src/README.md) |
 | 실행 파일과 실제 구현 위치가 왜 다른가 | [소스 경로 안내](refactoring/issue69-import-path-mapping.md) · [호환 진입점 유지 정책](refactoring/wrapper-deprecation.md) |

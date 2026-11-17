@@ -196,16 +196,28 @@ class TaxLedger:
     def sell(self, instrument, position, price, fee, at, *, fx_rate=ONE,
              tax_basis=None, settled_at=None):
         """즉시 원천징수 세액(자기 통화)을 반환한다. 미국 양도세는 반환하지 않는다."""
+        return self.sell_lots(instrument, [position], price, fee, at, fx_rate=fx_rate,
+                              tax_basis=tax_basis, settled_at=settled_at)
+
+    def sell_lots(self, instrument, positions, price, fee, at, *, fx_rate=ONE,
+                  tax_basis=None, settled_at=None):
+        """여러 취득분의 일부를 한 주문으로 매도한다. 수수료·세액은 주문당 한 번 계산한다."""
         category = self._instrument(instrument)
+        positions = tuple(positions)
+        if not positions:
+            raise ValueError("매도할 취득분이 필요합니다")
+        sales = [self._sale_position(instrument, position) for position in positions]
+        if len({key for key, _ in sales}) != len(sales):
+            raise ValueError("같은 취득분을 한 주문에 중복 포함할 수 없습니다")
         self._time(at)
         if settled_at is not None and aware(settled_at) != at:
             raise ValueError("sell은 실제 결제 사건 시각 at=settled_at에 호출하세요")
-        if at < position.opened_at:
+        if any(at < position.opened_at for position in positions):
             raise ValueError("매수보다 앞선 매도입니다")
         price, fee = _number(price, "price", positive=True), _number(fee, "fee")
         fx, basis = _number(fx_rate, "fx_rate", positive=True), self._basis(instrument, tax_basis)
-        key, remaining = self._sale_position(instrument, position)
-        if fee > price * position.quantity:
+        quantity = sum(position.quantity for position in positions)
+        if fee > price * quantity:
             raise ValueError("매도 수수료가 매도 대금을 초과합니다")
         day_key = (instrument.symbol, at.astimezone(KST).date())
         if self.mode == "after_tax" and instrument.market == "KR" and category == "기타" and day_key in self._daily_sales:
@@ -214,12 +226,13 @@ class TaxLedger:
         if instrument.market == "KR" and category == "기타" and basis is None:
             self._missing.add(f"{instrument.symbol}: 매도 과표기준가 미확보")
         holding = self._holdings[instrument.symbol]
-        withholding = self._sell_tax(holding, position.quantity, price, fee, fx, basis, at)
-        self._remove_cost(holding, position.quantity)
-        if remaining == position.quantity:
-            del self._lots[key]
-        else:
-            self._lots[key] = (self._lots[key][0], remaining - position.quantity)
+        withholding = self._sell_tax(holding, quantity, price, fee, fx, basis, at)
+        self._remove_cost(holding, quantity)
+        for position, (key, remaining) in zip(positions, sales):
+            if remaining == position.quantity:
+                del self._lots[key]
+            else:
+                self._lots[key] = (self._lots[key][0], remaining - position.quantity)
         self._daily_sales.add(day_key)
         return withholding
 

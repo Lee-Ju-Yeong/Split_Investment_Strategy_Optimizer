@@ -48,9 +48,12 @@ TASKS = (
     Task("tests", "test_research_etf_engine.py"),
     Task("tests", "test_research_etf_engine_contract.py"),
     Task("tests", "test_research_etf_engine_inputs.py"),
+    Task("tests", "test_research_etf_baselines.py"),
+    Task("tests", "test_research_etf_baseline_report.py"),
     Task("example", "examples.short_selling_lag_demo"),
     Task("example", "examples.cpu_split_demo"),
     Task("example", "examples.etf_m2_demo"),
+    Task("example", "examples.etf_m4_demo"),
 )
 
 

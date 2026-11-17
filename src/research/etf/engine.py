@@ -146,6 +146,7 @@ def _tax_basis_map(values, instruments, *, initial=False):
 class _Engine:
     def __init__(self, inputs, options):
         self.options = options
+        self.candidate_provider = inputs["_candidate_provider"]
         self.instruments = _input_map(inputs["instruments"], inputs["rules"])
         self.order = {symbol: index for index, symbol in enumerate(self.instruments)}
         self.rules = {symbol: tuple(sorted(levels, key=lambda rule: rule.level))
@@ -389,7 +390,7 @@ class _Engine:
         self.first_seen.add(bar.symbol)
         positions = [p for p in self.positions.values() if p.symbol == bar.symbol]
         manual_entry = self.options.first_entry and first and not positions
-        candidate = candidate_for_bar(
+        candidate = self.candidate_provider(
             instrument, bar, positions, self.rules[bar.symbol], path=self.options.path,
             first_entry=self.options.first_entry and first,
             penetration_ticks=self.options.penetration_ticks, slippage_ticks=self.options.slippage_ticks,
@@ -666,7 +667,7 @@ def run_engine(
     initial_tax_basis: dict[tuple[str, int], Decimal] | None = None,
     tax_payments: dict[datetime, Decimal] | None = None, synthetic_tax_data=False,
     penetration_ticks=1, slippage_ticks=0, commission_rate=None,
-    sec_rate_override=None, product_sell_tax_rate=ZERO,
+    sec_rate_override=None, product_sell_tax_rate=ZERO, _candidate_provider=candidate_for_bar,
 ) -> EngineResult:
     """Run one assumed OHLC path; cash orders never shrink to available cash.
 
