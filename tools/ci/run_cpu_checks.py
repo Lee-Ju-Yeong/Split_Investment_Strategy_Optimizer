@@ -42,8 +42,15 @@ TASKS = (
     Task("tests", "test_research_etf_krx_gold.py"),
     Task("tests", "test_research_etf_metadata.py"),
     Task("tests", "test_research_etf_protocol.py"),
+    Task("tests", "test_research_etf_engine_market.py"),
+    Task("tests", "test_research_etf_engine_strategy.py"),
+    Task("tests", "test_research_etf_engine_tax.py"),
+    Task("tests", "test_research_etf_engine.py"),
+    Task("tests", "test_research_etf_engine_contract.py"),
+    Task("tests", "test_research_etf_engine_inputs.py"),
     Task("example", "examples.short_selling_lag_demo"),
     Task("example", "examples.cpu_split_demo"),
+    Task("example", "examples.etf_m2_demo"),
 )
 
 

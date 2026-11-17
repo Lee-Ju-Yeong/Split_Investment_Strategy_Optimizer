@@ -1,8 +1,9 @@
 {
   "protocol": "etf-vol-split",
-  "version": "1.0.0-draft",
+  "version": "1.1.2-m2-draft",
+  "engine_schema": "etf-m2-v1",
   "status": "draft",
-  "status_note": "M0·M1 숫자 고정 초안. M6(규칙 고정) 전까지 고칠 수 있다. 보류 바스켓 결과를 본 뒤에는 고치지 않는다. decide_by가 있는 값은 그 단계에서 채운다.",
+  "status_note": "M2 기준 엔진·시장 규칙 연결 초안. M5 미정 5개를 남긴다. M1 분할 생성 당시 프로토콜 해시는 원본 기록에 보존하고 현재 실행 해시와 구분한다. M6 규칙 고정 전이며 보류 성과를 보고 규칙을 고치지 않는다.",
   "plan": "todos/2026_11_15-etf-vol-split-research-plan.md",
   "universe": {
     "d1_source": "metadata.etf_metadata.csv의 d1_eligible (인버스·ETN·옵션 전략·3배 이상 제외, 배수 미확인 제외)",
@@ -78,7 +79,7 @@
     "conversion": {
       "frequency": "monthly",
       "when": "매월 첫 국내 거래일 10:00 KST, 그날 MAR",
-      "target": "바스켓의 시장별 목표 예산 비율에 맞춰 통화별 현금 재배분",
+      "target": "환전 시각까지 공개된 동일 시점의 평가액·보유·현금을 사용해 시장별 목표 비율에 맞춰 통화 현금을 재배분. 월 차수 예산의 직전 평가 기준과 구분",
       "cost_one_way": 0.001,
       "cost_stress_one_way": 0.01,
       "cost_basis": "증권사 우대 환전(스프레드 약 1%의 90% 우대) 수준을 주 값, 우대 없는 1%를 스트레스",
@@ -112,16 +113,22 @@
         1
       ]
     },
-    "multi_level_take_profit_order": "차수 오름차순으로 근사. 제품의 실제 순서(해시 순서)와의 차이는 M2에서 split-trader decide 사례로 확인",
+    "multi_level_take_profit_order": "제품 V2와 동일하게 SHA256(symbol:level) 바이트 오름차순, 같은 시점 매도 우선",
+    "market_rules": {
+      "file": "market_rules_v1.json",
+      "sha256": "079bc678e16bacdc4f5ec65614b9b50dca5b229762e00ace7bb923d8ed392cbb",
+      "sec_date_basis": "검증된 charge date(통상 결제일), 신호는 known_at 이전 공표 요율만 사용",
+      "commission_rounding": "정확한 Decimal 비례액, 증권사 청구단위 절사·최소비용 미포함"
+    },
     "tick_size": {
-      "US": 0.01,
-      "KR": "decide_by:M2 (ETF 호가단위 이력 확인 후 표로 고정)",
-      "KRX_GOLD": "decide_by:M2"
+      "US": "market_rules_v1.json#tick_rules.US",
+      "KR": "market_rules_v1.json#tick_rules.KR",
+      "KRX_GOLD": "market_rules_v1.json#tick_rules.GOLD"
     },
     "costs_one_way": {
       "KR_commission": 0.00015,
       "US_commission": 0.0007,
-      "US_sec_fee_on_sell": "decide_by:M2 (기간별 요율 표)",
+      "US_sec_fee_on_sell": "market_rules_v1.json#sec_fee (2011-01-01..2026-11-17 charge date, known_at 검사)",
       "KRX_GOLD_commission": 0.003,
       "KRX_GOLD_commission_basis": "증권사 온라인 금현물 수수료(대략 0.2~0.3%)의 위쪽. 증권사별 확인 필요",
       "stress_one_way_all": 0.003,
@@ -152,6 +159,13 @@
   },
   "tax": {
     "judgment": "pre_tax_only_until_d7_data",
+    "valuation": {
+      "book_equity": "equity_krw (확정 미납 차감, 현재 연도 추정세는 미반영)",
+      "adjusted_report": "equity_after_estimated_tax_krw (진행연도 실현분 추정세를 차감하는 보조 진단, 전량청산 가정 세후 곡선이 아님)",
+      "current_year_estimate_affects_orders": false,
+      "complete_after_tax_reporting_supported": false,
+      "actual_after_tax_approved": false
+    },
     "rules_doc": "docs/research/etf_tax_rules.md",
     "law_mode_primary": "current_law_fixed",
     "law_mode_sensitivity": "historical_law",
@@ -235,7 +249,13 @@
     "initial_capital_krw": 100000000,
     "initial_capital_basis": "개인 연구용 규모 1억원. 거래대금 하한·주문 참여율 판단의 기준",
     "market_budget_share": "바스켓 종목 수 비율(시장별 종목 수 ÷ m). KRX 금은 원화 시장으로 센다",
-    "currency_cash_target": "통화별 목표 현금 = 직전 평가 시각의 포트폴리오 평가액 × 그 통화 시장의 예산 비율 − 그 시장 보유 평가액(음수면 0)"
+    "currency_cash_target": "통화별 목표 현금 = 환전 시각에 알려진 포트폴리오 장부 평가액 × 그 통화 시장의 예산 비율 − 같은 시각 시장 보유 평가액(음수면 0). 목표와 비교할 현금도 같은 시각",
+    "m2_model_limits": [
+      "KR 매도는 즉시 재사용·환전 가능 현금으로 근사하며 실제 T+2 결제를 구현하지 않았다. M5 실제 혼합시장 탐색 전 재검토",
+      "US 세무 귀속과 환율은 명시 결제 가용시각의 KST 날짜와 그때까지 공표된 MAR를 쓰는 합성 연구 가정. 미국 결제일 MAR와 같다고 주장하지 않음",
+      "상장폐지·거래정지·자료 말미 누락으로 요청기간 세션이 없으면 M1 연결부는 거부한다. 상폐 자동청산 사건은 미구현",
+      "연구 take_rate는 0 이상만 허용하고 제품 validate_drops의 왕복비용 하한은 엔진에서 강제하지 않는다. 제품과의 동일성은 유효한 공통 설정의 결정 사례에 한정"
+    ]
   },
   "baseline": {
     "primary": "사전 고정 투자 비중 리밸런싱",
