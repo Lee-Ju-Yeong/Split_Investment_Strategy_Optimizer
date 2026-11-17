@@ -176,8 +176,23 @@ def validate(data: dict) -> None:
     if (_get(data, "holdout.correlation_merge.sensitivity_report_threshold")
             > _get(data, "holdout.correlation_merge.threshold")):
         raise ValueError("민감도 보고 상관 기준은 주 기준 이하여야 합니다")
+    if data.get("engine_schema") == "etf-m2-v1":
+        _validate_market_reference(data)
     if data["status"] == "frozen" and open_items(data):
         raise ValueError(f"고정된 프로토콜에 미정 값이 남았습니다: {sorted(open_items(data))}")
+
+
+def _validate_market_reference(data: dict) -> None:
+    reference = _get(data, "execution.market_rules")
+    if not isinstance(reference, dict) or reference.get("file") != "market_rules_v1.json":
+        raise ValueError("M2 시장 규칙 파일 참조가 잘못됐습니다")
+    path = Path(__file__).with_name(reference["file"])
+    if reference.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise ValueError("M2 시장 규칙 해시가 프로토콜과 다릅니다")
+    rules = json.loads(path.read_text(encoding="utf-8"))
+    for market, key in (("KR", "KR"), ("US", "US"), ("KRX_GOLD", "GOLD")):
+        if str(_get(data, f"execution.costs_one_way.{market}_commission")) != rules["commission_rates"][key]:
+            raise ValueError("프로토콜과 M2 시장 규칙의 수수료가 다릅니다")
 
 
 def main(argv=None) -> None:

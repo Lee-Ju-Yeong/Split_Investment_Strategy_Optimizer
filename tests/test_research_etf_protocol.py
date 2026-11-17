@@ -87,6 +87,21 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pr.load(path)
 
+    def test_m2_market_reference_and_fee_drift_are_rejected(self):
+        bad = copy.deepcopy(self.proto)
+        bad["execution"]["market_rules"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "해시"):
+            pr.validate(bad)
+        bad = copy.deepcopy(self.proto)
+        bad["execution"]["costs_one_way"]["US_commission"] = 0.001
+        with self.assertRaisesRegex(ValueError, "수수료"):
+            pr.validate(bad)
+
+    def test_m2_open_values_belong_only_to_m5(self):
+        remaining = pr.open_items(self.proto)
+        self.assertEqual(len(remaining), 5)
+        self.assertTrue(all(value.startswith("M5") for value in remaining.values()))
+
 
 def _meta(rows):
     base = {"name": "", "has_price_history": True, "d1_eligible": True, "is_single_stock": False,

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "product_repository": "split-trader",
+    "product_commit": "aaa3bb9",
+    "read_only_sources": [
+      "back/src/split_trader/kiwoom_integration/product_trading_policy.py",
+      "back/src/split_trader/accounting.py",
+      "back/src/split_trader/amounts.py"
+    ],
+    "oracle": "Literal expectations fixed from source rules and the hand calculations in docs/research/etf_m2_product_cases.md before reading engine implementation.",
+    "money_encoding": "decimal strings, rates are fractions: 5%=0.05",
+    "cost_scope": "Strategy isolation uses commission=0, SEC=0 and stock tax=0 unless stated. Research proportional fees differ from the product's 10-KRW commission truncation."
+  },
+  "strategy_defaults": {
+    "instrument": {"symbol": "ETF", "market": "US", "currency": "USD"},
+    "bar": {"session_date": "2024-06-03", "open_at": "2024-06-03T13:30:00+00:00", "close_at": "2024-06-03T19:30:00+00:00", "open": "90", "high": "90", "low": "90", "close": "90", "volume": "1000000", "adv20": "1000000000"},
+    "opened_at": "2024-05-31T13:30:00+00:00",
+    "position": {"quantity": 10, "entry_price": "100", "buy_fee": "0", "take_rate": "1"},
+    "rules": [
+      {"level": 1, "budget": "1000", "drop_rate": "0", "take_rate": "1"},
+      {"level": 2, "budget": "1000", "drop_rate": "0.1", "take_rate": "1"},
+      {"level": 3, "budget": "1000", "drop_rate": "0.1", "take_rate": "1"},
+      {"level": 4, "budget": "1000", "drop_rate": "0.1", "take_rate": "1"}
+    ],
+    "options": {"path": "O-H-L-C", "first_entry": false, "penetration_ticks": 1, "slippage_ticks": 0, "commission_rate": "0", "sec_rate_override": "0", "product_sell_tax_rate": "0"}
+  },
+  "strategy_cases": [
+    {"id": "empty_has_no_automatic_first_entry", "positions": [], "expected": null},
+    {"id": "missing_first_but_second_anchors_third", "positions": [{"level": 2}], "expected": {"side": "BUY", "level": 3, "quantity": 11, "price": "90", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "missing_first_and_second_blocks_later_levels", "positions": [{"level": 3}], "expected": null},
+    {"id": "middle_hole_uses_previous_number_not_latest", "positions": [{"level": 1}, {"level": 3, "entry_price": "50"}], "expected": {"side": "BUY", "level": 2, "quantity": 11, "price": "90", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "all_levels_occupied", "positions": [{"level": 1}, {"level": 2}, {"level": 3}, {"level": 4}], "expected": null},
+    {"id": "buy_fee_is_not_part_of_drop_anchor_reject", "bar": {"open": "90.05", "high": "90.05", "low": "90.05", "close": "90.05"}, "positions": [{"level": 1, "quantity": 2, "entry_price": "100.05", "buy_fee": "100"}], "expected": null},
+    {"id": "exact_principal_drop_accept", "bar": {"open": "90.04", "high": "90.04", "low": "90.04", "close": "90.04"}, "positions": [{"level": 1, "quantity": 2, "entry_price": "100.05", "buy_fee": "100"}], "expected": {"side": "BUY", "level": 2, "quantity": 11, "price": "90.04", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "sha256_order_not_level_or_profit", "bar": {"open": "120", "high": "120", "low": "120", "close": "120"}, "positions": [{"level": 2, "entry_price": "80", "take_rate": "0.05"}, {"level": 3, "entry_price": "60", "take_rate": "0.05"}, {"level": 4, "entry_price": "100", "take_rate": "0.05"}], "expected": {"side": "SELL", "level": 4, "quantity": 10, "price": "120", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "sha256_order_independent_of_position_input", "bar": {"open": "120", "high": "120", "low": "120", "close": "120"}, "positions": [{"level": 3, "entry_price": "60", "take_rate": "0.05"}, {"level": 4, "entry_price": "100", "take_rate": "0.05"}, {"level": 2, "entry_price": "80", "take_rate": "0.05"}], "expected": {"side": "SELL", "level": 4, "quantity": 10, "price": "120", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "sell_wins_when_buy_and_sell_are_simultaneously_eligible", "positions": [{"level": 1}, {"level": 3, "entry_price": "50", "take_rate": "0.1"}], "expected": {"side": "SELL", "level": 3, "quantity": 10, "price": "90", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "fee_inclusive_integer_quantity", "bar": {"open": "10000", "high": "10000", "low": "10000", "close": "10000"}, "positions": [], "rules": [{"level": 1, "budget": "100000", "drop_rate": "0", "take_rate": "1"}], "options": {"first_entry": true, "commission_rate": "0.00015"}, "expected": {"side": "BUY", "level": 1, "quantity": 9, "price": "10000", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "return_half_up_exact_boundary", "bar": {"open": "210", "high": "210", "low": "210", "close": "210"}, "positions": [{"level": 1, "quantity": 1000, "entry_price": "200", "buy_fee": "10", "take_rate": "0.05"}], "expected": {"side": "SELL", "level": 1, "quantity": 1000, "price": "210", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "return_half_up_below_boundary", "bar": {"open": "210", "high": "210", "low": "210", "close": "210"}, "positions": [{"level": 1, "quantity": 1000, "entry_price": "200", "buy_fee": "10.00000001", "take_rate": "0.05"}], "expected": null},
+    {"id": "return_half_up_above_boundary", "bar": {"open": "210", "high": "210", "low": "210", "close": "210"}, "positions": [{"level": 1, "quantity": 1000, "entry_price": "200", "buy_fee": "9.99999999", "take_rate": "0.05"}], "expected": {"side": "SELL", "level": 1, "quantity": 1000, "price": "210", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "return_half_up_differs_from_half_even", "bar": {"open": "210", "high": "210", "low": "210", "close": "210"}, "positions": [{"level": 1, "quantity": 1000, "entry_price": "200", "buy_fee": "30", "take_rate": "0.0499"}], "expected": {"side": "SELL", "level": 1, "quantity": 1000, "price": "210", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "high_first_sells_before_buy", "bar": {"open": "100", "high": "120", "low": "80", "close": "100"}, "positions": [{"level": 1, "take_rate": "0.1"}], "expected": {"side": "SELL", "level": 1, "quantity": 10, "price": "110", "at": "2024-06-03T14:30:03.600000+00:00"}},
+    {"id": "low_first_buys_before_sell", "bar": {"open": "100", "high": "120", "low": "80", "close": "100"}, "positions": [{"level": 1, "take_rate": "0.1"}], "options": {"path": "O-L-H-C"}, "expected": {"side": "BUY", "level": 2, "quantity": 11, "price": "90", "at": "2024-06-03T14:30:03.600000+00:00"}},
+    {"id": "buy_gap_executes_at_open", "bar": {"open": "80", "high": "80", "low": "80", "close": "80"}, "positions": [{"level": 1}], "expected": {"side": "BUY", "level": 2, "quantity": 12, "price": "80", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "sell_gap_executes_at_open", "bar": {"open": "120", "high": "120", "low": "120", "close": "120"}, "positions": [{"level": 1, "take_rate": "0.1"}], "expected": {"side": "SELL", "level": 1, "quantity": 10, "price": "120", "at": "2024-06-03T13:30:00+00:00"}},
+    {"id": "buy_touch_without_penetration_does_not_fill", "bar": {"open": "100", "high": "100", "low": "90", "close": "100"}, "positions": [{"level": 1}], "expected": null},
+    {"id": "buy_one_tick_penetration_fills_at_limit", "bar": {"open": "100", "high": "100", "low": "89.99", "close": "100"}, "positions": [{"level": 1}], "expected": {"side": "BUY", "level": 2, "quantity": 11, "price": "90", "at": "2024-06-03T17:30:00+00:00"}},
+    {"id": "sell_touch_without_penetration_does_not_fill", "bar": {"open": "100", "high": "110", "low": "100", "close": "100"}, "positions": [{"level": 1, "take_rate": "0.1"}], "expected": null},
+    {"id": "sell_one_tick_penetration_fills_at_limit", "bar": {"open": "100", "high": "110.01", "low": "100", "close": "100"}, "positions": [{"level": 1, "take_rate": "0.1"}], "expected": {"side": "SELL", "level": 1, "quantity": 10, "price": "110", "at": "2024-06-03T15:30:00+00:00"}},
+    {"id": "zero_volume_blocks_initial_entry", "bar": {"volume": "0"}, "positions": [], "options": {"first_entry": true}, "expected": null},
+    {"id": "zero_volume_blocks_sell", "bar": {"open": "120", "high": "120", "low": "120", "close": "120", "volume": "0"}, "positions": [{"level": 1, "take_rate": "0.1"}], "expected": null},
+    {"id": "limit_locked_blocks_entry", "bar": {"limit_locked": true}, "positions": [], "options": {"first_entry": true}, "expected": null},
+    {"id": "first_unfilled_sell_cannot_be_replaced_by_later_buy", "instrument": {"market": "KR", "currency": "KRW"}, "bar": {"session_date": "2025-03-04", "open_at": "2025-03-04T00:00:00+00:00", "close_at": "2025-03-04T06:00:00+00:00", "open": "10000", "high": "10500", "low": "9400", "close": "9600"}, "positions": [{"level": 1, "entry_price": "10000", "take_rate": "0.05"}], "rules": [{"level": 1, "budget": "100000", "drop_rate": "0", "take_rate": "0.05"}, {"level": 2, "budget": "100000", "drop_rate": "0.05", "take_rate": "0.05"}], "expected": null},
+    {"id": "low_first_order_fills_without_later_replacement", "instrument": {"market": "KR", "currency": "KRW"}, "bar": {"session_date": "2025-03-04", "open_at": "2025-03-04T00:00:00+00:00", "close_at": "2025-03-04T06:00:00+00:00", "open": "10000", "high": "10500", "low": "9400", "close": "9600"}, "positions": [{"level": 1, "entry_price": "10000", "take_rate": "0.05"}], "rules": [{"level": 1, "budget": "100000", "drop_rate": "0", "take_rate": "0.05"}, {"level": 2, "budget": "100000", "drop_rate": "0.05", "take_rate": "0.05"}], "options": {"path": "O-L-H-C"}, "expected": {"side": "BUY", "level": 2, "quantity": 10, "price": "9500", "at": "2025-03-04T01:41:00+00:00"}},
+    {"id": "first_unfilled_buy_cannot_be_replaced_by_later_sell", "instrument": {"market": "KR", "currency": "KRW"}, "bar": {"session_date": "2025-03-04", "open_at": "2025-03-04T00:00:00+00:00", "close_at": "2025-03-04T06:00:00+00:00", "open": "10000", "high": "10600", "low": "9500", "close": "10000"}, "positions": [{"level": 1, "entry_price": "10000", "take_rate": "0.05"}], "rules": [{"level": 1, "budget": "100000", "drop_rate": "0", "take_rate": "0.05"}, {"level": 2, "budget": "100000", "drop_rate": "0.05", "take_rate": "0.05"}], "options": {"path": "O-L-H-C"}, "expected": null}
+  ],
+  "integration_cases": {
+    "first_unfilled_order_reserves_daily_order_slot": {"initial_krw": "200000", "O-H-L-C": {"expected_trades": [], "expected_final_krw": "200000", "expected_position_levels": [1]}, "O-L-H-C": {"expected_trades": [["BUY", 2, 10, "9500"]], "expected_final_krw": "105000", "expected_position_levels": [1, 2]}},
+    "conversion_uses_current_holdings_after_previous_valuation": {"initial_krw": "10000000", "fx": "1000", "fx_cost": "0", "us_budget": "3000", "us_price": "100", "us_quantity": 30, "conversion_times": ["2024-06-03T01:00:00+00:00", "2024-06-04T01:00:00+00:00"], "previous_evaluation_at": "2024-06-03T09:00:00+00:00", "previous_equity_krw": "10000000", "target_us_share": "0.5", "target_us_value_krw": "5000000", "current_us_holdings_krw": "3000000", "target_us_cash": "2000", "expected_final_krw": "5000000", "expected_final_usd": "2000", "expected_trades": [["BUY", 1, 30, "100"]]},
+    "year_end_estimated_tax_reporting_continuity": {"sale_date": "2024-12-27", "settlement_date": "2024-12-30", "quantity": 100, "entry_price_usd": "100", "sale_price_usd": "200", "fx": "1000", "gain_krw": "10000000", "annual_exemption_krw": "2500000", "tax_rate": "0.22", "expected_tax_krw": "1650000", "evaluations": [{"at": "2024-12-31T09:00:00+00:00", "equity_krw": "20000000", "estimated_tax_krw": "1650000", "equity_after_estimated_tax_krw": "18350000"}, {"at": "2025-01-01T09:00:00+00:00", "equity_krw": "18350000", "estimated_tax_krw": "0", "equity_after_estimated_tax_krw": "18350000"}], "expected_final_krw": "0", "expected_final_usd": "20000"},
+    "estimated_tax_report_does_not_reduce_budget_or_available_cash": {"sale_date": "2024-11-27", "settlement_date": "2024-11-29", "fx": "1000", "initial_krw": "9999000", "kr_initial_quantity": 1, "kr_initial_entry": "1000", "us_initial_quantity": 100, "us_initial_entry": "100", "us_sale_price": "200", "previous_evaluation_at": "2024-11-30T09:00:00+00:00", "previous_equity_krw": "30000000", "estimated_tax_krw": "1650000", "report_only_equity_krw": "28350000", "first_level_fraction": "0.6", "instrument_count": 2, "expected_december_budget_krw": "9000000", "december_kr_open": "800", "expected_kr_buy_quantity": 11250, "expected_final_krw": "999000", "expected_final_usd": "20000", "expected_trades": [["SELL", 1, 100, "200"], ["BUY", 2, 11250, "800"]]},
+    "daily_order_limit": {"initial_usd": "1000", "O-H-L-C": {"expected_trades": [["SELL", 1, 10, "110"]], "expected_final_usd": "2100", "expected_position_levels": []}, "O-L-H-C": {"expected_trades": [["BUY", 2, 11, "90"]], "expected_final_usd": "10", "expected_position_levels": [1, 2]}},
+    "no_first_level_reentry": {"initial_krw": "200000", "budget": "100000", "commission_rate": "0.00015", "opens": ["10000", "12000", "9000"], "expected_trades": [["BUY", 1, 9, "10000"], ["SELL", 1, 9, "12000"]], "expected_final_krw": "217970.3"},
+    "cash_rejection": {"budget": "1000", "price": "100", "commission_rate": "0.01", "initial_krw": "908.99", "candidate_quantity": 9, "candidate_total": "909", "expected_trades": 0, "expected_final_krw": "908.99"},
+    "currency_isolation": {"budget_usd": "1000", "initial_krw": "2000000", "initial_usd": "0", "us_open": "100", "fx": "1300", "expected_trades": 0, "expected_final_krw": "2000000", "expected_final_usd": "0"},
+    "participation_rejection": {"budget": "100000", "price": "10000", "commission_rate": "0.00015", "adv20": "1000000", "participation_rate": "0.05", "candidate_notional": "90000", "maximum_notional": "50000", "expected_trades": 0},
+    "monthly_budget": {"initial_krw": "90000", "initial_position_quantity": 10, "initial_entry_price": "1000", "initial_take_rate": "10", "fraction": "0.1", "january_close": "2000", "february_open": "800", "previous_equity_krw": "110000", "february_budget": "11000", "expected_buy_level": 2, "expected_buy_quantity": 13, "expected_final_krw": "79600"},
+    "future_information": {"previous_us_close": "100", "position_quantity": 10, "published_fx": "1300", "evaluation_at": "2024-06-04T09:00:00+00:00", "future_us_open_at": "2024-06-04T13:30:00+00:00", "future_fx_available_at": "2024-06-04T12:00:00+00:00", "future_close_variants": ["100", "999"], "future_fx_variants": ["1400", "9999"], "expected_equity_krw": "1300000"},
+    "unsettled_sale_not_convertible": {"sale_date": "2024-06-03", "settlement_date": "2024-06-04", "sale_quantity": 10, "sale_price_usd": "110", "conversion_at": "2024-06-03T20:00:00+00:00", "fx": "1300", "expected_final_krw": "0", "expected_final_usd": "1100"}
+  },
+  "sha256_reference": {
+    "ETF:1": "33d68c3d8d2e787add1507887f0f2d4a8f08f1982e27660d86f7ef893e250a8b",
+    "ETF:2": "d7549d3d016b4d747196f9318ef7584da6d81632c06e57eb6022e0af2aefa04b",
+    "ETF:3": "aac39fd8501fe3e64c322c933337926337a0a205b6c79b50b8ce1b0635130e03",
+    "ETF:4": "462faeeb6e719b2472a941a98f90a9751bb3a6e7a4f6b8c49241141ca8a02f4a",
+    "ascending_levels": [1, 4, 3, 2]
+  }
+}

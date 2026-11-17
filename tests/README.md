@@ -141,9 +141,17 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_research_etf_fx_calendars.py` | 환율·금리 이용 가능 시각(미래 정보 차단), KRX·NYSE 거래일 달력 | 30개 |
 | `test_research_etf_krx_gold.py` | KRX 금현물 일봉 정리: 원본 보존, 동시 실행 잠금, 무한대 값 차단 | 25개 |
 | `test_research_etf_metadata.py` | ETF 분류(레버리지·자산군·지수 묶음·국내 과세 유형)와 D1 유니버스 필터, 폐지 ETF 분류 | 43개 |
-| `test_research_etf_protocol.py` | 연구 프로토콜 JSON 검증·해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 18개 |
+| `test_research_etf_protocol.py` | 연구 프로토콜 JSON·M2 비용표 해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 20개 |
+| `test_research_etf_engine_market.py` | ETF·금·미국 호가와 SEC 요율·공표 시각·미확인 구간 거부 | 24개 |
+| `test_research_etf_engine_strategy.py` | 제품 V2 판단·최초 미체결 주문 고정·두 일봉 경로·호가 관통·반올림 경계 | 47개 |
+| `test_research_etf_engine_tax.py` | 합성 세금 원장·결제일 환율·연간 합산·미수 배당·보고용 추정세·납부 | 35개 |
+| `test_research_etf_engine.py` | UTC 사건·현재 시점 환전·월 예산·미래 정보·보고 평가와 장부 평가 분리 | 46개 |
+| `test_research_etf_engine_contract.py` | 제품 고정 커밋·손계산의 독립 기대값과 Opus 반례 회귀 | 44개 |
+| `test_research_etf_engine_inputs.py` | M1 해시·탐색 한정·직전 거래대금·달력 끝·기간 말미 누락·기업행사 맥락 | 24개 |
 
-최초 도입은 34개였으며 현재 구성은 **기존 34개 + 관련 CPU 18개 + 예제 검사 20개 + 체결가 호가 검사 12개 + 차수 규칙 18개 + 제품 대조 10개 + ETF 연구 데이터 146개 = 258개**와 예제 2개입니다. 실패·건너뜀은 0이어야 하며 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
+최초 도입은 34개였으며 M1 구성은 258개와 예제 2개였습니다. M2에서 프로토콜 검사 2개와 엔진·입력 검사 220개를 추가해 **선택 CPU 검사 구성은 480개, 예제는 3개**입니다. 실제 통과 여부는 각 실행 결과에서 확인하며 실패·건너뜀은 0이어야 합니다. 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
+
+M2 작은 예제는 `python -m examples.etf_m2_demo`입니다. 두 일봉 경로에서 1차 매수·익절 후 자동 재진입하지 않는 가상 3거래일을 검산합니다. [입력·결과·실제 자료의 제한](../docs/research/etf_m2_engine.md)을 함께 읽으세요.
 
 이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/done_2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/done_2026_11_06-cpu-checks-ci.md)에 남깁니다.
 
