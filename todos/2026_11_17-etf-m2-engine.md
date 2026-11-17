@@ -3,6 +3,7 @@
 > 유형: `implementation`
 > 상태: `완료 — M2 기준 엔진·CPU480개·예제3개·Opus r3 차단 없음, M3 대조 기준 사용 가능`
 > 시작일: `2026-11-17`
+> 완료일: `2026-11-18`
 > 근거: [연구 계획](2026_11_15-etf-vol-split-research-plan.md), `src/research/etf/protocol_v1.json` 초안
 
 ## 목표와 범위
@@ -166,7 +167,7 @@ FxRate, EngineResult다. 이 파일은 통합 담당만 수정한다. 추가 필
 | D 추정세 보고 API | `task_a8d892cf7297` | `ctx_9f2de9e439c2` | succeeded, 자체35개 exit0 |
 | E 독립 회귀 추가 | `task_4e94b1460236` | `ctx_2a6fd990aa3c` | succeeded, 44개 기대값 고정·B 수정 검증 출처 기록 |
 | Opus 보완 재검토 | `task_480b4415b71f` | `ctx_145684e2c5bf` | 완료, M2/M3 대조 기준 남은 차단 없음, M5전 MEDIUM1·LOW3 |
-| D 준비금 설명 정합화 | `task_024312792a95` | `ctx_7a1ec85108b5` | succeeded, 문서 문자열만 변경·실행 AST 불변 |
+| D 준비금 설명 정합화 | `task_024312792a95` | `ctx_7a1ec85108b5` | succeeded, 워커 보고: 문서 문자열만 변경·실행 AST 불변 |
 | C 직접 호출 계약 | `task_3d2b9b2db3bc` | `ctx_4fe605a27632` | succeeded, run_engine docstring만 변경 |
 | Opus 마지막 확인 | `task_404eaa192f4d` | `ctx_eae4c179ca8f` | 완료, 19개 해시·480개 검사 대조·새 차단 없음 |
 
@@ -282,3 +283,11 @@ M3 대조에 쓰는 데 남은 HIGH/MEDIUM 차단이 없다고 판정했다. 실
 - Orca `run_c21877133c43`의14개 작업은 모두 completed임을 실제 task-list로 확인했다.
 - 최종480개·예제3개 및 이전 실행기24개 통과 근거, r1/r2/r3 해시와 로그를 외부 validation 폴더에 보존했다.
   다음 구현은 M3이며 완료된 M2 소스를 기준으로 비교한다. 실제 자료 탐색은 상폐 청산·KR 결제 등 실행 조건을 먼저 충족한다.
+- M2 구현과 완료 기록은 로컬 커밋 `d14af432acdfc128b5e44498925690a16dfa0adc`에 보존했다.
+- 2026-11-18 재체크아웃 검수에서 Windows 자동 줄바꿈이 비용표의 원시 바이트 해시를 바꾸는 문제를
+  재현했다. `.gitattributes`로 비용표 JSON만 LF로 고정했고 같은 `core.autocrlf=true` 체크아웃의 해시가
+  프로토콜 `079bc678e16bacdc4f5ec65614b9b50dca5b229762e00ace7bb923d8ed392cbb`와 일치했다.
+  이 보완은 검토받은19개 코드·설정·검사 바이트를 바꾸지 않아480개 검사를 반복하지 않고 Git 체크아웃으로 검증했다.
+- 최종 소스의 docstring 제거 AST 해시16개는 `validation/code-ast-fingerprints-final.json`에 새로 남겼다.
+  이는 이후 대조용이며 사본이 없는 과거 r2 원문을 소급 증명하지 않는다. Opus INFO의 환율 최대 경과일·
+  공통 평가 달력 고정은 M5 실행 조건에 추가했다.
