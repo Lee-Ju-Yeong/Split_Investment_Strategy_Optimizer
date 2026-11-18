@@ -42,11 +42,13 @@ class M1Inputs:
     domestic_settlement: str = "legacy_same_day"
     max_fx_age_days: int | None = None
     delistings: tuple[DelistingEvent, ...] = ()
+    fx_closure_age_days: int | None = None
 
     def engine_kwargs(self) -> dict:
         return {name: getattr(self, name) for name in (
             "fx_rates", "evaluation_times", "conversion_times", "us_sessions", "settlement_session_times",
-            "kr_sessions", "kr_settlement_session_times", "domestic_settlement", "max_fx_age_days", "delistings")}
+            "kr_sessions", "kr_settlement_session_times", "domestic_settlement", "max_fx_age_days", "delistings",
+            "fx_closure_age_days")}
 
 
 def _sha(path: Path) -> str:
@@ -209,7 +211,8 @@ def _delisting_marker(row, day, event):
 
 def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_csv, *,
                    payment_dates=None, locked_status=None, delistings=(), input_hashes=None,
-                   domestic_settlement="legacy_same_day", max_fx_age_days=None) -> M1Inputs:
+                   domestic_settlement="legacy_same_day", max_fx_age_days=None,
+                   fx_closure_age_days=None) -> M1Inputs:
     """명시한 탐색 상품을 읽는다. 성과 탐색·보류 실행·원본 갱신은 수행하지 않는다.
 
     locked_status[(symbol,date)]는 단일 가격 일봉의 제한폭 고정 여부를 확인한 bool이다.
@@ -306,12 +309,14 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
                   "settlement_availability_assumption": "명시한 시장 close_utc를 사용한 보수적 가정, 실제 결제시각을 관측한 값이 아님",
                   "evaluation_calendar_sha256": hashlib.sha256("\n".join(at.isoformat() for at in evaluations).encode()).hexdigest(),
                   "domestic_settlement": domestic_settlement, "max_fx_age_days": max_fx_age_days,
+                  "fx_closure_age_days": fx_closure_age_days,
                   "delisting_sources_sha256": {event.symbol: event.source_sha256 for event in delistings}}
     if any(bar.dividend and bar.dividend_pay_at is None for bar in bars):
         warnings.append("미국 분배금 지급일 미확인: 미수금으로만 기록하며 현금 재투자에 사용할 수 없음")
     return M1Inputs(instruments, sorted(bars, key=lambda b: (b.open_at, symbols.index(b.symbol))), rates,
                     evaluations, conversions, list(nyse), {day: pair[1] for day, pair in nyse.items()}, provenance, warnings,
-                    list(krx), {day: pair[1] for day, pair in krx.items()}, domestic_settlement, max_fx_age_days, tuple(delistings))
+                    list(krx), {day: pair[1] for day, pair in krx.items()}, domestic_settlement, max_fx_age_days, tuple(delistings),
+                    fx_closure_age_days)
 
 
 def _extra_paths(root, has_gold):
