@@ -27,7 +27,7 @@ from .fast_kernel import FastKernel
 from .m5_inputs import load_m5_inputs, read_manifest
 from .m5_parameters import CONFIG_PATH, load_config, load_volatilities
 from .m5_pilot import _common, _encode, _provenance, _strategy, _unchanged, _window_start
-from .m5_search import FORMAL_PATH, SCHEMA as PLAN_SCHEMA
+from .m5_search import FORMAL_PATH, SCHEMA as PLAN_SCHEMA, build_plan
 
 
 UNIT_SCHEMA = "etf-m5-unit-v1"
@@ -267,9 +267,12 @@ def status(plan, run_dir):
 def run_plan(data_root, manifest_path, plan_path, run_dir, *, build_dir=None, workers=1, max_units=None):
     """같은 계획·소스·입력이면 같은 폴더에서 이어 실행한다. 완성된 단위는 다시 실행하거나 덮어쓰지 않는다."""
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
-    if plan.get("schema") != PLAN_SCHEMA:
+    if plan.get("schema") != PLAN_SCHEMA or plan.get("scope") not in {"formal", "draft_not_formal", "smoke_not_formal"}:
         raise ValueError("invalid M5 plan")
     read_manifest(data_root, manifest_path, [])
+    # 축소하지 않은 계획은 현재 설정·입력으로 다시 만든 것과 같아야 한다. 손으로 고친 계획을 정식으로 실행하지 않는다.
+    if plan["scope"] != "smoke_not_formal" and plan != build_plan(data_root, manifest_path):
+        raise ValueError("plan differs from the one the current configuration and inputs produce")
     if not plan["synthetic"] and build_dir is None:
         raise ValueError("real-data search requires an explicit verified M3 build")
     directory = Path(run_dir)

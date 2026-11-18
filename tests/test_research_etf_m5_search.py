@@ -14,7 +14,7 @@ from src.research.etf.baseline_engine import run_baseline
 from src.research.etf.baseline_policy import fixed_baseline
 from src.research.etf.engine_types import Instrument
 from src.research.etf.m5_pilot import _common, _window_start
-from src.research.etf.m5_runner import matched_policy, run_plan
+from src.research.etf.m5_runner import matched_policy, run_plan, status
 from src.research.etf.m5_search import build_plan, draw_basket, eligible, start_windows
 
 
@@ -169,7 +169,8 @@ class FormalRunTests(unittest.TestCase):
             self.assertEqual(before, sha(first))
             self.assertEqual(run_plan(self.data, self.manifest, self.plan_path, self.run), dict(summary))
             with self.assertRaisesRegex(ValueError, "different source, input, plan or build"):
-                run_plan(self.data, self.manifest, self.save("other.json", dict(self.plan, scope="formal")), self.run)
+                run_plan(self.data, self.manifest, self.save("other.json", dict(self.plan, posthoc_diagnostic=False)),
+                         self.run)
         self.assertEqual(sorted(path.name for path in self.run.rglob("*.partial")), [])
 
     def test_failed_learning_run_stays_in_the_denominator_and_fails_its_comparison(self):
@@ -197,9 +198,12 @@ class FormalRunTests(unittest.TestCase):
         empty = dict(self.plan, baskets=[], counts=dict.fromkeys(self.plan["counts"], 0))
         summary = run_plan(self.data, self.manifest, self.save("empty.json", empty), self.root / "empty-run")
         self.assertEqual((summary["status"], summary["units_planned"]), ("failed", 0))
-        short = run_plan(self.data, self.manifest, self.save("short.json", dict(self.plan, scope="formal")),
-                         self.root / "short-run", max_units=0)
+        short = status(dict(self.plan, scope="formal"), self.root / "short-run")
         self.assertEqual((short["status"], short["shortfall_strata"]), ("incomplete", 6))
+        for scope in ("formal", "draft_not_formal", "unknown"):
+            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, "plan differs|invalid M5 plan"):
+                run_plan(self.data, self.manifest, self.save(f"{scope}.json", dict(self.plan, scope=scope)),
+                         self.root / f"{scope}-run")
         with self.assertRaisesRegex(ValueError, "different protocol_sha256"):
             run_plan(self.data, self.manifest, self.save("stale.json", dict(self.plan, protocol_sha256="0" * 64)),
                      self.root / "stale-run")
