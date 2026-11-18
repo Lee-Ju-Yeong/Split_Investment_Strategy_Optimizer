@@ -699,7 +699,8 @@ class _Engine:
 
     def _convert_to_usd(self, at, desired, rate):
         amount = min(desired, self.settled["KRW"] / (rate * (ONE + self.options.fx_cost)))
-        cost = amount * rate * (ONE + self.options.fx_cost)
+        # 나눗셈 반올림 때문에 전액 환전 비용이 결제현금을 넘어 음수 잔액이 남지 않게 한다.
+        cost = min(amount * rate * (ONE + self.options.fx_cost), self.settled["KRW"])
         self.cash["KRW"] -= cost
         self.settled["KRW"] -= cost
         self.cash["USD"] += amount
