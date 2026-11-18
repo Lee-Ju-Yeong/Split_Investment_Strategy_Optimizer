@@ -1,6 +1,6 @@
 {
   "protocol": "etf-vol-split",
-  "version": "1.2.1-m5-draft",
+  "version": "1.2.2-m5-draft",
   "engine_schema": "etf-m2-v1",
   "status": "draft",
   "status_note": "M5 탐색 조건을 성과 실행 전에 m5_search_v1.json으로 지정했다. M1 원본 분할 해시는 보존한다. M6 규칙 고정·보류 평가 전이며 작은 실행은 동작 확인용이다.",
@@ -119,7 +119,8 @@
     },
     "definition_change": "MAR이 24시간 외환시장 개편으로 16:00 TWAP로 바뀌면 전환일을 기록하고 그날 이후 값의 정의를 manifest에 남긴다",
     "max_publication_age_days": 7,
-    "publication_age_policy_scope": "작은 실행은 공표 후 최대 7일을 넘으면 실패. 정식 장기 탐색 전 실제 KRX/NYSE 달력과 MAR 공표 간격을 대조해 장기 휴장 정책을 확정한다. 실패한 기간·바스켓을 조용히 제외하지 않는다"
+    "max_closure_publication_age_days": 12,
+    "publication_age_policy_scope": "공표 후 7일까지는 그대로 쓴다. 7일을 넘으면 마지막 MAR 이후 적용일 09:00 KST가 지난 KRX 세션이 없고 12일 이내일 때만 쓴다(장기 국내 휴장). 그 밖에는 실패하며 실패한 기간·바스켓을 조용히 제외하지 않는다. 작은 실행은 7일 한도만 쓴다. 근거: 2004-01-02~2026-11-13 감사에서 7일 초과는 2017-10(최대 10.83일)·2025-10(7.83일) 두 휴장뿐이고 모든 KRX 세션에 당일 MAR이 있었다. 달력은 exchange_calendars 산출물이며 거래소 공식 기록과 대조하지 않았다"
   },
   "execution": {
     "decision": "종목당 하루 최대 1건, 매도 우선(제품 V2)",
