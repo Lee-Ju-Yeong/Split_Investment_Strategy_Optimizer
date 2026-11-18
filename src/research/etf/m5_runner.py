@@ -37,6 +37,7 @@ TAIL_ROWS = 3
 def _dump(path, value):
     """새 파일만 만든다. 중간에 끊긴 쓰기가 완성된 단위로 보이지 않게 임시 파일에서 옮긴다."""
     partial = path.with_name(path.name + ".partial")
+    partial.unlink(missing_ok=True)  # 이전 실행이 쓰다 끊긴 조각. 한 실행 폴더는 한 번에 한 실행만 쓴다.
     with partial.open("x", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, sort_keys=True, default=_encode)
         stream.write("\n")
@@ -249,11 +250,16 @@ def status(plan, run_dir):
             counts["references_failed"] += sum(row["status"] != "passed" for rows in unit["references"].values()
                                                for row in rows.values())
     missing = counts["units_planned"] - counts["units_completed"] - counts["units_failed"]
-    passed = (missing == 0 and counts["units_failed"] == 0 and counts["trials_passed"] == counts["trials_planned"]
+    # 실행할 것이 없는 계획이나 층별 바스켓이 모자란 정식 계획은 통과가 아니다.
+    short = len(plan["shortfalls"])
+    planned = counts["units_planned"] > 0 and counts["trials_planned"] > 0 and not (plan["scope"] == "formal" and short)
+    passed = (planned and missing == 0 and counts["units_failed"] == 0
+              and counts["trials_passed"] == counts["trials_planned"]
               and counts["comparisons_passed"] == counts["comparisons_planned"]
               and counts["references_failed"] == 0)
     return dict(counts, schema="etf-m5-run-v1", scope=plan["scope"], synthetic=plan["synthetic"],
-                units_missing=missing, status="passed" if passed else "incomplete" if missing else "failed",
+                units_missing=missing, shortfall_strata=short,
+                status="passed" if passed else "incomplete" if missing else "failed",
                 unit_seconds=elapsed, statistical_success_evaluated=False, holdout_evaluated=False,
                 nested_validation_performed=False, actual_after_tax_approved=False)
 

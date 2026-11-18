@@ -285,7 +285,7 @@ PR #123은 보완 후보 `ba41138`의 원격 검사5개 통과 뒤 사용자 승
 
 | 대상 | 결과·증거 |
 | --- | --- |
-| `.venv/bin/python tools/ci/run_cpu_checks.py` | 30모듈599개·예제5개 PASS/exit0, `cpu-r7.log` |
+| `.venv/bin/python tools/ci/run_cpu_checks.py` | 30모듈599개·예제5개 PASS/exit0, `cpu-r8.log` |
 | `python3 -S tools/ci/run_etf_m3_checks.py --build-dir …/build-v2` | 180개 PASS/exit0, `native-stdlib-r5.log` |
 | 실행기 자체 | 25개 PASS, `runner-r5.log` |
 | 실자료 계획 초안 | `results/etf-m5-formal/plan-draft-r2.json`: 바스켓30·단위419·시도120,672·비교80,640, 부족 층 없음 |
@@ -305,6 +305,13 @@ PR #123은 보완 후보 `ba41138`의 원격 검사5개 통과 뒤 사용자 승
   측정하지 못했다. 시도당 수 초로 보면 6개 작업자로 하루 이상이 걸린다(추정).
 - 프로토콜 `baseline.learning_window` 문구는 그대로다. 정식 설정을 고정할 때 학습 단위 문구를 맞춘다.
 
+Codex 리뷰(`codex review --base origin/main`, `results/etf-m5-validation/codex-review-r1.log`)는 P2 3건이었고 모두 반영했다.
+
+- 실행할 단위가 없는 계획이 `passed`가 되던 것을 막고, 층별 바스켓이 모자란 정식 계획도 통과시키지 않는다.
+- 초안 설정으로 만든 계획은 `formal`이 아니라 `draft_not_formal`로 표시한다. 연결 실행 당시 초안 계획
+  `plan-draft-r2.json`은 이 수정 전이라 `formal`로 적혀 있으며 정식 계획으로 쓰지 않는다.
+- 쓰다 끊긴 `.partial` 조각 때문에 재개가 막히던 것을 고쳤다.
+
 [사용·자료 전송·실행 범위](../docs/research/etf_m5_readiness.md).
-다음 행동: 이 변경의 Codex 리뷰·원격 CI → 정식 설정 확정 → 선택·PBO 분석 구현 → 정식 M5 실행.
+다음 행동: 원격 CI → 정식 설정 확정 → 선택·PBO 분석 구현 → 정식 M5 실행.
 정식 전체 M5(144개 설정·중첩 검증·PBO)·세후·M6/M7·보류 평가는 미실행이다.

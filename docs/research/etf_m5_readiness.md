@@ -143,6 +143,7 @@ python3 -m src.research.etf.m5_runner --data-root /자료경로/etf-m5 \
   기준일과 그 직전 두 해 시작일에 모두 후보인 상품에서 뽑으며, 기준일 2년 전 시작일부터만 실행한다.
   기준일 뒤의 정보로 고른 바스켓을 그 전 구간 평가에 쓰지 않기 위해서다.
 - `--first-start`·`--pilot-candidates`·`--baskets-per-stratum` 등을 주면 계획에 `smoke_not_formal`로 남는다.
+  `m5_formal_v1.json`이 `frozen`이 아니면 축소하지 않은 계획도 `draft_not_formal`이며 `formal`로 표시하지 않는다.
 
 **실행(`m5_runner`)** 의 단위는 바스켓×시작일의 1년 실행이다.
 
@@ -156,7 +157,8 @@ python3 -m src.research.etf.m5_runner --data-root /자료경로/etf-m5 \
 - 같은 계획·소스·입력·빌드면 같은 폴더에서 이어 실행한다. 완성된 단위 파일은 다시 실행하거나 덮어쓰지
   않고, 하나라도 다르면 그 폴더에 이어 쓰지 않는다. 단위 전후로 소스·입력 변경을 확인한다.
 - 실패한 단위·시도·비교·참고 기준선은 파일에 남고 계획한 횟수가 분모다. 빠진 단위가 있으면 `incomplete`,
-  실패가 있으면 `failed`다.
+  실패가 있으면 `failed`다. 실행할 단위가 없는 계획과 층별 바스켓이 모자란 정식 계획도 통과가 아니다.
+- 쓰다 끊긴 `.partial` 조각은 다음 실행이 지우고 그 단위를 다시 실행한다. 한 폴더는 한 번에 한 실행만 쓴다.
 
 `m5_formal_v1.json`은 아직 `draft_preperformance`다. 층별 바스켓 수, 투자 비중 하한, 혼합·2배 바스켓,
 저상관·자산군 균형 선택, 안쪽 선택 목적식과 PBO 분할은 정식 실행 전에 확정해야 한다.

@@ -118,6 +118,8 @@ class FormalRunTests(unittest.TestCase):
                          {"KR2": 0, "US2": 0, "KR1+US1": 1, "KR1+US1+GOLD1": 0, "KR2+US2": 0, "KR2+US2+GOLD1": 0})
         self.assertEqual(self.plan["fx"], {"max_age_days": 7, "closure_age_days": 12})
         self.assertNotIn("SYNTHETIC_HIDDEN", json.dumps(self.plan))
+        draft = build_plan(self.data, self.manifest)
+        self.assertEqual((draft["scope"], len(draft["candidates"])), ("draft_not_formal", 144))
         other = fixture(self.root / "us", us_only=True)
         us_only = build_plan(other.parent, other, first_start=FIRST, pilot_candidates=True)
         self.assertEqual([sorted(b["symbols"]) for b in us_only["baskets"]], [["SYNTHETIC_US", "SYNTHETIC_US_2"]])
@@ -159,6 +161,8 @@ class FormalRunTests(unittest.TestCase):
             self.assertEqual((partial["status"], partial["units_completed"], partial["units_missing"]), ("incomplete", 2, 3))
             first = self.run / "units" / "b001" / f"{self.plan['baskets'][0]['runs'][0]['start']}.json"
             before = sha(first)
+            stale = first.with_name(f"{self.plan['baskets'][0]['runs'][2]['start']}.json.partial")
+            stale.write_text("{\"interrupted\":", encoding="utf-8")
             summary = run_plan(self.data, self.manifest, self.plan_path, self.run)
             self.assertEqual(summary["status"], "passed", summary)
             self.assertEqual((summary["trials_passed"], summary["comparisons_passed"], summary["units_failed"]), (20, 4, 0))
@@ -190,6 +194,12 @@ class FormalRunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "verified M3 build"):
             run_plan(self.data, self.manifest, self.save("real.json", dict(self.plan, synthetic=False)),
                      self.root / "real-run")
+        empty = dict(self.plan, baskets=[], counts=dict.fromkeys(self.plan["counts"], 0))
+        summary = run_plan(self.data, self.manifest, self.save("empty.json", empty), self.root / "empty-run")
+        self.assertEqual((summary["status"], summary["units_planned"]), ("failed", 0))
+        short = run_plan(self.data, self.manifest, self.save("short.json", dict(self.plan, scope="formal")),
+                         self.root / "short-run", max_units=0)
+        self.assertEqual((short["status"], short["shortfall_strata"]), ("incomplete", 6))
         with self.assertRaisesRegex(ValueError, "different protocol_sha256"):
             run_plan(self.data, self.manifest, self.save("stale.json", dict(self.plan, protocol_sha256="0" * 64)),
                      self.root / "stale-run")

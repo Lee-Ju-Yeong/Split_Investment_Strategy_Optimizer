@@ -25,6 +25,7 @@ def load_formal():
     formal = json.loads(FORMAL_PATH.read_text(encoding="utf-8"))
     count = formal.get("baskets_per_stratum")
     if (formal.get("schema") != "etf-m5-formal-v1" or type(count) is not int or count < 1
+            or formal.get("status") not in {"draft_preperformance", "frozen"}
             or formal.get("selection") != "random" or formal.get("leverage_mix") != "x1_only"
             or formal.get("learning_runs") != 2 or type(formal.get("posthoc_diagnostic")) is not bool):
         raise ValueError("invalid M5 formal configuration")
@@ -238,7 +239,9 @@ def build_plan(data_root, manifest_path, *, first_start=None, last_start=None,
     candidates = config["pilot"]["candidates"] if pilot_candidates else grid_candidates(config)
     overrides = first_start is not None or last_start is not None or pilot_candidates or baskets_per_stratum is not None
     trials = len(candidates) * len(config["pilot"]["paths"])
-    return {"schema": SCHEMA, "scope": "smoke_not_formal" if overrides else "formal",
+    # 확정 전 초안 설정이나 연결 검사용 축소 계획은 정식 실행으로 표시하지 않는다.
+    scope = "smoke_not_formal" if overrides else "formal" if formal["status"] == "frozen" else "draft_not_formal"
+    return {"schema": SCHEMA, "scope": scope,
             "synthetic": manifest["synthetic"], "protocol_sha256": protocol.protocol_hash(proto),
             "configuration_sha256": _sha(CONFIG_PATH), "formal_sha256": _sha(FORMAL_PATH),
             "input_manifest_sha256": _sha(Path(manifest_path)),
