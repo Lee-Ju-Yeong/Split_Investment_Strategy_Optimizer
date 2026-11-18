@@ -216,10 +216,11 @@ class FxAgeTests(unittest.TestCase):
     def test_invalid_age_and_settlement_modes_are_rejected(self):
         for options in ({"max_fx_age_days": True}, {"max_fx_age_days": -1}, {"domestic_settlement": "guess"},
                         {"fx_closure_age_days": 12}, {"max_fx_age_days": 7, "fx_closure_age_days": 6},
-                        {"max_fx_age_days": 7, "fx_closure_age_days": True},
-                        {"max_fx_age_days": 7, "fx_closure_age_days": 12}):
+                        {"max_fx_age_days": 7, "fx_closure_age_days": True}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 kr_run([bar()], **options)
+        with self.assertRaisesRegex(ValueError, "requires kr_sessions"):
+            kr_run([bar()], max_fx_age_days=7, fx_closure_age_days=12)
 
 
 class FxClosureTests(unittest.TestCase):
@@ -251,6 +252,18 @@ class FxClosureTests(unittest.TestCase):
             self.value(at(date(2017, 10, 9), 20), closure=10)
         with self.assertRaisesRegex(ValueError, "stale FX.*maximum age 7 days"):
             self.value(at(date(2017, 10, 9), 20), closure=None)
+
+    def test_calendar_must_cover_the_closure_instead_of_assuming_a_holiday(self):
+        nyse_close = at(date(2017, 10, 9), 20)
+        for sessions in ((self.LAST,), (date(2010, 1, 4),), (date(2020, 1, 2),), (self.REOPEN, date(2017, 10, 11))):
+            with self.subTest(sessions=sessions), self.assertRaisesRegex(ValueError, "stale FX.*does not cover"):
+                self.value(nyse_close, sessions=sessions)
+
+    def test_closure_cap_boundary_is_inclusive(self):
+        sessions, limit = (self.LAST, date(2017, 10, 12)), at(self.LAST + timedelta(days=12))
+        self.assertEqual(self.value(limit, sessions=sessions), D("1000"))
+        with self.assertRaisesRegex(ValueError, "stale FX.*closure age 12 days"):
+            self.value(at(self.LAST + timedelta(days=12), 0, 1), sessions=sessions)
 
     def test_missed_session_inside_the_basic_limit_keeps_existing_behaviour(self):
         monday = date(2017, 10, 2)
