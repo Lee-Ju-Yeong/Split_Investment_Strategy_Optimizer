@@ -34,6 +34,7 @@ NUMBERS = (
     ("fx.conversion.cost_one_way", 0, 0.05, False),
     ("fx.conversion.cost_stress_one_way", 0, 0.05, False),
     ("fx.max_publication_age_days", 0, 30, True),
+    ("fx.max_closure_publication_age_days", 0, 30, True),
     ("execution.participation.max_order_to_adv20", 1e-6, 1, False),
     ("execution.fill.penetration_ticks", 0, 10, True),
     ("execution.fill.slippage_ticks", 0, 10, True),
@@ -170,6 +171,8 @@ def validate(data: dict) -> None:
             raise ValueError(f"success.stress_applies의 {dotted!r}가 숫자 항목을 가리키지 않습니다")
     if _get(data, "fx.conversion.cost_stress_one_way") < _get(data, "fx.conversion.cost_one_way"):
         raise ValueError("환전 스트레스 비용이 주 비용보다 작습니다")
+    if _get(data, "fx.max_closure_publication_age_days") < _get(data, "fx.max_publication_age_days"):
+        raise ValueError("장기 휴장 환율 한도가 기본 한도보다 작습니다")
     commissions = [_get(data, f"execution.costs_one_way.{k}")
                    for k in ("KR_commission", "US_commission", "KRX_GOLD_commission")]
     if _get(data, "execution.costs_one_way.stress_one_way_all") < max(commissions):

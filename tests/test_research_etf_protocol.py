@@ -107,7 +107,8 @@ class ProtocolTests(unittest.TestCase):
     def test_m5_configuration_hash_and_cross_file_values_are_required(self):
         for change in (lambda p: p["search"].update(configuration_sha256="0" * 64),
                        lambda p: p["baskets"].update(k_values=[2]),
-                       lambda p: p["fx"].update(max_publication_age_days=8)):
+                       lambda p: p["fx"].update(max_publication_age_days=8),
+                       lambda p: p["fx"].update(max_closure_publication_age_days=6)):
             bad = copy.deepcopy(self.proto)
             change(bad)
             with self.assertRaises(ValueError):

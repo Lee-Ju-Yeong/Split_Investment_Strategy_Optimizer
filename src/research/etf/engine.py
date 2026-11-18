@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, localcontext
 import heapq
 
@@ -43,6 +43,8 @@ from .engine_types import (
 
 
 UTC = timezone.utc
+# 프로토콜 fx.valuation_rate: MAR은 적용일 09:00 KST부터 쓴다. 국내 세션일의 새 환율 기대 시각이다.
+FX_PUBLICATION_KST = time(9)
 
 
 def _utc(at: datetime) -> datetime:
@@ -74,6 +76,7 @@ class _Options:
     product_sell_tax_rate: Decimal
     domestic_settlement: str = "legacy_same_day"
     max_fx_age_days: int | None = None
+    fx_closure_age_days: int | None = None
 
 
 def _validate_options(options: _Options) -> None:
@@ -95,6 +98,10 @@ def _validate_options(options: _Options) -> None:
         raise ValueError("domestic_settlement must be legacy_same_day or t_plus_2")
     if options.max_fx_age_days is not None and (type(options.max_fx_age_days) is not int or options.max_fx_age_days < 0):
         raise ValueError("max_fx_age_days must be a nonnegative integer or None")
+    closure = options.fx_closure_age_days
+    if closure is not None and (type(closure) is not int or options.max_fx_age_days is None
+                                or closure < options.max_fx_age_days):
+        raise ValueError("fx_closure_age_days must be an integer at least max_fx_age_days")
 
 
 def _input_map(instruments, rules):
@@ -170,6 +177,9 @@ class _Engine:
             inputs["us_sessions"], inputs["settlement_session_times"])
         self.kr_sessions, self.kr_settlement_times = _validated_sessions(
             inputs["kr_sessions"], inputs["kr_settlement_session_times"])
+        if options.fx_closure_age_days is not None and not self.kr_sessions:
+            raise ValueError("fx_closure_age_days requires kr_sessions")
+        self.kr_fx_times = [datetime.combine(day, FX_PUBLICATION_KST, KST).astimezone(UTC) for day in self.kr_sessions]
         self.delistings = validate_delistings(inputs["delistings"], self.instruments, self.bars)
         self.basis = _tax_basis_map(inputs["tax_basis_by_bar"], self.instruments)
         self.initial_basis = _tax_basis_map(inputs["initial_tax_basis"], self.instruments, initial=True)
@@ -286,8 +296,18 @@ class _Engine:
             raise ValueError(f"no FX rate published by {_utc(at).isoformat()}")
         if (self.options.max_fx_age_days is not None
                 and _utc(at) - self.fx_times[index] > timedelta(days=self.options.max_fx_age_days)):
-            raise ValueError(f"stale FX rate at {_utc(at).isoformat()}: maximum age {self.options.max_fx_age_days} days")
+            self._require_fx_closure(_utc(at), self.fx_times[index])
         return self.fx_values[index]
+
+    def _require_fx_closure(self, at, published):
+        # 국내 휴장으로 새 환율이 없을 때만 묵은 환율을 쓴다. 세션일의 자료 누락은 계속 실패한다.
+        closure = self.options.fx_closure_age_days
+        if closure is None:
+            raise ValueError(f"stale FX rate at {at.isoformat()}: maximum age {self.options.max_fx_age_days} days")
+        if at - published > timedelta(days=closure):
+            raise ValueError(f"stale FX rate at {at.isoformat()}: maximum closure age {closure} days")
+        if bisect_right(self.kr_fx_times, at) > bisect_right(self.kr_fx_times, published):
+            raise ValueError(f"stale FX rate at {at.isoformat()}: a KRX session passed without a new rate")
 
     def _rate(self, instrument, at):
         return self._fx(at) if instrument.currency == "USD" else ONE
@@ -721,6 +741,7 @@ def run_engine(
     sec_rate_override=None, product_sell_tax_rate=ZERO, _candidate_provider=candidate_for_bar,
     kr_sessions: list[date] = (), kr_settlement_session_times=None,
     domestic_settlement="legacy_same_day", max_fx_age_days=None, delistings=(),
+    fx_closure_age_days=None,
 ) -> EngineResult:
     """Run one assumed OHLC path; cash orders never shrink to available cash.
 
@@ -744,7 +765,8 @@ def run_engine(
         tax_mode, synthetic_tax_data, penetration_ticks, slippage_ticks,
         None if commission_rate is None else _fraction(commission_rate, "commission_rate"),
         None if sec_rate_override is None else _fraction(sec_rate_override, "sec_rate_override"),
-        _fraction(product_sell_tax_rate, "product_sell_tax_rate"), domestic_settlement, max_fx_age_days)
+        _fraction(product_sell_tax_rate, "product_sell_tax_rate"), domestic_settlement, max_fx_age_days,
+        fx_closure_age_days)
     _validate_options(options)
     with localcontext() as arithmetic:
         arithmetic.prec = 80

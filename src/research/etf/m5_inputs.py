@@ -150,13 +150,13 @@ def _dated_controls(rows, field, symbols, start, end):
     return result
 
 
-def load_m5_inputs(data_root, manifest_path, symbols, start, end, *, max_fx_age_days=7):
+def load_m5_inputs(data_root, manifest_path, symbols, start, end, *, max_fx_age_days=7, fx_closure_age_days=None):
     manifest = read_manifest(data_root, manifest_path, symbols)
     locks, payments, notices = _controls(data_root, manifest, symbols, start, end)
     result = load_m1_inputs(data_root, symbols, start, end, Path(data_root) / manifest["split_csv"],
                             locked_status=locks, payment_dates=payments, delistings=notices,
                             input_hashes=manifest["extra_inputs_sha256"], domestic_settlement="t_plus_2",
-                            max_fx_age_days=max_fx_age_days)
+                            max_fx_age_days=max_fx_age_days, fx_closure_age_days=fx_closure_age_days)
     result.provenance.update(m5_input_manifest_sha256=_sha(manifest_path), synthetic=manifest["synthetic"],
                              delistings=[asdict(event) for event in notices])
     return result
