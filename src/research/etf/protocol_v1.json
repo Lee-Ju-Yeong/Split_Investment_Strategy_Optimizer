@@ -1,0 +1,306 @@
+{
+  "protocol": "etf-vol-split",
+  "version": "1.2.1-m5-draft",
+  "engine_schema": "etf-m2-v1",
+  "status": "draft",
+  "status_note": "M5 탐색 조건을 성과 실행 전에 m5_search_v1.json으로 지정했다. M1 원본 분할 해시는 보존한다. M6 규칙 고정·보류 평가 전이며 작은 실행은 동작 확인용이다.",
+  "plan": "todos/2026_11_15-etf-vol-split-research-plan.md",
+  "universe": {
+    "d1_source": "metadata.etf_metadata.csv의 d1_eligible (인버스·ETN·옵션 전략·3배 이상 제외, 배수 미확인 제외)",
+    "min_history_years_before_start": 3,
+    "liquidity": {
+      "window_sessions": 20,
+      "measure": "투자 시작일 직전 20거래일 평균 거래대금(종가×거래량, 자기 시장 통화)",
+      "floor": {
+        "KR": 100000000,
+        "US": 1000000
+      },
+      "floor_currency": {
+        "KR": "KRW",
+        "US": "USD"
+      },
+      "zero_volume_days_count_as_zero": true,
+      "basis": "2019-01 시작 기준 국내 D1·3년 이력 143개 중 1억원 이상 70개, 5억원 이상 38개. 차수당 주문이 하루 거래대금의 수 % 이내가 되는 수준에서 국내 표본이 너무 줄지 않게 1억원. 미국은 같은 논리로 100만달러(2019 기준 655개 중 556개)."
+    },
+    "single_stock_leveraged": "제외(needs_review 상태로 남은 국내 단일종목 레버리지는 D1 판정이 확정될 때까지 제외)",
+    "gold_family_etfs": "excluded_from_baskets",
+    "gold_family_basis": "금 노출은 KRX 금현물 하나로만 넣는다. 금 ETF(GOLD 묶음)를 바스켓에 허용하면 KRX 금과 같은 노출이 탐색·보류 양쪽에 섞인다.",
+    "delisted": {
+      "KR": "포함(상장 기간에만 후보, 폐지일 직전 마지막 정상 거래일 종가로 청산)",
+      "US": "자료 없음 — 한계로 보고(docs/research/etf_survivorship.md)"
+    }
+  },
+  "baskets": {
+    "markets": [
+      "KR",
+      "US",
+      "GOLD"
+    ],
+    "gold_symbol": "KRX_GOLD_9999_1KG",
+    "gold_first_eligible": "2017-03-24",
+    "gold_first_eligible_basis": "금시장 개설 2014-03-24 + 이력 3년 규칙을 금에도 똑같이 적용",
+    "one_per_index_family": true,
+    "leverage_mix": {
+      "options": [
+        "x1_only",
+        "mixed",
+        "x2_only"
+      ],
+      "mixed_max_x2_share": 0.34,
+      "mixed_min_x2_count": 1,
+      "primary": [
+        "x1_only",
+        "mixed"
+      ],
+      "report_separately": true,
+      "basis": "2배만으로 된 바스켓은 결론을 좌우하지 않도록 따로 보고한다. 혼합은 종목 수의 1/3 이하."
+    },
+    "market_mix_strata": [
+      {
+        "KR": 2
+      },
+      {
+        "US": 2
+      },
+      {
+        "KR": 1,
+        "US": 1
+      },
+      {
+        "KR": 1,
+        "US": 1,
+        "GOLD": 1
+      },
+      {
+        "KR": 2,
+        "US": 2
+      },
+      {
+        "KR": 2,
+        "US": 2,
+        "GOLD": 1
+      }
+    ],
+    "k_values": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "generation_seed": 20261115
+  },
+  "schedule": {
+    "evaluation_time_kst": "18:00",
+    "evaluation_basis": "국내 장 마감(15:30) 뒤, 그날 매매기준율(09:00부터 사용) 뒤, 미국 장 시작(22:30/23:30 KST) 전. 이 시각에는 국내 당일 종가와 미국 직전 거래일 종가가 모두 확정되어 있다.",
+    "signal_inputs": "자기 시장의 직전 종가와 결정 시각까지 공표된 값만(D2 시각 명세)",
+    "start_dates": {
+      "rule": "국내·미국 통합 거래일 기준 매 1월·7월 첫 거래일",
+      "first": "2011-01",
+      "kr_containing_first": "2015-01",
+      "kr_containing_basis": "2014년 이전 시작은 국내 후보가 거래대금 하한 통과 20개 미만",
+      "horizon_years": 1,
+      "first_entry": "시작일 각 시장 첫 개장 시가로 1차 진입(D3)"
+    },
+    "budget_refresh": "매월 첫 통합 거래일, 직전 평가 시각의 포트폴리오 평가액 기준(D5)"
+  },
+  "fx": {
+    "valuation_rate": "SMBS 매매기준율(MAR), 적용일 09:00 KST부터 사용",
+    "sensitivity_rate": "FRED DEXKOUS(H.10 공표 시각 반영) — 대조·민감도 전용",
+    "conversion": {
+      "frequency": "monthly",
+      "when": "매월 첫 국내 거래일 10:00 KST, 그날 MAR",
+      "target": "환전 시각까지 공개된 동일 시점의 평가액·보유·현금을 사용해 시장별 목표 비율에 맞춰 통화 현금을 재배분. 월 차수 예산의 직전 평가 기준과 구분",
+      "cost_one_way": 0.001,
+      "cost_stress_one_way": 0.01,
+      "cost_basis": "증권사 우대 환전(스프레드 약 1%의 90% 우대) 수준을 주 값, 우대 없는 1%를 스트레스",
+      "settled_cash_only": true,
+      "initial": "시작일 10:00 KST(미국 장 시작 전) 그날 MAR로 달러 목표 현금 전액 환전",
+      "settlement": "환전은 당일 사용 가능(T+0). 미국 매도 대금은 미국 결제일(T+3→T+2 2017-09-05→T+1 2024-05-28) 뒤에만 환전 대상. M5 명시 모드에서 국내 ETF 매도는 실제 KRX T+2 세션 뒤 명시 가용시각부터 환전 가능"
+    },
+    "definition_change": "MAR이 24시간 외환시장 개편으로 16:00 TWAP로 바뀌면 전환일을 기록하고 그날 이후 값의 정의를 manifest에 남긴다",
+    "max_publication_age_days": 7,
+    "publication_age_policy_scope": "작은 실행은 공표 후 최대 7일을 넘으면 실패. 정식 장기 탐색 전 실제 KRX/NYSE 달력과 MAR 공표 간격을 대조해 장기 휴장 정책을 확정한다. 실패한 기간·바스켓을 조용히 제외하지 않는다"
+  },
+  "execution": {
+    "decision": "종목당 하루 최대 1건, 매도 우선(제품 V2)",
+    "intraday_paths": [
+      "O-H-L-C",
+      "O-L-H-C"
+    ],
+    "intraday_paths_basis": "같은 날 매수·매도가 둘 다 닿을 때 순서를 결과로 고르지 않도록 두 경로를 모두 돌려 차이를 보고(D4)",
+    "fill": {
+      "gap": "시가가 이미 조건을 넘으면 시가 체결",
+      "touch": "지정가 체결. 매수는 저가 ≤ 지정가 − 1호가, 매도는 고가 ≥ 지정가 + 1호가일 때만",
+      "penetration_ticks": 1,
+      "penetration_ticks_sensitivity": [
+        0,
+        2
+      ],
+      "slippage_ticks": 0,
+      "unfilled": "당일 취소, 다음 거래일 다시 판단",
+      "zero_volume_day": "체결 없음",
+      "limit_locked_day": "시가=고가=저가=종가이고 가격제한폭 도달이면 체결 없음(KRX 금 ±10%)",
+      "ohlc_rounding_violation": "고가·저가가 시가·종가를 벗어나지 않는 정도(최대 0.62%)의 수정주가 반올림 오차는 허용하고, 터치 판정은 [min(O,C,L), max(O,C,H)] 범위로 한다",
+      "slippage_ticks_sensitivity": [
+        1
+      ]
+    },
+    "multi_level_take_profit_order": "제품 V2와 동일하게 SHA256(symbol:level) 바이트 오름차순, 같은 시점 매도 우선",
+    "market_rules": {
+      "file": "market_rules_v1.json",
+      "sha256": "079bc678e16bacdc4f5ec65614b9b50dca5b229762e00ace7bb923d8ed392cbb",
+      "sec_date_basis": "검증된 charge date(통상 결제일), 신호는 known_at 이전 공표 요율만 사용",
+      "commission_rounding": "정확한 Decimal 비례액, 증권사 청구단위 절사·최소비용 미포함"
+    },
+    "tick_size": {
+      "US": "market_rules_v1.json#tick_rules.US",
+      "KR": "market_rules_v1.json#tick_rules.KR",
+      "KRX_GOLD": "market_rules_v1.json#tick_rules.GOLD"
+    },
+    "costs_one_way": {
+      "KR_commission": 0.00015,
+      "US_commission": 0.0007,
+      "US_sec_fee_on_sell": "market_rules_v1.json#sec_fee (2011-01-01..2026-11-17 charge date, known_at 검사)",
+      "KRX_GOLD_commission": 0.003,
+      "KRX_GOLD_commission_basis": "증권사 온라인 금현물 수수료(대략 0.2~0.3%)의 위쪽. 증권사별 확인 필요",
+      "stress_one_way_all": 0.003,
+      "stress_includes_fx": false,
+      "stress_fx_basis": "환전 비용은 fx.conversion에서 따로 스트레스(1%)"
+    },
+    "participation": {
+      "max_order_to_adv20": 0.05,
+      "over_limit": "주문 거절(수량을 줄이지 않음, 제품 V2와 같음). 거절 수를 보고",
+      "basis": "1호가 관통은 체결 가능성 조건일 뿐 가격 충격을 대신하지 않으므로 주문 크기를 따로 제한"
+    },
+    "volatility": {
+      "estimator": "시작 직전 251거래일 종가로 만든 250개 로그수익률의 표본 표준편차(일간). 거래량 0인 날로 들어오는 수익률과 그 다음 수익률을 모두 제외",
+      "min_observations": 200,
+      "fixed_for_run": true
+    }
+  },
+  "cash": {
+    "interest_primary": 0.0,
+    "interest_sensitivity": [
+      {
+        "name": "krw_cd_x0.4_usd_dtb3_x0.3",
+        "KRW": "CD 3개월 × 0.4",
+        "USD": "DTB3 × 0.3"
+      }
+    ],
+    "interest_basis": "D6. 예탁금 이용료 과거 시계열은 공개 자료로 없음. 보도 기준 2022-05 약 0.2%(CD 약 1.8%), 2026년 약 1.1~1.3%라 CD의 일정 비율로 근사"
+  },
+  "tax": {
+    "judgment": "pre_tax_only_until_d7_data",
+    "valuation": {
+      "book_equity": "equity_krw (확정 미납 차감, 현재 연도 추정세는 미반영)",
+      "adjusted_report": "equity_after_estimated_tax_krw (진행연도 실현분 추정세를 차감하는 보조 진단, 전량청산 가정 세후 곡선이 아님)",
+      "current_year_estimate_affects_orders": false,
+      "complete_after_tax_reporting_supported": false,
+      "actual_after_tax_approved": false
+    },
+    "rules_doc": "docs/research/etf_tax_rules.md",
+    "law_mode_primary": "current_law_fixed",
+    "law_mode_sensitivity": "historical_law",
+    "product_stock_tax_sensitivity": true
+  },
+  "success": {
+    "comparison": "같은 바스켓의 사전 고정 투자 비중 리밸런싱(주 판정)",
+    "sign": {
+      "dCAGR": "전략 − 기준선",
+      "dMDD": "|기준선 MDD| − |전략 MDD|"
+    },
+    "joint_improvement_share_min": 0.6,
+    "min_effect": {
+      "dCAGR_pp_per_year": 0.5,
+      "dMDD_pp": 2.0
+    },
+    "bootstrap": {
+      "method": "circular block, 모든 바스켓에 같은 날짜 블록을 공동 재표집",
+      "calendar": "국내·미국 통합 거래일",
+      "block_sessions": 20,
+      "block_sensitivity": [
+        5,
+        60
+      ],
+      "resamples": 2000,
+      "joint_confidence": "두 지표 동시 95%: 각 지표 단측 97.5% 하한(본페로니) > 0",
+      "seed": 20261115,
+      "statistic": "바스켓 값 중앙값(ΔCAGR, ΔMDD 각각)"
+    },
+    "forward_test_months_min": 12,
+    "forward_test_role": "운영 확인. 최종 확정은 더 긴 누적 기간",
+    "unit": "보류 바스켓 × 시작일 실행. 바스켓마다 시작일들의 중앙값으로 하나의 값을 만들고 바스켓을 같은 가중으로 센다",
+    "population": "주 판정은 x1_only와 mixed 바스켓을 합친 보류 집합 하나. 시장 구성·금 포함·레버리지 하위군은 보고만 하고 판정하지 않는다",
+    "joint_improvement_share_definition": "보류 바스켓 중 바스켓 값 ΔCAGR>0이고 ΔMDD>0인 비율(분모: 위 주 판정 집합의 전체 바스켓)",
+    "min_effect_applies_to": "바스켓 값들의 중앙값",
+    "intraday_paths_rule": "두 장중 경로 모두에서 모든 조건을 통과해야 한다",
+    "stress_rule": "거래비용 스트레스와 환전 비용 스트레스를 동시에 적용했을 때 두 중앙값이 모두 0보다 커야 한다(최소폭·신뢰하한은 요구하지 않음)",
+    "stress_applies": [
+      "execution.costs_one_way.stress_one_way_all",
+      "fx.conversion.cost_stress_one_way"
+    ]
+  },
+  "holdout": {
+    "unit": "index_family (상관 병합 후)",
+    "fraction": 0.3,
+    "seed": 20261115,
+    "correlation_merge": {
+      "same_market_only": true,
+      "returns": "종가 기준 일간 수익률, 거래량 0인 날 제외",
+      "min_overlap_sessions": 250,
+      "threshold": 0.98,
+      "sensitivity_report_threshold": 0.95,
+      "basis": "이름 규칙이 놓친 거의 같은 상품(같은 지수의 1배·2배 포함)을 한 묶음으로. 0.95는 서로 다른 대형주 지수끼리 연쇄로 묶여 거대 묶음이 생길 수 있어 0.98을 쓰고 0.95 결과는 보고만",
+      "window": {
+        "start": "1993-01-01",
+        "end": "2026-11-13"
+      },
+      "window_basis": "자료가 늘어도 묶음이 바뀌지 않도록 산정 기간을 현재 자료 끝으로 고정"
+    },
+    "strata": [
+      "market_group",
+      "asset_class",
+      "history_bucket"
+    ],
+    "history_buckets": {
+      "long": "≤2012",
+      "mid": "2013–2018",
+      "short": "≥2019"
+    },
+    "krx_gold": "both (결과는 금 포함 바스켓을 따로 보고)",
+    "min_groups_per_stratum": 5,
+    "stratum_coarsening": [
+      "market_group|asset_class|history_bucket",
+      "market_group|asset_class",
+      "market_group"
+    ],
+    "min_holdout_groups_for_subgroup_report": 3,
+    "freeze": "분할 파일 이름에 프로토콜·입력·코드 해시를 넣고, 같은 이름의 다른 내용은 덮어쓰지 않는다"
+  },
+  "portfolio": {
+    "initial_capital_krw": 100000000,
+    "initial_capital_basis": "개인 연구용 규모 1억원. 거래대금 하한·주문 참여율 판단의 기준",
+    "market_budget_share": "바스켓 종목 수 비율(시장별 종목 수 ÷ m). KRX 금은 원화 시장으로 센다",
+    "currency_cash_target": "통화별 목표 현금 = 환전 시각에 알려진 포트폴리오 장부 평가액 × 그 통화 시장의 예산 비율 − 같은 시각 시장 보유 평가액(음수면 0). 목표와 비교할 현금도 같은 시각",
+    "m2_model_limits": [
+      "기존 호출 기본값은 국내 즉시 결제 근사. M5 연결부는 t_plus_2를 요구하고 가용시각은 해당 시장 close_utc의 보수적 가정. 실제 증권사 결제시각을 관측한 값이 아님",
+      "US 세무 귀속과 환율은 명시 결제 가용시각의 KST 날짜와 그때까지 공표된 MAR를 쓰는 합성 연구 가정. 미국 결제일 MAR와 같다고 주장하지 않음",
+      "상폐는 공지시각·마지막 정상 세션·폐지일·근거 해시를 명시한 국내 ETF만 청산. 공지 누락·거래정지·자료 말미 누락은 실패. 실제 해지 상환금 모형 아님",
+      "M5는 시작 시점에 알려진 왕복 위탁/SEC 비용보다 작은 drop을 거부한다. 실제 제품 validate_drops 전체와 같다고 주장하지 않음",
+      "KR T+2 after_tax는 결제일 원천징수 구현 전 거부. 실제 세후 승인은 하지 않음. 금 결제는 기존 즉시 사용 연구 근사"
+    ]
+  },
+  "baseline": {
+    "primary": "사전 고정 투자 비중 리밸런싱",
+    "exposure_target": "학습 구간 전략 실현 투자 비중의 시간 평균(평가 시각 기준 일별 투자액÷평가액의 산술평균)",
+    "weights": "전략 주문 방식에 맞춘 짝: 균등 주문 ↔ 동일가중, 위험 예산 ↔ 역변동성(volatility 정의와 같은 σ)",
+    "rebalance": "매월 첫 통합 거래일, 각 시장 개장 시가, 같은 비용·환전 규칙",
+    "learning_window": "안쪽 학습 2년. m5_search_v1.json: 바깥 학습3년/평가1년, 안쪽 학습2년/평가1년. 작은 pilot은 별도 2년 학습/1년 평가이며 중첩 검증을 주장하지 않는다."
+  },
+  "search": {
+    "grid": "m5_search_v1.json#grid: kg,kp 각각1/2/3; L3/5; 첫 차수0.05/0.10; 종목 상한0.5/1; 현금하한0/0.1 (144개). 상품별 계수 없음.",
+    "trial_log": "모든 시험 설정과 횟수를 기록",
+    "configuration_file": "m5_search_v1.json",
+    "configuration_sha256": "ce7cc8e498022d687fea17f5183e246bdcd9dc8bd803f47e90abf99938acd6a7"
+  }
+}

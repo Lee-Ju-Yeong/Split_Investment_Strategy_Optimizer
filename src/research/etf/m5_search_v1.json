@@ -1,0 +1,30 @@
+{
+  "schema": "etf-m5-search-v1",
+  "status": "explore_only_preperformance",
+  "market_mix_strata": [
+    {"KR": 2}, {"US": 2}, {"KR": 1, "US": 1},
+    {"KR": 1, "US": 1, "GOLD": 1}, {"KR": 2, "US": 2}, {"KR": 2, "US": 2, "GOLD": 1}
+  ],
+  "k_values": [2, 3, 4, 5],
+  "outer_train_years": 3,
+  "outer_evaluation_years": 1,
+  "inner_train_years": 2,
+  "inner_evaluation_years": 1,
+  "baseline_learning_years": 2,
+  "grid": {
+    "kg": ["1", "2", "3"], "kp": ["1", "2", "3"], "levels": [3, 5],
+    "first_level_fraction": ["0.05", "0.10"], "symbol_cap_fraction": ["0.5", "1"],
+    "cash_floor_fraction": ["0", "0.1"]
+  },
+  "pilot": {
+    "training_start": "2020-01-02", "training_end": "2021-12-31",
+    "evaluation_start": "2022-01-03", "evaluation_end": "2022-12-30",
+    "candidates": [
+      {"kg": "1", "kp": "2", "levels": 3, "first_level_fraction": "0.10", "symbol_cap_fraction": "1", "cash_floor_fraction": "0"},
+      {"kg": "2", "kp": "3", "levels": 5, "first_level_fraction": "0.05", "symbol_cap_fraction": "0.5", "cash_floor_fraction": "0.1"}
+    ],
+    "paths": ["O-H-L-C", "O-L-H-C"],
+    "max_fx_age_days": 7,
+    "role": "operational_only_no_selection_no_nested_validation"
+  }
+}

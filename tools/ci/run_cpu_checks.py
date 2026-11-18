@@ -36,8 +36,29 @@ TASKS = (
     Task("tests", "test_cpu_split_demo.py"),
     Task("tests", "test_cpu_fixed_split_slot.py"),
     Task("tests", "test_cpu_fixed_slot_product_parity.py"),
+    Task("tests", "test_research_etf_price_store.py"),
+    Task("tests", "test_research_etf_kr_universe.py"),
+    Task("tests", "test_research_etf_fx_calendars.py"),
+    Task("tests", "test_research_etf_krx_gold.py"),
+    Task("tests", "test_research_etf_metadata.py"),
+    Task("tests", "test_research_etf_protocol.py"),
+    Task("tests", "test_research_etf_engine_market.py"),
+    Task("tests", "test_research_etf_engine_strategy.py"),
+    Task("tests", "test_research_etf_engine_tax.py"),
+    Task("tests", "test_research_etf_engine.py"),
+    Task("tests", "test_research_etf_engine_contract.py"),
+    Task("tests", "test_research_etf_engine_inputs.py"),
+    Task("tests", "test_research_etf_baselines.py"),
+    Task("tests", "test_research_etf_baseline_report.py"),
+    Task("tests", "test_research_etf_m5_lifecycle.py"),
+    Task("tests", "test_research_etf_m5_inputs.py"),
+    Task("tests", "test_research_etf_m5_pilot.py"),
+    Task("tests", "test_research_etf_m5_us_pilot.py"),
     Task("example", "examples.short_selling_lag_demo"),
     Task("example", "examples.cpu_split_demo"),
+    Task("example", "examples.etf_m2_demo"),
+    Task("example", "examples.etf_m4_demo"),
+    Task("example", "examples.etf_m5_demo"),
 )
 
 
@@ -200,7 +221,8 @@ class Runner:
     def execute(self, task):
         with tempfile.TemporaryDirectory(prefix="cpu-check-") as directory:
             path = Path(directory) / "result.json"
-            command = [sys.executable, str(Path(__file__).resolve()),
+            python_options = ["-S"] if sys.flags.no_site else []
+            command = [sys.executable, *python_options, str(Path(__file__).resolve()),
                        "--worker", task.kind, task.target, str(path)]
             try:
                 process = self.start(command, directory)

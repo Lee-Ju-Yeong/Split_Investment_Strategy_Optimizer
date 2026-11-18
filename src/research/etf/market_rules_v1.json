@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-11-17",
+  "purpose": "재현 가능한 ETF M2 시뮬레이션 비용표이며 투자 조언이나 증권사 청구서가 아니다",
+  "unknown_period_policy": "raise ValueError; 과거 소급, 마지막 요율 연장, 0 대체 금지",
+  "market_aliases": {"KR": "KR", "US": "US", "GOLD": "GOLD", "KRX_GOLD": "GOLD"},
+  "commission_rates": {"KR": "0.00015", "US": "0.0007", "GOLD": "0.003"},
+  "commission_basis": "공통 M2 실행 계약의 편도 연구 가정. 공식 시장 수수료나 모든 증권사의 실제 요율이라는 주장이 아니다. 수수료 부가세, 최소수수료, 청구단위 반올림, FINRA TAF 등은 포함하지 않는다.",
+  "price_basis_limitation": "수정주가/분배금 조정가격에 적용한 호가는 가상 호가다. 실제 과거 주문가격·호가장·미세 체결을 복원하지 않는다.",
+  "sources": {
+    "kr_legacy": {
+      "title": "KRX 유가증권시장 업무규정 시행세칙 제32조 및 개정 이력",
+      "url": "https://law.krx.co.kr/las/LawBon.jsp?lawid=000111&pubdt=20151001&pubno=0000012330",
+      "scope": "제32조 제2항 단서 ETF 전 가격 5원; 조문 개정 이력 2010-07-29, 부칙 제624호 제32조 시행 2010-10-04; 2014-09-02 개정본에도 ETF 5원 유지"
+    },
+    "kr_change": {
+      "title": "KRX 유가증권시장 업무규정 시행세칙 제32조 및 부칙 제2181호",
+      "url": "https://law.krx.co.kr/las/RefBon.jsp?lawid=000111&lawkd=B&pubdt=20231204&pubno=0000021920&reflinkchk=Y",
+      "scope": "2023-10-17 개정, 부칙 제2181호 시행 2023-12-11; ETF 2천원 미만 1원, 이상 5원. 입법 예고의 12월18일 예정일을 사용하지 않는다"
+    },
+    "kr_current": {
+      "title": "KRX ETF 매매절차",
+      "url": "https://regulation.krx.co.kr/contents/RGL/03/03060101/RGL03060101.jsp",
+      "scope": "확인일의 ETF 가격구간별 호가단위와 1주 수량단위"
+    },
+    "gold_open": {
+      "title": "금융위원회 금 현물시장(KRX 금시장) 개장 및 거래 개시",
+      "url": "https://fsc.go.kr/po010101/71087",
+      "published_on": "2014-03-24",
+      "scope": "2014-03-24 개장, 거래/호가 수량 1g, 호가가격 10원"
+    },
+    "gold_current": {
+      "title": "KRX 금시장 매매거래단위 및 호가",
+      "url": "https://regulation.krx.co.kr/contents/RGL/04/04010104/RGL04010104.jsp",
+      "scope": "1g당 원화 가격, 호가단위 10원; 금선물이 아닌 금 현물"
+    },
+    "us_tick": {
+      "title": "SEC Extension of Compliance Date for Rule 612, the Sub-Penny Rule",
+      "url": "https://www.sec.gov/newsroom/press-releases/2005-106-extension-compliance-date-rule-612-sub-penny-rule-regulation-nms",
+      "published_on": "2005-08-02",
+      "scope": "2006-01-31 시행, NMS 주문/호가 $1 미만 $0.0001, $1 이상 $0.01. 모든 실제 체결가격의 최소단위를 뜻하지 않는다"
+    },
+    "us_tick_delay": {
+      "title": "SEC Release 34-105656 temporary exemptive relief",
+      "url": "https://www.sec.gov/files/rules/exorders/2026/34-105656.pdf",
+      "published_on": "2026-06-11",
+      "scope": "Rules 600(b)(89)(i)(F), 612 새 $0.005 호가 시행을 2027년 11월 첫 영업일까지 연장; v1은 2026-11-17까지만 확인"
+    },
+    "sec_index": {
+      "title": "SEC Fee Rate Advisories",
+      "url": "https://www.sec.gov/rules-regulations/fee-rate-advisories",
+      "scope": "Section 31 거래 수수료와 Section 6(b) 등록 수수료 구분; 확인일 최신 Section 31 공표는 2026-02-27"
+    },
+    "sec_charge_date": {
+      "title": "SEC Collection Practices Under Section 31 of the Exchange Act, Release 34-49928",
+      "url": "https://www.sec.gov/rule-release/34-49928",
+      "scope": "Rule 31(a)(3)의 charge date. 통상 결제일이며 거래일과 다르다. 상위 엔진이 검증된 결제일을 제공해야 한다"
+    }
+  },
+  "tick_rules": {
+    "KR": {
+      "date_basis": "거래일",
+      "unit": "KRW per ETF share",
+      "verification_scope": "2011-01-01..2026-11-17. 최초 도입일 전체 이력은 제공하지 않음. 과거 제32조와 부칙 이력, 현행 KRX 설명을 대조",
+      "periods": [
+        {"from": "2011-01-01", "through": "2023-12-10", "effective_from": "2010-10-04", "bands": [{"below": null, "tick": "5"}], "source_ids": ["kr_legacy"]},
+        {"from": "2023-12-11", "through": "2026-11-17", "effective_from": "2023-12-11", "announced_on": "2023-10-17", "bands": [{"below": "2000", "tick": "1"}, {"below": null, "tick": "5"}], "source_ids": ["kr_change", "kr_current"]}
+      ]
+    },
+    "GOLD": {
+      "date_basis": "거래일",
+      "unit": "KRW per gram",
+      "verification_scope": "2014-03-24..2026-11-17. 개장 전은 오류. 금 현물이며 금선물/금 ETF가 아님",
+      "periods": [
+        {"from": "2014-03-24", "through": "2026-11-17", "effective_from": "2014-03-24", "bands": [{"below": null, "tick": "10"}], "source_ids": ["gold_open", "gold_current"]}
+      ]
+    },
+    "US": {
+      "date_basis": "거래일",
+      "unit": "USD per NMS ETF share",
+      "verification_scope": "2011-01-01..2026-11-17. 일반 NMS 주문의 최소 가격단위; 시장별 더 큰 호가/예외적 체결은 재현하지 않음",
+      "periods": [
+        {"from": "2011-01-01", "through": "2026-11-17", "effective_from": "2006-01-31", "bands": [{"below": "1", "tick": "0.0001"}, {"below": null, "tick": "0.01"}], "source_ids": ["us_tick", "us_tick_delay"]}
+      ]
+    }
+  },
+  "sec_fee": {
+    "date_basis": "SEC charge date, 통상 결제일; 거래일로 대체 금지",
+    "quoted_unit": "USD fee per USD 1,000,000 covered sales",
+    "rate_unit": "USD fee per USD 1 covered sales = per_million_usd / 1000000",
+    "covered_from": "2011-01-01",
+    "covered_through": "2026-11-17",
+    "unknown_intervals": ["before 2011-01-01", "after 2026-11-17 (including the remaining 2026 dates)"],
+    "unknown_policy": "ValueError even for zero notional; only explicit sec_rate_override bypasses the historical table",
+    "known_at_policy": "공표 시각 미확인: announced_on 미국 동부시간 하루가 끝난 다음 날 00:00 America/New_York부터 사용 가능. known_at은 aware datetime. None은 사후 정적 조회이고 신호용 시간검사를 생략한다",
+    "rounding": "비율을 Decimal로 그대로 곱함; 증권사 최소수수료/센트 올림이나 SRO 집계 청구 반올림을 추정하지 않음",
+    "periods": [
+      {"from": "2011-01-01", "through": "2011-01-20", "effective_from": "2010-04-01", "announced_on": "2010-03-01", "per_million_usd": "16.90", "rate": "0.0000169", "source_url": "https://www.sec.gov/newsroom/press-releases/2010-29-fee-rate-advisory-5-fiscal-year-2010"},
+      {"from": "2011-01-21", "through": "2012-02-20", "effective_from": "2011-01-21", "announced_on": "2010-12-22", "per_million_usd": "19.20", "rate": "0.0000192", "source_url": "https://www.sec.gov/newsroom/press-releases/2010-255-fee-rate-advisory-5-fiscal-year-2011"},
+      {"from": "2012-02-21", "through": "2012-03-31", "effective_from": "2012-02-21", "announced_on": "2012-01-20", "per_million_usd": "18.00", "rate": "0.0000180", "source_url": "https://www.sec.gov/newsroom/press-releases/2012-2012-15htm"},
+      {"from": "2012-04-01", "through": "2013-05-24", "effective_from": "2012-04-01", "announced_on": "2012-03-01", "per_million_usd": "22.40", "rate": "0.0000224", "source_url": "https://www.sec.gov/newsroom/press-releases/2012-2012-35htm"},
+      {"from": "2013-05-25", "through": "2014-03-17", "effective_from": "2013-05-25", "announced_on": "2013-04-25", "per_million_usd": "17.40", "rate": "0.0000174", "source_url": "https://www.sec.gov/newsroom/press-releases/2013-2013-74htm"},
+      {"from": "2014-03-18", "through": "2015-02-13", "effective_from": "2014-03-18", "announced_on": "2014-02-12", "per_million_usd": "22.10", "rate": "0.0000221", "source_url": "https://www.sec.gov/newsroom/press-releases/2014-30"},
+      {"from": "2015-02-14", "through": "2016-02-15", "effective_from": "2015-02-14", "announced_on": "2015-01-15", "per_million_usd": "18.40", "rate": "0.0000184", "source_url": "https://www.sec.gov/newsroom/press-releases/2015-8"},
+      {"from": "2016-02-16", "through": "2017-07-03", "effective_from": "2016-02-16", "announced_on": "2016-01-07", "per_million_usd": "21.80", "rate": "0.0000218", "source_url": "https://www.sec.gov/newsroom/press-releases/2016-2"},
+      {"from": "2017-07-04", "through": "2018-05-21", "effective_from": "2017-07-04", "announced_on": "2017-05-31", "per_million_usd": "23.10", "rate": "0.0000231", "source_url": "https://www.sec.gov/newsroom/press-releases/2017-111"},
+      {"from": "2018-05-22", "through": "2019-04-15", "effective_from": "2018-05-22", "announced_on": "2018-04-17", "per_million_usd": "13.00", "rate": "0.0000130", "source_url": "https://www.sec.gov/newsroom/press-releases/2018-67"},
+      {"from": "2019-04-16", "through": "2020-02-17", "effective_from": "2019-04-16", "announced_on": "2019-03-12", "per_million_usd": "20.70", "rate": "0.0000207", "source_url": "https://www.sec.gov/newsroom/press-releases/2019-30"},
+      {"from": "2020-02-18", "through": "2021-02-24", "effective_from": "2020-02-18", "announced_on": "2020-01-09", "per_million_usd": "22.10", "rate": "0.0000221", "source_url": "https://www.sec.gov/newsroom/press-releases/2020-7"},
+      {"from": "2021-02-25", "through": "2022-05-13", "effective_from": "2021-02-25", "announced_on": "2021-01-15", "per_million_usd": "5.10", "rate": "0.0000051", "source_url": "https://www.sec.gov/newsroom/press-releases/2021-8"},
+      {"from": "2022-05-14", "through": "2023-02-26", "effective_from": "2022-05-14", "announced_on": "2022-04-08", "per_million_usd": "22.90", "rate": "0.0000229", "source_url": "https://www.sec.gov/newsroom/press-releases/2022-60"},
+      {"from": "2023-02-27", "through": "2024-05-21", "effective_from": "2023-02-27", "announced_on": "2023-01-23", "per_million_usd": "8.00", "rate": "0.0000080", "source_url": "https://www.sec.gov/newsroom/press-releases/2023-15"},
+      {"from": "2024-05-22", "through": "2025-05-13", "effective_from": "2024-05-22", "announced_on": "2024-04-17", "per_million_usd": "27.80", "rate": "0.0000278", "source_url": "https://www.sec.gov/newsroom/press-releases/2024-47"},
+      {"from": "2025-05-14", "through": "2026-04-03", "effective_from": "2025-05-14", "announced_on": "2025-04-08", "per_million_usd": "0.00", "rate": "0", "source_url": "https://www.sec.gov/rules-regulations/fee-rate-advisories/2025-2"},
+      {"from": "2026-04-04", "through": "2026-11-17", "effective_from": "2026-04-04", "announced_on": "2026-02-27", "per_million_usd": "20.60", "rate": "0.0000206", "source_url": "https://www.sec.gov/rules-regulations/fee-rate-advisories/2026-2"}
+    ]
+  }
+}
