@@ -78,6 +78,23 @@ class RunnerTests(unittest.TestCase):
         with redirect_stdout(StringIO()):
             self.assertEqual(ci.publish(outcomes), 0)
 
+    def test_no_site_option_reaches_the_actual_test_worker(self):
+        task = self.fixture("""
+            import sys
+            import unittest
+            class Check(unittest.TestCase):
+                def test_no_site(self):
+                    self.assertEqual(sys.flags.no_site, 1)
+                    self.assertNotIn('site', sys.modules)
+        """)
+        script = ("from pathlib import Path\nfrom tools.ci import run_cpu_checks as ci\n"
+                  f"outcome = ci.Runner(Path({str(self.root)!r})).run([ci.Task('tests', {task.target!r})])[0]\n"
+                  "assert not outcome.problem, (outcome.problem, outcome.output)\n")
+        result = subprocess.run([sys.executable, "-S", "-c", script],
+                                cwd=Path(ci.__file__).resolve().parents[2],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_added_test_is_included(self):
         task = self.fixture(GOOD_TEST + "\n    def test_added(self): pass\n")
         outcome = self.run_tasks([task])[0]
