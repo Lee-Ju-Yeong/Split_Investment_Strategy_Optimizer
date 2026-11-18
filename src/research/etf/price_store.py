@@ -58,15 +58,13 @@ import numpy as np
 import pandas as pd
 
 from .paths import PRICES_DIR, data_root, output_dir, raw_root
+from .price_bundle import CURRENT_POINTER, MANIFEST, RUNS_DIR, current_bundle
 
 KR_SUBDIR = Path("kr_etf_price_history_2026-11-15") / "history_kr" / "prices"
 US_SUBDIR = Path("us_etf_price_history_2026-11-15") / "history_us" / "prices"
 REFERENCE_SYMBOL = {"KR": "069500", "US": "SPY"}  # 거래일 대조용(공식 달력은 fx/calendars 모듈)
 LARGE_RETURN = 0.35
 ALL_MARKETS = ("KR", "US")
-RUNS_DIR = "runs"
-CURRENT_POINTER = "CURRENT"
-MANIFEST = "manifest.json"
 
 KR_UNIVERSE_DIR = "kr_universe"
 KR_DELISTED_HISTORY = "kr_etf_history_scoped.csv"
@@ -554,17 +552,6 @@ def build_market(source: MarketSource, out: Path, symbols: list[str] | None = No
         "krx_close_check": krx_check,
         "files": {path.name: _sha256(path) for path in written},
     }
-
-
-def current_bundle(out: Path) -> Path:
-    """CURRENT가 가리키는 확정 묶음 폴더. 읽는 쪽은 이 함수로만 위치를 얻는다."""
-    pointer = out / CURRENT_POINTER
-    if not pointer.is_file():
-        raise FileNotFoundError(f"확정된 가격 묶음이 없습니다: {pointer}")
-    bundle = out / RUNS_DIR / pointer.read_text(encoding="utf-8").strip()
-    if not (bundle / MANIFEST).is_file():
-        raise FileNotFoundError(f"CURRENT가 가리키는 묶음에 {MANIFEST}가 없습니다: {bundle}")
-    return bundle
 
 
 def _verify_bundle(bundle: Path, summary: dict) -> None:

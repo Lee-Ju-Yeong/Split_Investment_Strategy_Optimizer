@@ -14,7 +14,7 @@ Linux/WSL에 Python 3.12, `g++`, Boost 헤더(`libboost-dev`)가 필요하다. C
 ```bash
 sudo apt-get install g++ libboost-dev
 python3 -m src.research.etf.fast_build --output-dir /tmp/etf-m3-build
-python3 tools/ci/run_etf_m3_checks.py --build-dir /tmp/etf-m3-build
+python3 -S tools/ci/run_etf_m3_checks.py --build-dir /tmp/etf-m3-build
 python3 -m src.research.etf.fast_benchmark \
   --build-dir /tmp/etf-m3-build --report results/etf-m3-benchmark.json --repeat 3
 ```
@@ -24,6 +24,8 @@ python3 -m src.research.etf.fast_benchmark \
 컴파일 실패·오류를 Python 실행으로 자동 대체하지 않는다. CI의 별도 `ETF M3 C++ 정확성 대조`
 작업도 같은 빌드·검사 명령을 쓴다. 검사 수집·시작·종료를 대조하며 실패·누락·건너뜀은 실패다.
 기존 CPU 기본 검사에는 고정 Python 의존성 설치가 필요하지만 이 C++ 대조 검사는 표준 라이브러리만 쓴다.
+`-S`는 외부 패키지 경로 초기화를 끄며 실행기가 실제 검사 자식에도 같은 옵션을 전달한다.
+M5 파일 입력 예제도 자료 처리용 NumPy·pandas를 가져오지 않는다.
 
 ## 호출
 

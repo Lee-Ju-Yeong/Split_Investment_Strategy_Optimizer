@@ -44,6 +44,12 @@ def input_case(market, *, price="100", spread="1"):
 
 
 class NativeParityTests(unittest.TestCase):
+    def test_m5_file_pipeline_uses_verified_native_kernel(self):
+        from examples.etf_m5_demo import demo
+        with tempfile.TemporaryDirectory() as temporary:
+            result = demo(temporary, build_dir=os.environ["MAGICSPLIT_ETF_M3_BUILD"])
+        self.assertEqual(result["succeeded"], 4)
+
     def assert_candidate(self, inputs, **options):
         options.setdefault("sec_rate_override", D(0))
         expected = candidate_for_bar(*inputs, **options)
@@ -227,7 +233,8 @@ class NativeOracleSuite(unittest.TestSuite):
 
 
 ORACLES = [importlib.import_module(name) for name in (
-    "test_research_etf_engine_strategy", "test_research_etf_engine_contract", "test_research_etf_engine")]
+    "test_research_etf_engine_strategy", "test_research_etf_engine_contract", "test_research_etf_engine",
+    "test_research_etf_m5_lifecycle")]
 
 
 def load_tests(loader, standard_tests, pattern):

@@ -28,13 +28,14 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 import heapq
 
 from .engine_market import fee_amount, sec_fee_rate
 from .engine_strategy import candidate_for_bar
-from .engine_tax import TaxLedger
+from .engine_tax import KST, TaxLedger
+from .engine_lifecycle import closing_candidate, validate_delistings
 from .engine_types import (
     Bar, Candidate, EngineResult, FxRate, Instrument, LevelRule, Position,
     ONE, ZERO, aware, decimal,
@@ -71,6 +72,8 @@ class _Options:
     commission_rate: Decimal | None
     sec_rate_override: Decimal | None
     product_sell_tax_rate: Decimal
+    domestic_settlement: str = "legacy_same_day"
+    max_fx_age_days: int | None = None
 
 
 def _validate_options(options: _Options) -> None:
@@ -88,6 +91,10 @@ def _validate_options(options: _Options) -> None:
             raise ValueError(f"{name} must be a nonnegative integer")
     if options.fx_cost == ONE:
         raise ValueError("fx_cost must be less than 1")
+    if options.domestic_settlement not in {"legacy_same_day", "t_plus_2"}:
+        raise ValueError("domestic_settlement must be legacy_same_day or t_plus_2")
+    if options.max_fx_age_days is not None and (type(options.max_fx_age_days) is not int or options.max_fx_age_days < 0):
+        raise ValueError("max_fx_age_days must be a nonnegative integer or None")
 
 
 def _input_map(instruments, rules):
@@ -148,6 +155,9 @@ class _Engine:
         self.options = options
         self.candidate_provider = inputs["_candidate_provider"]
         self.instruments = _input_map(inputs["instruments"], inputs["rules"])
+        if (options.domestic_settlement == "t_plus_2" and options.tax_mode == "after_tax"
+                and any(item.market == "KR" for item in self.instruments.values())):
+            raise ValueError("KR T+2 after_tax is unsupported until settlement-date withholding is implemented")
         self.order = {symbol: index for index, symbol in enumerate(self.instruments)}
         self.rules = {symbol: tuple(sorted(levels, key=lambda rule: rule.level))
                       for symbol, levels in inputs["rules"].items()}
@@ -158,6 +168,9 @@ class _Engine:
         self._init_positions(inputs["initial_positions"])
         self.sessions, self.settlement_times = _validated_sessions(
             inputs["us_sessions"], inputs["settlement_session_times"])
+        self.kr_sessions, self.kr_settlement_times = _validated_sessions(
+            inputs["kr_sessions"], inputs["kr_settlement_session_times"])
+        self.delistings = validate_delistings(inputs["delistings"], self.instruments, self.bars)
         self.basis = _tax_basis_map(inputs["tax_basis_by_bar"], self.instruments)
         self.initial_basis = _tax_basis_map(inputs["initial_tax_basis"], self.instruments, initial=True)
         if set(self.basis) - {(bar.symbol, bar.session_date) for bar in self.bars}:
@@ -224,6 +237,8 @@ class _Engine:
             self._push(at, 10, "corporate", bar, bar.symbol)
             self._path_marks(bar)
             self._push(at, 30, "plan", bar, bar.symbol)
+            if self._liquidation_session(bar):
+                self._push(bar.close_at, 35, "liquidate", bar, bar.symbol)
         if self.options.first_level_fraction is not None:
             for at in monthly.values():
                 self._push(at, 15, "budget")
@@ -269,6 +284,9 @@ class _Engine:
         index = bisect_right(self.fx_times, _utc(at)) - 1
         if index < 0:
             raise ValueError(f"no FX rate published by {_utc(at).isoformat()}")
+        if (self.options.max_fx_age_days is not None
+                and _utc(at) - self.fx_times[index] > timedelta(days=self.options.max_fx_age_days)):
+            raise ValueError(f"stale FX rate at {_utc(at).isoformat()}: maximum age {self.options.max_fx_age_days} days")
         return self.fx_values[index]
 
     def _rate(self, instrument, at):
@@ -276,17 +294,25 @@ class _Engine:
 
     def _settlement(self, bar):
         day = bar.session_date
-        lag = 1 if day >= date(2024, 5, 28) else 2 if day >= date(2017, 9, 5) else 3
-        index = bisect_left(self.sessions, day)
-        if index == len(self.sessions) or self.sessions[index] != day or index + lag >= len(self.sessions):
+        domestic = self.instruments[bar.symbol].market == "KR"
+        lag = 2 if domestic else 1 if day >= date(2024, 5, 28) else 2 if day >= date(2017, 9, 5) else 3
+        sessions, times = (self.kr_sessions, self.kr_settlement_times) if domestic else (self.sessions, self.settlement_times)
+        index = bisect_left(sessions, day)
+        if index == len(sessions) or sessions[index] != day or index + lag >= len(sessions):
+            if domestic:
+                raise ValueError(f"{bar.symbol} {day}: actual KR T+2 settlement sessions are required")
             self._warn(f"{bar.symbol} {day}: insufficient actual US sessions; cash/tax settlement remains pending")
             return None, None
-        settled_day = self.sessions[index + lag]
-        at = self.settlement_times.get(settled_day)
+        settled_day = sessions[index + lag]
+        at = times.get(settled_day)
         if at is None:
+            if domestic:
+                raise ValueError(f"{bar.symbol} {day}: KR settlement availability time is required")
             self._warn(f"{bar.symbol} {day}: no availability time for settlement {settled_day}; cash/tax settlement remains pending")
         elif at < _utc(bar.close_at):
             raise ValueError("settlement availability cannot precede the trade session close")
+        elif domestic and at.astimezone(KST).date() < settled_day:
+            raise ValueError("KR settlement availability cannot precede its T+2 settlement date")
         return settled_day, at
 
     def _sec_override(self, instrument, bar):
@@ -305,7 +331,8 @@ class _Engine:
                     "fill": self._fill, "evaluate": self._evaluate,
                     "convert": self._convert, "settle": self._settle,
                     "initial_tax": self._initial_tax, "trade_tax": self._trade_tax,
-                    "dividend_pay": self._dividend_pay, "tax_payment": self._tax_payment}
+                    "dividend_pay": self._dividend_pay, "tax_payment": self._tax_payment,
+                    "liquidate": self._liquidate}
         while self.queue:
             at, _, _, _, kind, payload = heapq.heappop(self.queue)
             self.tax.advance(at)
@@ -385,6 +412,8 @@ class _Engine:
         self._cash_event(at, "budget_refresh", budgets=budgets, source_total_krw=previous["total_krw"])
 
     def _plan(self, at, bar):
+        if self._liquidation_session(bar):
+            return
         instrument = self.instruments[bar.symbol]
         first = bar.symbol not in self.first_seen
         self.first_seen.add(bar.symbol)
@@ -448,7 +477,9 @@ class _Engine:
         key = (candidate.symbol, candidate.level)
         if candidate.side == "SELL":
             position = self.positions.get(key)
-            if position is None or position.quantity != candidate.quantity:
+            quantity = (sum(p.quantity for p in self.positions.values() if p.symbol == candidate.symbol)
+                        if candidate.reason == "delisting_liquidation" else position.quantity if position else 0)
+            if quantity != candidate.quantity:
                 return "position_changed"
         elif key in self.positions:
             return "level_occupied"
@@ -489,6 +520,9 @@ class _Engine:
             position = Position(candidate.symbol, candidate.level, candidate.quantity, candidate.price, fee, rule.take_rate, at)
             self.positions[key] = position
             self._spend(instrument.currency, position.principal + fee)
+        elif candidate.reason == "delisting_liquidation":
+            keys = sorted(key for key in self.positions if key[0] == candidate.symbol)
+            position = tuple(self.positions.pop(key) for key in keys)
         else:
             position = self.positions.pop(key)
         withholding = self._queue_trade_tax(at, instrument, position, candidate, bar, fee)
@@ -518,11 +552,12 @@ class _Engine:
         if amount < ZERO:
             raise ValueError("sale costs exceed proceeds")
         self.cash[instrument.currency] += amount
-        if instrument.market != "US":
+        delayed = instrument.market == "US" or (instrument.market == "KR" and self.options.domestic_settlement == "t_plus_2")
+        if not delayed:
             self.settled[instrument.currency] += amount
             return
         day, settled_at = self._settlement(bar)
-        credit = {"currency": "USD", "remaining": amount, "settlement_date": day, "settled_at": settled_at}
+        credit = {"currency": instrument.currency, "remaining": amount, "settlement_date": day, "settled_at": settled_at}
         self.pending_cash.append(credit)
         if settled_at is not None:
             self._push(settled_at, 5, "settle", credit)
@@ -557,8 +592,23 @@ class _Engine:
         if candidate.side == "BUY":
             self.tax.buy(instrument, position, fx_rate=rate, tax_basis=basis, settled_at=at)
             return ZERO
-        return self.tax.sell(instrument, position, candidate.price, fee, at,
-                             fx_rate=rate, tax_basis=basis, settled_at=at)
+        sell = self.tax.sell_lots if isinstance(position, tuple) else self.tax.sell
+        return sell(instrument, position, candidate.price, fee, at, fx_rate=rate, tax_basis=basis, settled_at=at)
+
+    def _liquidation_session(self, bar):
+        event = self.delistings.get(bar.symbol)
+        return event is not None and bar.session_date == event.last_session
+
+    def _liquidate(self, at, bar):
+        event = self.delistings[bar.symbol]
+        positions = [p for p in self.positions.values() if p.symbol == bar.symbol]
+        candidate = closing_candidate(self.instruments[bar.symbol], bar, positions, self.options)
+        if candidate is not None:
+            self._fill(at, (candidate, bar, at))
+            if any(p.symbol == bar.symbol for p in self.positions.values()):
+                raise ValueError(f"{bar.symbol}: delisting liquidation rejected; do not exclude this failed trial")
+        self._cash_event(at, "delisting_liquidated", symbol=bar.symbol, known_at=event.known_at,
+                         delisting_date=event.delisting_date, source_sha256=event.source_sha256)
 
     def _corporate(self, at, bar):
         instrument = self.instruments[bar.symbol]
@@ -647,10 +697,11 @@ class _Engine:
             self._warn("Unsettled USD sale proceeds cannot be converted")
 
     def _tax_payment(self, at, amount):
-        if amount > self.cash["KRW"]:
+        if amount > self.settled["KRW"]:
             raise ValueError("insufficient settled KRW cash for explicit tax payment")
         self.tax.pay_tax(amount, at)
-        self._spend("KRW", amount)
+        self.cash["KRW"] -= amount
+        self.settled["KRW"] -= amount
         self._cash_event(at, "tax_payment", currency="KRW", amount=amount)
 
 
@@ -668,6 +719,8 @@ def run_engine(
     tax_payments: dict[datetime, Decimal] | None = None, synthetic_tax_data=False,
     penetration_ticks=1, slippage_ticks=0, commission_rate=None,
     sec_rate_override=None, product_sell_tax_rate=ZERO, _candidate_provider=candidate_for_bar,
+    kr_sessions: list[date] = (), kr_settlement_session_times=None,
+    domestic_settlement="legacy_same_day", max_fx_age_days=None, delistings=(),
 ) -> EngineResult:
     """Run one assumed OHLC path; cash orders never shrink to available cash.
 
@@ -691,7 +744,7 @@ def run_engine(
         tax_mode, synthetic_tax_data, penetration_ticks, slippage_ticks,
         None if commission_rate is None else _fraction(commission_rate, "commission_rate"),
         None if sec_rate_override is None else _fraction(sec_rate_override, "sec_rate_override"),
-        _fraction(product_sell_tax_rate, "product_sell_tax_rate"))
+        _fraction(product_sell_tax_rate, "product_sell_tax_rate"), domestic_settlement, max_fx_age_days)
     _validate_options(options)
     with localcontext() as arithmetic:
         arithmetic.prec = 80

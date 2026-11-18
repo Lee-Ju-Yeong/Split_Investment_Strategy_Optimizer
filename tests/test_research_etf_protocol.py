@@ -22,7 +22,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.proto["status"], "draft")
         self.assertEqual(self.proto["universe"]["liquidity"]["floor"], {"KR": 100000000, "US": 1000000})
         self.assertEqual(self.proto["schedule"]["evaluation_time_kst"], "18:00")
-        self.assertIn("baskets.k_values", pr.open_items(self.proto))
+        self.assertEqual(self.proto["baskets"]["k_values"], [2, 3, 4, 5])
 
     def test_hash_ignores_key_order_and_whitespace(self):
         reordered = json.loads(json.dumps(self.proto, sort_keys=False), object_pairs_hook=lambda kv: dict(reversed(kv)))
@@ -34,6 +34,7 @@ class ProtocolTests(unittest.TestCase):
     def test_frozen_rejects_open_items(self):
         frozen = copy.deepcopy(self.proto)
         frozen["status"] = "frozen"
+        frozen["search"]["future_step"] = "decide_by:M6"
         with self.assertRaisesRegex(ValueError, "미정 값"):
             pr.validate(frozen)
 
@@ -97,10 +98,20 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "수수료"):
             pr.validate(bad)
 
-    def test_m2_open_values_belong_only_to_m5(self):
+    def test_m5_conditions_are_named_before_performance_but_not_m6_frozen(self):
         remaining = pr.open_items(self.proto)
-        self.assertEqual(len(remaining), 5)
-        self.assertTrue(all(value.startswith("M5") for value in remaining.values()))
+        self.assertEqual(remaining, {})
+        self.assertEqual(self.proto["search"]["configuration_file"], "m5_search_v1.json")
+        self.assertEqual(self.proto["status"], "draft")
+
+    def test_m5_configuration_hash_and_cross_file_values_are_required(self):
+        for change in (lambda p: p["search"].update(configuration_sha256="0" * 64),
+                       lambda p: p["baskets"].update(k_values=[2]),
+                       lambda p: p["fx"].update(max_publication_age_days=8)):
+            bad = copy.deepcopy(self.proto)
+            change(bad)
+            with self.assertRaises(ValueError):
+                pr.validate(bad)
 
 
 def _meta(rows):
