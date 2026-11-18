@@ -101,7 +101,7 @@ def _validate_options(options: _Options) -> None:
     closure = options.fx_closure_age_days
     if closure is not None and (type(closure) is not int or options.max_fx_age_days is None
                                 or closure < options.max_fx_age_days):
-        raise ValueError("fx_closure_age_days must be an integer at least max_fx_age_days")
+        raise ValueError("fx_closure_age_days needs max_fx_age_days and must be an integer at least as large")
 
 
 def _input_map(instruments, rules):
@@ -306,6 +306,9 @@ class _Engine:
             raise ValueError(f"stale FX rate at {at.isoformat()}: maximum age {self.options.max_fx_age_days} days")
         if at - published > timedelta(days=closure):
             raise ValueError(f"stale FX rate at {at.isoformat()}: maximum closure age {closure} days")
+        # 달력에 없는 날을 휴장으로 추정하지 않는다. 마지막 환율부터 조회 시각까지 달력이 덮어야 한다.
+        if published < self.kr_fx_times[0] or at > self.kr_fx_times[-1]:
+            raise ValueError(f"stale FX rate at {at.isoformat()}: kr_sessions does not cover the closure")
         if bisect_right(self.kr_fx_times, at) > bisect_right(self.kr_fx_times, published):
             raise ValueError(f"stale FX rate at {at.isoformat()}: a KRX session passed without a new rate")
 
