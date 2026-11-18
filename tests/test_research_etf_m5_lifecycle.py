@@ -214,9 +214,70 @@ class FxAgeTests(unittest.TestCase):
                        evaluation_times=[at(DAY + timedelta(days=7), 1)], max_fx_age_days=7)
 
     def test_invalid_age_and_settlement_modes_are_rejected(self):
-        for options in ({"max_fx_age_days": True}, {"max_fx_age_days": -1}, {"domestic_settlement": "guess"}):
+        for options in ({"max_fx_age_days": True}, {"max_fx_age_days": -1}, {"domestic_settlement": "guess"},
+                        {"fx_closure_age_days": 12}, {"max_fx_age_days": 7, "fx_closure_age_days": 6},
+                        {"max_fx_age_days": 7, "fx_closure_age_days": True}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 kr_run([bar()], **options)
+        with self.assertRaisesRegex(ValueError, "requires kr_sessions"):
+            kr_run([bar()], max_fx_age_days=7, fx_closure_age_days=12)
+
+
+class FxClosureTests(unittest.TestCase):
+    """2017년 추석: 마지막 MAR 9/29 09:00 KST, 다음 국내 세션·MAR 10/10 09:00 KST."""
+    LAST, REOPEN = date(2017, 9, 29), date(2017, 10, 10)
+    US = Instrument("US", "US", "USD")
+
+    def value(self, when, *, sessions=(LAST, REOPEN), closure=12, reopened_rate=False, runner=None):
+        rates = [FxRate(at(self.LAST), D("1000"))] + ([FxRate(at(self.REOPEN), D("2000"))] if reopened_rate else [])
+        options = dict(initial_cash={"USD": D("1")}, fx_rates=rates, evaluation_times=[when],
+                       max_fx_age_days=7, fx_closure_age_days=closure, kr_sessions=list(sessions))
+        if runner is not None:
+            return runner(options).valuations[0]["total_krw"]
+        return run_engine([self.US], [], {"US": rules()}, **options).valuations[0]["total_krw"]
+
+    def test_closure_allows_last_rate_until_the_reopening_publication(self):
+        nyse_close = at(date(2017, 10, 9), 20)
+        self.assertEqual(nyse_close - at(self.LAST), timedelta(days=10, hours=20))
+        self.assertEqual(self.value(nyse_close), D("1000"))
+        self.assertEqual(self.value(at(date(2017, 10, 9), 23, 59)), D("1000"))
+        self.assertEqual(self.value(at(self.REOPEN), reopened_rate=True), D("2000"))
+
+    def test_session_without_a_new_rate_and_closure_cap_still_fail(self):
+        with self.assertRaisesRegex(ValueError, "stale FX.*KRX session passed"):
+            self.value(at(self.REOPEN))
+        with self.assertRaisesRegex(ValueError, "stale FX.*KRX session passed"):
+            self.value(at(date(2017, 10, 9), 20), sessions=(self.LAST, date(2017, 10, 2), self.REOPEN))
+        with self.assertRaisesRegex(ValueError, "stale FX.*closure age 10 days"):
+            self.value(at(date(2017, 10, 9), 20), closure=10)
+        with self.assertRaisesRegex(ValueError, "stale FX.*maximum age 7 days"):
+            self.value(at(date(2017, 10, 9), 20), closure=None)
+
+    def test_calendar_must_cover_the_closure_instead_of_assuming_a_holiday(self):
+        nyse_close = at(date(2017, 10, 9), 20)
+        for sessions in ((self.LAST,), (date(2010, 1, 4),), (date(2020, 1, 2),), (self.REOPEN, date(2017, 10, 11))):
+            with self.subTest(sessions=sessions), self.assertRaisesRegex(ValueError, "stale FX.*does not cover"):
+                self.value(nyse_close, sessions=sessions)
+
+    def test_closure_cap_boundary_is_inclusive(self):
+        sessions, limit = (self.LAST, date(2017, 10, 12)), at(self.LAST + timedelta(days=12))
+        self.assertEqual(self.value(limit, sessions=sessions), D("1000"))
+        with self.assertRaisesRegex(ValueError, "stale FX.*closure age 12 days"):
+            self.value(at(self.LAST + timedelta(days=12), 0, 1), sessions=sessions)
+
+    def test_missed_session_inside_the_basic_limit_keeps_existing_behaviour(self):
+        monday = date(2017, 10, 2)
+        self.assertEqual(self.value(at(monday, 9), sessions=(self.LAST, monday, self.REOPEN)), D("1000"))
+
+    def test_baseline_engine_applies_the_same_closure_rule(self):
+        def baseline(options):
+            frozen = fixed_baseline([self.US], investment_fraction=D("0"),
+                                    known_at=at(self.LAST - timedelta(days=1)), evaluation_start=at(self.LAST))
+            return run_baseline(frozen, [self.US], [bar("US", day=self.LAST, market="US")],
+                                sec_rate_override=D("0"), **options)
+        self.assertEqual(self.value(at(date(2017, 10, 9), 20), runner=baseline), D("1000"))
+        with self.assertRaisesRegex(ValueError, "stale FX.*KRX session passed"):
+            self.value(at(self.REOPEN), runner=baseline)
 
 
 if __name__ == "__main__":
