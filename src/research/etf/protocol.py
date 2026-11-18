@@ -33,6 +33,7 @@ NUMBERS = (
     ("baskets.generation_seed", 0, 2**32 - 1, True),
     ("fx.conversion.cost_one_way", 0, 0.05, False),
     ("fx.conversion.cost_stress_one_way", 0, 0.05, False),
+    ("fx.max_publication_age_days", 0, 30, True),
     ("execution.participation.max_order_to_adv20", 1e-6, 1, False),
     ("execution.fill.penetration_ticks", 0, 10, True),
     ("execution.fill.slippage_ticks", 0, 10, True),
@@ -178,6 +179,8 @@ def validate(data: dict) -> None:
         raise ValueError("민감도 보고 상관 기준은 주 기준 이하여야 합니다")
     if data.get("engine_schema") == "etf-m2-v1":
         _validate_market_reference(data)
+    if "configuration_file" in data["search"]:
+        _validate_search_reference(data)
     if data["status"] == "frozen" and open_items(data):
         raise ValueError(f"고정된 프로토콜에 미정 값이 남았습니다: {sorted(open_items(data))}")
 
@@ -193,6 +196,20 @@ def _validate_market_reference(data: dict) -> None:
     for market, key in (("KR", "KR"), ("US", "US"), ("KRX_GOLD", "GOLD")):
         if str(_get(data, f"execution.costs_one_way.{market}_commission")) != rules["commission_rates"][key]:
             raise ValueError("프로토콜과 M2 시장 규칙의 수수료가 다릅니다")
+
+
+def _validate_search_reference(data):
+    if data["search"]["configuration_file"] != "m5_search_v1.json":
+        raise ValueError("M5 탐색 설정 파일 참조가 잘못됐습니다")
+    path = Path(__file__).with_name("m5_search_v1.json")
+    if data["search"].get("configuration_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise ValueError("M5 탐색 설정 해시가 프로토콜과 다릅니다")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if any(data["baskets"][key] != config[key] for key in ("market_mix_strata", "k_values")):
+        raise ValueError("M5 시장 구성과 프로토콜이 다릅니다")
+    if (data["schedule"]["start_dates"]["horizon_years"] != config["outer_evaluation_years"]
+            or data["fx"]["max_publication_age_days"] != config["pilot"]["max_fx_age_days"]):
+        raise ValueError("M5 기간/환율 제한과 프로토콜이 다릅니다")
 
 
 def main(argv=None) -> None:

@@ -114,7 +114,7 @@ python -m examples.short_selling_lag_demo
 python tools/ci/run_cpu_checks.py
 ```
 
-CI와 같은 명령입니다. 아래 25개 모듈과 예제 4개를 각각 별도 프로세스에서 실행하며, 동시에 실행하는 작업은 최대 3개입니다. 모듈·예제마다 2분 제한을 둡니다. 전체 `test_*.py`를 수집하지 않으므로 이 명령으로 GPU·DB 검사가 실행되지 않습니다.
+CI와 같은 명령입니다. 아래 29개 모듈과 예제 5개를 각각 별도 프로세스에서 실행하며, 동시에 실행하는 작업은 최대 3개입니다. 모듈·예제마다 2분 제한을 둡니다. 전체 `test_*.py`를 수집하지 않으므로 이 명령으로 GPU·DB 검사가 실행되지 않습니다.
 
 각 모듈에서 수집한 검사 식별자를 실제 시작·종료 기록과 대조합니다. 검사 0개·누락·중복·가져오기 실패, 실패·오류·건너뜀·예상된 실패, 결과 기록 누락, 비정상 종료·시간 초과는 모두 실패입니다. 한 작업이 실패해도 다른 독립 작업의 결과를 모으며, **모든 검사와 예제가 성공해야 종료 코드 0**입니다. 아래 34개는 최초 도입 기준이며 선택된 모듈에 추가된 검사도 자동 포함합니다.
 
@@ -144,7 +144,7 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_research_etf_fx_calendars.py` | 환율·금리 이용 가능 시각(미래 정보 차단), KRX·NYSE 거래일 달력 | 30개 |
 | `test_research_etf_krx_gold.py` | KRX 금현물 일봉 정리: 원본 보존, 동시 실행 잠금, 무한대 값 차단 | 25개 |
 | `test_research_etf_metadata.py` | ETF 분류(레버리지·자산군·지수 묶음·국내 과세 유형)와 D1 유니버스 필터, 폐지 ETF 분류 | 43개 |
-| `test_research_etf_protocol.py` | 연구 프로토콜 JSON·M2 비용표 해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 20개 |
+| `test_research_etf_protocol.py` | 연구 프로토콜 JSON·M2 비용표·M5 설정 해시·미정 값, 지수 묶음 단위 탐색용·보류용 분할(상관 병합·층화·작은 층 합치기·고정 시드·덮어쓰기 방지) | 21개 |
 | `test_research_etf_engine_market.py` | ETF·금·미국 호가와 SEC 요율·공표 시각·미확인 구간 거부 | 24개 |
 | `test_research_etf_engine_strategy.py` | 제품 V2 판단·최초 미체결 주문 고정·두 일봉 경로·호가 관통·반올림 경계 | 47개 |
 | `test_research_etf_engine_tax.py` | 합성 세금 원장·결제일 환율·연간 합산·미수 배당·보고용 추정세·납부 | 35개 |
@@ -153,13 +153,20 @@ python -m unittest discover -s tests -p 'test_daily_stock_tier_batch.py' -v
 | `test_research_etf_engine_inputs.py` | M1 해시·탐색 한정·직전 거래대금·달력 끝·기간 말미 누락·기업행사 맥락 | 24개 |
 | `test_research_etf_baselines.py` | 학습 고정·가중·시가 리밸런싱·다중 취득분 부분 매도·공통 비용/결제·미래 정보·서머타임 시각 순서·8개 반올림·입력 오류 계약 | 42개 |
 | `test_research_etf_baseline_report.py` | 초기 자산 포함 낙폭·실제 경과시간 CAGR·쌍대 부호·평가 시각·프런티어·진단 분리·서머타임 경과시간 | 16개 |
+| `test_research_etf_m5_lifecycle.py` | 국내 T+2·결제 현금·명시 상폐·동시 청산 순서·환율 경과 | 19개 |
+| `test_research_etf_m5_inputs.py` | 전송 파일·해시·보류 사전 거부·명시 상폐·중복 확인값·ZIP 왕복 | 11개 |
+| `test_research_etf_m5_pilot.py` | 과거 변동성 손계산·SEC 전환·학습/평가 분리·실패 기록·표준 라이브러리 합성 연결 | 13개 |
+| `test_research_etf_m5_us_pilot.py` | US 단독 파일 연결4시도·개장 전0노출을 포함한 학습 평균 | 1개 |
 
-최초 도입은 34개였으며 M1 구성은 258개와 예제 2개였습니다. M2의 480개·예제 3개에 M4 검사 58개와 예제를 추가해 **선택 CPU 검사 구성은 538개, 예제는 4개**입니다. 실제 통과 여부는 각 실행 결과에서 확인하며 실패·건너뜀은 0이어야 합니다. 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
+최초 도입은 34개였으며 M1 구성은 258개와 예제 2개였습니다. M4까지538개·예제4개였고 M5 선행 조건과 프로토콜 검사를 추가해 **선택 CPU 검사 구성은 583개, 예제는 5개**입니다. 실제 통과 여부는 각 실행 결과에서 확인하며 실패·건너뜀은 0이어야 합니다. 이후 선택 모듈에 추가된 검사도 자동 포함합니다. 실제 엔진·전략·체결·자산 계산을 예제에서 호출하고, 데이터만 가상 입력으로 제공합니다. 다른 단위 검사에서는 DB·API를 모의 객체로 대체하거나 사용하지 않습니다. 수집기 검사는 의도적으로 실패를 일으키므로 `simulated chunk failure`, `errors=1` 등의 로그가 출력됩니다. 통합 명령은 로그 문구가 아닌 구조화된 검사 결과와 종료 코드로 판정합니다.
 
 M2 작은 예제는 `python -m examples.etf_m2_demo`입니다. 두 일봉 경로에서 1차 매수·익절 후 자동 재진입하지 않는 가상 3거래일을 검산합니다. [입력·결과·실제 자료의 제한](../docs/research/etf_m2_engine.md)을 함께 읽으세요.
 
 M4 기준선 예제는 `python -m examples.etf_m4_demo`입니다. 학습 비중을 고정한 리밸런싱·보유·프런티어와
 사후 진단을 합성 자료로 계산합니다. [기준선 계약과 지표](../docs/research/etf_m4_baselines.md)를 따릅니다.
+
+M5 연결 예제는 `python -m examples.etf_m5_demo`입니다. 희소한 합성 세션 파일에서 해시 고정·학습·
+기준선·두 설정×두 경로 기록을 확인합니다. [실제 자료와의 구분·전송·실행 조건](../docs/research/etf_m5_readiness.md)을 따릅니다.
 
 이 결과를 전체 제품 검사, 실제 데이터 제공처 접속, GPU 성능 재측정으로 확대하지 않습니다. 최초 수동 실행은 [안내 정비 기록](../todos/done_2026_11_06-public-project-refresh.md), 자동 검사 도입은 [CI 작업 기록](../todos/done_2026_11_06-cpu-checks-ci.md)에 남깁니다.
 
@@ -169,7 +176,7 @@ M4 기준선 예제는 `python -m examples.etf_m4_demo`입니다. 학습 비중�
 
 - main 대상 PR의 생성·갱신·재개, main push, Actions 화면의 수동 실행이 대상입니다. 문서 변경에도 실행합니다.
 - 무료 표준 `ubuntu-24.04` 실행기와 Python 3.12를 사용합니다. 실행마다 새 가상환경에 확인용 의존성을 설치하고 `pip check`를 수행합니다.
-- **도구 자체 검사 → 위 CPU 검사·예제** 순서입니다. 자체 24개는 임시 자료로 실패·누락·취소·예제 CLI 인수 격리와 복원을 확인하며 제품 검사 수와 따로 집계합니다.
+- **도구 자체 검사 → 위 CPU 검사·예제** 순서입니다. 자체 25개는 임시 자료로 실패·누락·취소·예제 CLI 인수 격리와 복원·표준 라이브러리 옵션의 실제 자식 전파를 확인하며 제품 검사 수와 따로 집계합니다.
 - 작업 전체는 10분 제한이며 같은 PR·브랜치에 새 실행이 생기면 이전 실행을 취소합니다. 취소·미실행은 통과가 아닙니다.
 - 로그·작업 요약에 후보 SHA, 실제 checkout SHA, Python·직접 의존성 버전과 결과를 남깁니다. PR은 GitHub의 임시 병합 커밋을 검사하므로 후보 SHA와 checkout SHA가 다를 수 있습니다.
 - GPU·실제 DB·외부 수집·성능 측정·문서 링크 자동 검사는 제외합니다. 병합 필수 검사 설정은 별도로 지정하지 않았습니다.
@@ -199,6 +206,6 @@ DB 통합 검사는 새 격리 환경에서 확인했습니다. 나머지 아래
 - `skipped`, 의존성 누락, 중단은 통과로 세지 않습니다.
 - GPU 검사를 CPU 흉내 객체로 통과시켜 실제 GPU 검사처럼 소개하지 않습니다.
 - [문서 화면 검사](../docs/pages-maintenance.md)는 제품 검사를 대신하지 않습니다.
-- GitHub Actions의 `CPU checks`는 위 25개 모듈·예제 4개와 도구 자체 검사, 별도 M3 C++ 정확 대조를 실행합니다. `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
+- GitHub Actions의 `CPU checks`는 위 29개 모듈·예제 5개와 도구 자체 검사, 별도 M3 C++ 정확 대조를 실행합니다. `DB integration`은 임시 MySQL의 합성 CPU 통합 검사, `Secret Scan`은 비밀정보 검사, `pages build and deployment`는 문서 배포입니다. 각각의 성공을 다른 범위의 성공으로 해석하지 않습니다.
 
 [프로젝트 소개](../README.md) · [세 가지 구현 근거](../docs/engineering-evidence.md) · [문서 안내](../docs/README.md)

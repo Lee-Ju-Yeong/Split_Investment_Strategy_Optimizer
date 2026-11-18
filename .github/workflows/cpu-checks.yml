@@ -34,7 +34,7 @@ jobs:
       - name: Build exact kernel
         run: python -m src.research.etf.fast_build --output-dir "$RUNNER_TEMP/etf-m3-build"
       - name: Compare native kernel with M2 cases
-        run: python tools/ci/run_etf_m3_checks.py --build-dir "$RUNNER_TEMP/etf-m3-build"
+        run: python -S tools/ci/run_etf_m3_checks.py --build-dir "$RUNNER_TEMP/etf-m3-build"
   cpu-checks:
     name: CPU 기본 검사
     runs-on: ubuntu-24.04

@@ -18,7 +18,8 @@ from zoneinfo import ZoneInfo
 
 from . import protocol
 from .engine_types import Bar, FxRate, Instrument, aware, decimal
-from .price_store import current_bundle
+from .engine_lifecycle import DelistingEvent, validate_delistings
+from .price_bundle import current_bundle
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -36,10 +37,16 @@ class M1Inputs:
     settlement_session_times: dict[date, datetime]
     provenance: dict
     warnings: list[str] = field(default_factory=list)
+    kr_sessions: list[date] = field(default_factory=list)
+    kr_settlement_session_times: dict[date, datetime] = field(default_factory=dict)
+    domestic_settlement: str = "legacy_same_day"
+    max_fx_age_days: int | None = None
+    delistings: tuple[DelistingEvent, ...] = ()
 
     def engine_kwargs(self) -> dict:
         return {name: getattr(self, name) for name in (
-            "fx_rates", "evaluation_times", "conversion_times", "us_sessions", "settlement_session_times")}
+            "fx_rates", "evaluation_times", "conversion_times", "us_sessions", "settlement_session_times",
+            "kr_sessions", "kr_settlement_session_times", "domestic_settlement", "max_fx_age_days", "delistings")}
 
 
 def _sha(path: Path) -> str:
@@ -132,10 +139,22 @@ def _history_ok(first: date, start: date) -> bool:
     return first <= boundary
 
 
-def _symbol_bars(instrument, rows, calendar, start, end, payment_dates, locked_status):
+def _symbol_bars(instrument, rows, calendar, start, end, payment_dates, locked_status, delisting=None):
+    raw_days = [row["date"] for row in rows]
+    if len(raw_days) != len(set(raw_days)):
+        raise ValueError(f"{instrument.symbol}: 중복 가격이 있습니다")
+    if delisting is not None:
+        if not start <= delisting.last_session <= end:
+            raise ValueError("explicit delisting must lie inside the requested run")
+        for row in rows:
+            day = date.fromisoformat(row["date"])
+            if delisting.last_session < day <= end and not _delisting_marker(row, day, delisting):
+                raise ValueError("source prices contradict the explicit last normal delisting session")
+        end = delisting.last_session
+        rows = [row for row in rows if date.fromisoformat(row["date"]) <= end]
     rows = sorted(rows, key=lambda row: row["date"])
     days = [date.fromisoformat(row["date"]) for row in rows]
-    if not days or len(set(days)) != len(days) or not _history_ok(days[0], start):
+    if not days or not _history_ok(days[0], start):
         raise ValueError(f"{instrument.symbol}: 중복 가격 또는 시작 전 3년 이력이 부족합니다")
     output, previous = [], None
     dated = dict(zip(days, rows))
@@ -182,8 +201,15 @@ def _symbol_bars(instrument, rows, calendar, start, end, payment_dates, locked_s
     return output
 
 
+def _delisting_marker(row, day, event):
+    # M1의 폐지 표시행은 정상 일봉이 아니다. 명시 폐지일의 0 OHLC/거래량만 허용한다.
+    return (day == event.delisting_date and decimal(row["close"]) > ZERO
+            and all(decimal(row[name]) == ZERO for name in ("open", "high", "low", "volume")))
+
+
 def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_csv, *,
-                   payment_dates=None, locked_status=None) -> M1Inputs:
+                   payment_dates=None, locked_status=None, delistings=(), input_hashes=None,
+                   domestic_settlement="legacy_same_day", max_fx_age_days=None) -> M1Inputs:
     """명시한 탐색 상품을 읽는다. 성과 탐색·보류 실행·원본 갱신은 수행하지 않는다.
 
     locked_status[(symbol,date)]는 단일 가격 일봉의 제한폭 고정 여부를 확인한 bool이다.
@@ -194,6 +220,7 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
     if not symbols or len(set(symbols)) != len(symbols) or any(not isinstance(s, str) or not s for s in symbols):
         raise ValueError("고유한 상품 코드 목록이 필요합니다")
     root = Path(data_root)
+    delistings = tuple(delistings)
     payment_dates, locked_status = payment_dates or {}, locked_status or {}
     for mapping in (payment_dates, locked_status):
         for key in mapping:
@@ -205,6 +232,13 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
     for at in payment_dates.values():
         aware(at)
     record, selected, metadata, bundle = _snapshot(root, split_csv, symbols)
+    notices = _notice_map(delistings, selected)
+    extra_paths = _extra_paths(root, any(row["market"] == "GOLD" for row in selected.values()))
+    if input_hashes is not None:
+        if not set(extra_paths) <= set(input_hashes):
+            raise ValueError("M5 needs pinned calendar/FX/gold hashes before loading data")
+        for name, path in extra_paths.items():
+            _check_hash(path, input_hashes[name])
     krx = _calendar(root / "fx" / "calendar_krx.csv")
     nyse = _calendar(root / "fx" / "calendar_nyse.csv")
     required_calendars = {"KRX": krx}  # 초기·월별 환전 일정에도 국내 달력이 필요하다.
@@ -233,11 +267,14 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
                                 row.get("kr_tax_class") or "unknown", basis)
         instruments.append(instrument)
         bars.extend(_symbol_bars(instrument, daily[symbol], nyse if market == "US" else krx,
-                                 start, end, payment_dates, locked_status))
+                                 start, end, payment_dates, locked_status, notices.get(symbol)))
         if market == "KR":
             warnings.append(f"{symbol}: 분배금 반영 미확인 수정가격, 호가는 가상 근사이며 실제 세후 판정 불가")
     rates = [FxRate(_stamp(row["available_at_utc"]), decimal(row["value"]))
              for row in _rows(root / "fx" / "fx_usdkrw_smbs_mar.csv")]
+    validate_delistings(delistings, {item.symbol: item for item in instruments}, bars)
+    if domestic_settlement == "t_plus_2":
+        _check_settlement_tail(instruments, bars, {"KR": krx, "US": nyse})
     union = sorted(day for day in set(krx) | set(nyse) if start <= day <= end)
     evaluations = [datetime.combine(day, time(18), KST) for day in union]
     final_close = max(bar.close_at for bar in bars).astimezone(KST)
@@ -254,23 +291,57 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
     initial = datetime.combine(start, time(10), KST)
     if initial not in conversions:
         conversions.insert(0, initial)
-    extra = [root / "fx" / name for name in ("calendar_krx.csv", "calendar_nyse.csv", "fx_usdkrw_smbs_mar.csv")]
-    if any(i.market == "GOLD" for i in instruments):
-        extra.append(root / "krx_gold" / "gold_9999_1kg_daily.csv")
     provenance = {"m1_split_protocol_sha256": record["protocol_sha256"],
                   "run_protocol_sha256": protocol.protocol_hash(protocol.load()),
                   "split_sha256": record["split_sha256"], "price_manifest_sha256": record["inputs"]["price_manifest_sha256"],
                   "metadata_sha256": record["inputs"]["metadata_sha256"],
                   "daily_sha256": dict(record["inputs"]["daily_sha256"]),
-                  "additional_inputs_sha256": {path.name: _sha(path) for path in extra},
+                  "additional_inputs_sha256": {name: _sha(path) for name, path in extra_paths.items()},
                   "symbols": list(symbols), "start": start.isoformat(), "end": end.isoformat(),
                   "payment_dates": [{"symbol": key[0], "date": key[1].isoformat(), "at": value.isoformat()}
                                     for key, value in sorted(payment_dates.items())],
                   "locked_status": [{"symbol": key[0], "date": key[1].isoformat(), "locked": value}
                                     for key, value in sorted(locked_status.items())],
                   "market_rules_sha256": _sha(Path(__file__).with_name("market_rules_v1.json")),
-                  "settlement_availability_assumption": "명시한 NYSE close_utc를 사용한 보수적 가정, 실제 결제시각을 관측한 값이 아님"}
+                  "settlement_availability_assumption": "명시한 시장 close_utc를 사용한 보수적 가정, 실제 결제시각을 관측한 값이 아님",
+                  "evaluation_calendar_sha256": hashlib.sha256("\n".join(at.isoformat() for at in evaluations).encode()).hexdigest(),
+                  "domestic_settlement": domestic_settlement, "max_fx_age_days": max_fx_age_days,
+                  "delisting_sources_sha256": {event.symbol: event.source_sha256 for event in delistings}}
     if any(bar.dividend and bar.dividend_pay_at is None for bar in bars):
         warnings.append("미국 분배금 지급일 미확인: 미수금으로만 기록하며 현금 재투자에 사용할 수 없음")
     return M1Inputs(instruments, sorted(bars, key=lambda b: (b.open_at, symbols.index(b.symbol))), rates,
-                    evaluations, conversions, list(nyse), {day: pair[1] for day, pair in nyse.items()}, provenance, warnings)
+                    evaluations, conversions, list(nyse), {day: pair[1] for day, pair in nyse.items()}, provenance, warnings,
+                    list(krx), {day: pair[1] for day, pair in krx.items()}, domestic_settlement, max_fx_age_days, tuple(delistings))
+
+
+def _extra_paths(root, has_gold):
+    result = {name: root / "fx" / name for name in
+              ("calendar_krx.csv", "calendar_nyse.csv", "fx_usdkrw_smbs_mar.csv")}
+    if has_gold:
+        result["gold_9999_1kg_daily.csv"] = root / "krx_gold" / "gold_9999_1kg_daily.csv"
+    return result
+
+
+def _notice_map(events, selected):
+    notices = {}
+    for event in events:
+        if not isinstance(event, DelistingEvent) or event.symbol not in selected or event.symbol in notices:
+            raise ValueError("delistings must identify unique requested instruments")
+        if selected[event.symbol]["market"] != "KR":
+            raise ValueError("delisting liquidation supports KR ETFs only")
+        notices[event.symbol] = event
+    return notices
+
+
+def _check_settlement_tail(instruments, bars, calendars):
+    markets = {item.symbol: item.market for item in instruments}
+    schedules = {market: sorted(calendar) for market, calendar in calendars.items()}
+    for bar in bars:
+        market = markets[bar.symbol]
+        if market == "GOLD":
+            continue
+        sessions = schedules[market]
+        lag = 2 if market == "KR" else 1 if bar.session_date >= date(2024, 5, 28) else 2 if bar.session_date >= date(2017, 9, 5) else 3
+        index = bisect_left(sessions, bar.session_date)
+        if index + lag >= len(sessions):
+            raise ValueError(f"{bar.symbol}: actual settlement calendar tail is incomplete")

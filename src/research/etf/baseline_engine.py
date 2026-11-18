@@ -50,6 +50,8 @@ class _BaselineEngine(_Engine):
         return sorted((p for p in self.positions.values() if p.symbol == symbol), key=lambda p: p.level)
 
     def _plan(self, at, bar):
+        if self._liquidation_session(bar):
+            return
         if (bar.symbol, bar.session_date) not in self.trade_sessions:
             return
         if bar.volume == ZERO or bar.limit_locked:
@@ -194,7 +196,9 @@ def run_baseline(policy, instruments, bars, *, initial_cash, fx_rates=(), evalua
                  tax_mode="pre_tax", us_sessions=(), settlement_session_times=None,
                  tax_basis_by_bar=None, tax_payments=None, synthetic_tax_data=False,
                  penetration_ticks=1, slippage_ticks=0, commission_rate=None,
-                 sec_rate_override=None, product_sell_tax_rate=ZERO):
+                 sec_rate_override=None, product_sell_tax_rate=ZERO,
+                 kr_sessions=(), kr_settlement_session_times=None,
+                 domestic_settlement="legacy_same_day", max_fx_age_days=None, delistings=()):
     """명시한 기간/실제 세션의 완전성 검사는 M1 연결부 등 호출자의 책임이다.
 
     월별 기준선은 직전 평가액으로 원화 목표를 고정한다. 실제 정수 보유 비중은 비용·
@@ -210,7 +214,7 @@ def run_baseline(policy, instruments, bars, *, initial_cash, fx_rates=(), evalua
                        penetration_ticks, slippage_ticks,
                        None if commission_rate is None else _fraction(commission_rate, "commission_rate"),
                        None if sec_rate_override is None else _fraction(sec_rate_override, "sec_rate_override"),
-                       _fraction(product_sell_tax_rate, "product_sell_tax_rate"))
+                       _fraction(product_sell_tax_rate, "product_sell_tax_rate"), domestic_settlement, max_fx_age_days)
     _validate_options(options)
     with localcontext() as arithmetic:
         arithmetic.prec = 80
