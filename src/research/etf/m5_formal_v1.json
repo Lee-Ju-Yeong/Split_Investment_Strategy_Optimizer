@@ -1,0 +1,18 @@
+{
+  "schema": "etf-m5-formal-v1",
+  "status": "draft_preperformance",
+  "status_note": "정식 탐색 실행 전 사용자 확정이 필요한 값이다. 성과를 보고 바꾸지 않는다.",
+  "baskets_per_stratum": 5,
+  "selection": "random",
+  "leverage_mix": "x1_only",
+  "learning_runs": 2,
+  "learning_basis": "평가 시작일과 같은 달의 직전 두 시작일에서 각각 1차 진입한 1년 실행. 두 실행의 평가 시각별 투자 비중을 합쳐 평균하고, 평가 구간 시작 시각 이후의 값은 쓰지 않는다.",
+  "posthoc_diagnostic": true,
+  "min_learning_exposure": null,
+  "undecided": [
+    "baskets_per_stratum: 층별 바스켓 수(계산량과 표본 수의 균형)",
+    "min_learning_exposure: 투자 비중 하한 제약(계획 3.2-4). null이면 적용하지 않고 기록만 한다",
+    "mixed/x2_only 바스켓과 저상관·자산군 균형 선택은 미구현",
+    "안쪽 선택 목적식·평탄 구간·PBO 분할은 실행기 범위 밖이며 별도 사전 지정이 필요"
+  ]
+}
