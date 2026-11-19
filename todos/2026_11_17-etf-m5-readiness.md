@@ -350,6 +350,21 @@ Codex 리뷰(`codex-review-r3.log`) P2 2건을 반영했다. 분석은 실패한
 정식 계획에서 무작위36단위의 전략 실행만 재면 평균1.3초·중앙0.69초·최대6.9초였다(`sample-timing-r1.log`).
 6개 작업자로 하루~이틀 규모로 추정하며, 고가 상품 단위가 꼬리를 늘릴 수 있다.
 
+## 정식 M5 실행 시작 (2026-11-19)
+
+PR #125(`4a863fc`)의 원격 검사5개 통과 뒤 정식 실행을 시작했다. PR은 아직 병합하지 않았다.
+
+- 소스: 커밋 `4a863fcd48ac9efe4d572cda690df7c268d5d8e2`를 고정한 별도 작업 폴더
+  `/root/orca/workspaces/Split_Investment_Strategy_Optimizer/m5-formal-run`. 실행 중 이 폴더의 파일을 바꾸면
+  단위가 «소스 변경»으로 실패한다. 다른 작업 폴더의 변경은 영향이 없다.
+- 계획: `/root/split-research-runs/etf-m5-formal-r1/plan.json`, `scope=formal`, SHA256
+  `d4765a37d3764e16462192c48cf4f8c061ccce743d0f98fcdef7b6efedf660ee`. 바스켓60·단위780·시도224,640·비교146,592.
+- 실행: 같은 폴더의 `run/`과 `run.log`, 작업자6개, 커널 `featherstar/results/etf-m3-validation/build-v2`.
+- 시작 직후 KR2 단위6개가 각각3~5분에 완료됐고 시도288개가 모두 통과했다. 성과 수치는 보지 않았다.
+- 중단하려면 `pkill -f etf-m5-formal-r1/plan.json`. 같은 명령으로 다시 시작하면 완성된 단위는 건너뛴다.
+
+완료 뒤 할 일: `run.log`의 요약 확인 → `m5_selection`으로 분석 → 결과와 한계 보고. 분석 전에는 성과를 보지 않는다.
+
 [사용·자료 전송·실행 범위](../docs/research/etf_m5_readiness.md).
-다음 행동: Codex 리뷰·원격 CI → 고정 커밋의 별도 작업 폴더에서 정식 M5 실행 → 선택 분석 → 결과 보고.
+다음 행동: 정식 M5 실행 완료 대기 → 선택 분석 → 결과 보고 → PR #125 병합 결정.
 세후·금리 민감도·M6/M7·보류 평가는 미실행이다.
