@@ -54,6 +54,7 @@ TASKS = (
     Task("tests", "test_research_etf_m5_inputs.py"),
     Task("tests", "test_research_etf_m5_pilot.py"),
     Task("tests", "test_research_etf_m5_us_pilot.py"),
+    Task("tests", "test_research_etf_m5_search.py"),
     Task("example", "examples.short_selling_lag_demo"),
     Task("example", "examples.cpu_split_demo"),
     Task("example", "examples.etf_m2_demo"),
