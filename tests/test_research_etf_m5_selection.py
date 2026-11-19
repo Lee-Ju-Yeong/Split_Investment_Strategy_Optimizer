@@ -1,14 +1,17 @@
 """정식 M5 선택 규칙·중첩 순차검증·PBO의 손계산 검사. 엔진을 실행하지 않고 결과표만 만든다."""
 from decimal import Decimal as D
 from fractions import Fraction as F
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from src.research.etf.m5_parameters import grid_candidates, load_config
+from src.research.etf.m5_search import FORMAL_PATH
 from src.research.etf.m5_selection import (
-    analyse, basket_value, load_table, neighbours, overfit_probability, select, setting_scores, walk_forward)
+    analyse, basket_value, load_table, neighbours, overfit_probability, select, setting_scores, verify_run,
+    walk_forward)
 
 
 GRID = {"kg": ["1", "2", "3"]}
@@ -50,7 +53,7 @@ class SelectionRuleTests(unittest.TestCase):
 
     def table(self, value, deltas):
         write_units(self.root, value, deltas)
-        return load_table(value, self.root)
+        return load_table(value, self.root)[0]
 
     def test_basket_value_is_the_start_median_on_the_worse_path_per_metric(self):
         starts = STARTS[:3]
@@ -73,7 +76,7 @@ class SelectionRuleTests(unittest.TestCase):
         self.assertEqual([(row["share"], row["improved"], row["baskets"], row["valued"]) for row in scores],
                          [(F(1, 2), 1, 2, 1), (F(0), 0, 2, 2), (F(0), 0, 2, 0)])
         with self.assertRaisesRegex(ValueError, "no planned evaluations"):
-            setting_scores(load_table(value, self.root), value, {"2030-01-02"})
+            setting_scores(load_table(value, self.root)[0], value, {"2030-01-02"})
 
     def test_neighbours_differ_by_one_grid_step_in_one_parameter(self):
         self.assertEqual(neighbours([{"kg": value} for value in GRID["kg"]], GRID), [[1], [0, 2], [1]])
@@ -137,7 +140,7 @@ class SelectionRuleTests(unittest.TestCase):
             return (1, 1) if (index == 0 and early) or (index == 2 and not early) else (-1, -1)
         other = self.root / "reversing"
         write_units(other, stable, reversing)
-        self.assertEqual(overfit_probability(load_table(stable, other), stable, near, 8)["pbo"], F(1))
+        self.assertEqual(overfit_probability(load_table(stable, other)[0], stable, near, 8)["pbo"], F(1))
 
     def test_analysis_refuses_an_incomplete_run_and_never_claims_a_verdict(self):
         value = plan(["b1"], paths=("A",))
@@ -147,9 +150,34 @@ class SelectionRuleTests(unittest.TestCase):
         self.assertEqual([fold["selected"] for fold in report["folds"]], [1, 1])
         self.assertEqual((report["overfit"]["status"], report["overfit"]["pbo"]), ("computed", F(0)))
         self.assertFalse(report["statistical_success_evaluated"] or report["holdout_evaluated"])
-        (self.root / "units" / "b1" / f"{STARTS[3]}.json").unlink()
+        unit = self.root / "units" / "b1" / f"{STARTS[3]}.json"
+        rows = json.loads(unit.read_text(encoding="utf-8"))["trials"]
+        unit.write_text(json.dumps({"status": "completed", "trials": rows[:-1]}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "lacks planned trials"):
+            analyse(value, self.root, grid=GRID)
+        unit.write_text(json.dumps({"status": "failed", "error": "input"}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "failed unit"):
+            analyse(value, self.root, grid=GRID)
+        allowed = analyse(value, self.root, grid=GRID, allow_failed_units=True)
+        self.assertEqual((allowed["failed_units"], allowed["comparisons_passed"]), ([["b1", STARTS[3]]], 9))
+        unit.unlink()
         with self.assertRaisesRegex(ValueError, "run is incomplete"):
             analyse(value, self.root, grid=GRID)
+
+    def test_analysis_requires_the_plan_and_rule_the_run_was_made_with(self):
+        plan_path = self.root / "plan.json"
+        plan_path.write_text("{}", encoding="utf-8")
+        digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        formal = hashlib.sha256(FORMAL_PATH.read_bytes()).hexdigest()
+        record = self.root / "provenance.json"
+        record.write_text(json.dumps({"plan_sha256": digest, "formal_sha256": formal, "source_git_sha": "x"}))
+        self.assertEqual(verify_run(plan_path, self.root)["source_git_sha"], "x")
+        record.write_text(json.dumps({"plan_sha256": "0" * 64, "formal_sha256": formal}))
+        with self.assertRaisesRegex(ValueError, "different plan"):
+            verify_run(plan_path, self.root)
+        record.write_text(json.dumps({"plan_sha256": digest, "formal_sha256": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "formal configuration changed"):
+            verify_run(plan_path, self.root)
 
 
 if __name__ == "__main__":

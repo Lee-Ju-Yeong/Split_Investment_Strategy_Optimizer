@@ -332,11 +332,14 @@ PR #124는 원격 검사5개 통과 뒤 사용자 승인으로 병합했다(`9d0
   처음 생각한 «이웃 포함 단순 평균»은 가장자리 설정이 좋은 이웃 하나에 끌려 뽑히는 것을 손계산 검사에서
   확인해, 결과를 보기 전에 자기 점수에 절반을 두는 식으로 바꿨다.
 
+Codex 리뷰(`codex-review-r3.log`) P2 2건을 반영했다. 분석은 실패한 단위나 행이 빠진 단위가 있으면 거부하고
+(`--allow-failed-units`일 때만 개선 못 함으로 세고 목록 기록), 실행 폴더의 계획·정식 설정 해시가 다르면 거부한다.
+
 검증:
 
 | 대상 | 결과·증거 |
 | --- | --- |
-| `.venv/bin/python tools/ci/run_cpu_checks.py` | 31모듈607개·예제5개 PASS/exit0, `cpu-r10.log` |
+| `.venv/bin/python tools/ci/run_cpu_checks.py` | 31모듈608개·예제5개 PASS/exit0, `cpu-r11.log` |
 | `python3 -S tools/ci/run_etf_m3_checks.py --build-dir …/build-v2` | 180개 PASS/exit0, `native-stdlib-r7.log` |
 | 실행기 자체 | 25개 PASS, `runner-r6.log` |
 | 정식 계획 | 바스켓60·단위780·평가509·시도224,640·비교146,592, 부족 층 없음 |
