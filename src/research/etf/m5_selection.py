@@ -18,16 +18,20 @@ from statistics import median
 
 from .engine_inputs import _sha
 from .m5_parameters import load_config
-from .m5_search import SCHEMA as PLAN_SCHEMA, load_formal
+from .m5_search import FORMAL_PATH, SCHEMA as PLAN_SCHEMA, load_formal
 
 
 SCHEMA = "etf-m5-selection-v1"
 LOWEST = Decimal("-Infinity")
 
 
-def load_table(plan, run_dir):
-    """(바스켓, 시작일, 설정, 경로) → (ΔCAGR, ΔMDD). 계획한 비교가 통과하지 못했으면 None이다."""
-    table = {}
+def load_table(plan, run_dir, *, allow_failed_units=False):
+    """(바스켓, 시작일, 설정, 경로) → (ΔCAGR, ΔMDD). 계획한 비교가 통과하지 못했으면 None이다.
+
+    빠진 단위·행이 빠진 단위는 거부한다. 실패한 단위는 명시적으로 허용할 때만 개선하지 못한 것으로 센다.
+    """
+    table, failed = {}, []
+    expected = {(index, name) for index in range(len(plan["candidates"])) for name in plan["paths"]}
     for basket in plan["baskets"]:
         for start in basket["evaluations"]:
             path = Path(run_dir) / "units" / basket["id"] / f"{start}.json"
@@ -35,13 +39,29 @@ def load_table(plan, run_dir):
                 raise ValueError(f"run is incomplete: {basket['id']} {start}")
             unit = json.loads(path.read_text(encoding="utf-8"))
             rows = {(row["candidate"], row["path"]): row for row in unit.get("trials", [])}
+            if unit.get("status") == "failed":
+                if not allow_failed_units:
+                    raise ValueError(f"run has a failed unit: {basket['id']} {start}")
+                failed.append([basket["id"], start])
+            elif set(rows) != expected:
+                raise ValueError(f"run is incomplete: {basket['id']} {start} lacks planned trials")
             for index in range(len(plan["candidates"])):
                 for name in plan["paths"]:
                     comparison = rows.get((index, name), {}).get("comparison", {})
                     matched = comparison.get("matched") if comparison.get("status") == "passed" else None
                     table[(basket["id"], start, index, name)] = None if matched is None else (
                         Decimal(matched["delta_cagr"]), Decimal(matched["delta_mdd"]))
-    return table
+    return table, failed
+
+
+def verify_run(plan_path, run_dir):
+    """분석하는 계획·선택 규칙이 실행 당시와 같은지 확인한다. 다른 계획의 실행 폴더를 섞지 않는다."""
+    pinned = json.loads((Path(run_dir) / "provenance.json").read_text(encoding="utf-8"))
+    if pinned.get("plan_sha256") != _sha(Path(plan_path)):
+        raise ValueError("run directory was produced by a different plan")
+    if pinned.get("formal_sha256") != _sha(FORMAL_PATH):
+        raise ValueError("formal configuration changed after the run")
+    return pinned
 
 
 def basket_value(table, basket, starts, index, paths):
@@ -192,16 +212,17 @@ def overfit_probability(table, plan, near, block_count):
             "limit": "묶음 경계의 겹치는 1년 실행은 제거하지 않았다"}
 
 
-def analyse(plan, run_dir, *, grid=None):
+def analyse(plan, run_dir, *, grid=None, allow_failed_units=False):
     if plan.get("schema") != PLAN_SCHEMA:
         raise ValueError("invalid M5 plan")
     rule = load_formal()["selection_rule"]
-    table = load_table(plan, run_dir)
+    table, failed = load_table(plan, run_dir, allow_failed_units=allow_failed_units)
     near = neighbours(plan["candidates"], load_config()["grid"] if grid is None else grid)
     folds, skipped = walk_forward(table, plan, near, rule)
     planned = len(table)
     return {"schema": SCHEMA, "scope": plan["scope"], "synthetic": plan["synthetic"], "rule": rule,
             "comparisons_planned": planned, "comparisons_passed": sum(value is not None for value in table.values()),
+            "failed_units": failed,
             "folds": folds, "skipped_folds": skipped,
             "overfit": overfit_probability(table, plan, near, rule["pbo_blocks"]),
             "statistical_success_evaluated": False, "holdout_evaluated": False, "actual_after_tax_approved": False}
@@ -220,9 +241,14 @@ def main():
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="새 분석 JSON 경로")
+    parser.add_argument("--allow-failed-units", action="store_true",
+                        help="실패한 단위를 개선하지 못한 것으로 세고 보고서에 목록을 남긴다")
     args = parser.parse_args()
-    report = analyse(json.loads(args.plan.read_text(encoding="utf-8")), args.run_dir)
-    report.update(plan_sha256=_sha(args.plan), run_provenance_sha256=_sha(args.run_dir / "provenance.json"))
+    pinned = verify_run(args.plan, args.run_dir)
+    report = analyse(json.loads(args.plan.read_text(encoding="utf-8")), args.run_dir,
+                     allow_failed_units=args.allow_failed_units)
+    report.update(plan_sha256=_sha(args.plan), run_provenance_sha256=_sha(args.run_dir / "provenance.json"),
+                  source_git_sha=pinned["source_git_sha"])
     with args.output.open("x", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True, default=_encode)
         stream.write("\n")

@@ -16,7 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU607/예제5/native180/실행기25, 정식 M5 실행 단계 |
+| [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU608/예제5/native180/실행기25, 정식 M5 실행 단계 |
 | [ETF M4 비교 기준선](done_2026_11_17-etf-m4-baselines.md) | implementation | 완료: CPU538·예제4·M3153·SOL/Opus 보완 |
 | [ETF M3 빠른 커널](done_2026_11_17-etf-m3-fast-kernel.md) | implementation | 완료: M3검사153개·필수 리뷰·합성 실행4.30~4.56배 |
 | [ETF 변동성 맞춤 분할매매 연구 계획](2026_11_15-etf-vol-split-research-plan.md) | research | M1~M4·M5 선행 구현·실자료 작은 실행 완료, 정식 설정 고정·선택/PBO 분석 구현, 정식 M5 실행 단계 |
