@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from src.research.etf.m5_parameters import grid_candidates, load_config
+from src.research.etf.m5_parameters import CONFIG_PATH, grid_candidates, load_config
 from src.research.etf.m5_search import FORMAL_PATH
 from src.research.etf.m5_selection import (
     analyse, basket_value, load_table, neighbours, overfit_probability, select, setting_scores, verify_run,
@@ -170,14 +170,15 @@ class SelectionRuleTests(unittest.TestCase):
         digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
         formal = hashlib.sha256(FORMAL_PATH.read_bytes()).hexdigest()
         record = self.root / "provenance.json"
-        record.write_text(json.dumps({"plan_sha256": digest, "formal_sha256": formal, "source_git_sha": "x"}))
+        good = {"plan_sha256": digest, "formal_sha256": formal, "source_git_sha": "x",
+                "configuration_sha256": hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest()}
+        record.write_text(json.dumps(good))
         self.assertEqual(verify_run(plan_path, self.root)["source_git_sha"], "x")
-        record.write_text(json.dumps({"plan_sha256": "0" * 64, "formal_sha256": formal}))
-        with self.assertRaisesRegex(ValueError, "different plan"):
-            verify_run(plan_path, self.root)
-        record.write_text(json.dumps({"plan_sha256": digest, "formal_sha256": "0" * 64}))
-        with self.assertRaisesRegex(ValueError, "formal configuration changed"):
-            verify_run(plan_path, self.root)
+        for key, message in (("plan_sha256", "different plan"), ("formal_sha256", "formal configuration changed"),
+                             ("configuration_sha256", "search grid configuration changed")):
+            record.write_text(json.dumps(dict(good, **{key: "0" * 64})))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, message):
+                verify_run(plan_path, self.root)
 
 
 if __name__ == "__main__":

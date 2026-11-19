@@ -17,7 +17,7 @@ from pathlib import Path
 from statistics import median
 
 from .engine_inputs import _sha
-from .m5_parameters import load_config
+from .m5_parameters import CONFIG_PATH, load_config
 from .m5_search import FORMAL_PATH, SCHEMA as PLAN_SCHEMA, load_formal
 
 
@@ -61,6 +61,8 @@ def verify_run(plan_path, run_dir):
         raise ValueError("run directory was produced by a different plan")
     if pinned.get("formal_sha256") != _sha(FORMAL_PATH):
         raise ValueError("formal configuration changed after the run")
+    if pinned.get("configuration_sha256") != _sha(CONFIG_PATH):
+        raise ValueError("search grid configuration changed after the run")
     return pinned
 
 
