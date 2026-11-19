@@ -1,18 +1,37 @@
 {
   "schema": "etf-m5-formal-v1",
-  "status": "draft_preperformance",
-  "status_note": "정식 탐색 실행 전 사용자 확정이 필요한 값이다. 성과를 보고 바꾸지 않는다.",
-  "baskets_per_stratum": 5,
+  "status": "frozen",
+  "status_note": "정식 탐색 결과를 보기 전에 사용자 승인(2026-11-19)으로 고정했다. 성과를 보고 바꾸지 않는다.",
+  "baskets_per_stratum": 10,
+  "baskets_basis": "주 판정이 바스켓 비율·바스켓 중앙값이라 층별 5개(전체 30개)는 바스켓 한두 개에 흔들린다. 전체 격자 1단위 실측(7~35분 이상)으로 6개 작업자 며칠 규모임을 확인하고 10개로 정했다.",
   "selection": "random",
   "leverage_mix": "x1_only",
+  "leverage_basis": "작은 실행부터 1배 상품만 검증했다. 프로토콜 1.3.0에서 주 판정 집합을 1배 전용으로 고쳤다.",
   "learning_runs": 2,
   "learning_basis": "평가 시작일과 같은 달의 직전 두 시작일에서 각각 1차 진입한 1년 실행. 두 실행의 평가 시각별 투자 비중을 합쳐 평균하고, 평가 구간 시작 시각 이후의 값은 쓰지 않는다.",
   "posthoc_diagnostic": true,
   "min_learning_exposure": null,
-  "undecided": [
-    "baskets_per_stratum: 층별 바스켓 수(계산량과 표본 수의 균형)",
-    "min_learning_exposure: 투자 비중 하한 제약(계획 3.2-4). null이면 적용하지 않고 기록만 한다",
-    "mixed/x2_only 바스켓과 저상관·자산군 균형 선택은 미구현",
-    "안쪽 선택 목적식·평탄 구간·PBO 분할은 실행기 범위 밖이며 별도 사전 지정이 필요"
+  "exposure_basis": "투자 비중 하한은 적용하지 않는다. 상승 구간의 비중이 1% 미만이라 하한을 두면 그 구간이 통째로 빠진다. 거의 현금인 설정은 최소 개선폭이 거른다. 학습 비중 구간별 보고는 보고서 단계에서 하며 선택 모듈 범위 밖이다.",
+  "cost_guard": "매수 간격이 왕복 비용보다 작은 설정은 그 바스켓·시작일에서 거부(rejected)로 기록한다. 오류와 구분해 세고, 상품을 후보에서 빼지 않는다. 선택에서는 개선하지 못한 것으로 센다.",
+  "selection_rule": {
+    "basket_value": "설정×바스켓마다 시작일들의 ΔCAGR·ΔMDD 중앙값. 두 장중 경로 중 지표별로 나쁜 쪽",
+    "score": "ΔCAGR>0이고 ΔMDD>0인 바스켓의 비율. 분모는 그 구간에 계획한 평가가 있는 바스켓 전체",
+    "not_passed": "거부·실패한 비교가 하나라도 있는 바스켓은 개선하지 못한 것으로 센다",
+    "smoothing": "자기 점수와, 격자에서 한 파라미터만 한 칸 다른 이웃들의 점수 평균을 반반으로 평균. 가장자리 설정이 좋은 이웃 하나에 끌려 뽑히지 않게 한다",
+    "tie_break": "바스켓 ΔMDD 값의 하위 25% 순서통계가 큰 쪽, 그다음 격자 앞 번호",
+    "outer_train_years": 3,
+    "outer_test_years": 1,
+    "inner_train_years": 2,
+    "inner_test_years": 1,
+    "inner_role": "바깥 평가에 쓰는 설정은 직전 3개 연도 전체에서 고른다. 안쪽 2년→1년 선택은 안정성 진단으로만 남긴다",
+    "embargo_starts": 1,
+    "embargo_basis": "1·7월 실행이 6개월씩 겹치므로 평가 직전 시작일 하나를 학습에서 뺀다",
+    "pbo_blocks": 8,
+    "pbo_basis": "평가 시작일을 시간순 8묶음으로 나눈 CSCV 70분할. 고른 설정의 나머지 절반 상대 순위가 중앙 이하인 비율"
+  },
+  "deferred": [
+    "혼합·2배 바스켓, 저상관·자산군 균형 선택은 이번 정식 탐색 범위 밖",
+    "2단계 정밀화(평탄 구간 주변 재탐색)와 Deflated Sharpe·SPA 보조 지표는 미구현",
+    "보류 판정·부트스트랩 신뢰구간·세후·금리 민감도는 M6 이후"
   ]
 }
