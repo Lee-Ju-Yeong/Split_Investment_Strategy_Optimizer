@@ -1,7 +1,7 @@
 """M5 cash-availability, explicit delisting and FX-age hand calculations."""
 from dataclasses import replace
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 import unittest
 
 from src.research.etf.baseline_engine import run_baseline
@@ -221,6 +221,19 @@ class FxAgeTests(unittest.TestCase):
                 kr_run([bar()], **options)
         with self.assertRaisesRegex(ValueError, "requires kr_sessions"):
             kr_run([bar()], max_fx_age_days=7, fx_closure_age_days=12)
+
+
+class FxConversionRoundingTests(unittest.TestCase):
+    def test_full_conversion_never_overdraws_settled_cash_by_division_rounding(self):
+        # 80자리에서 (14/1301)×1301은 14보다 1E-78 크다. 전액 환전 뒤 원화는 정확히 0이어야 한다.
+        with localcontext(prec=80):
+            self.assertEqual(D(14) / 1301 * 1301 - 14, D("1E-78"))
+        result = run_engine([Instrument("US", "US", "USD")], [], {"US": rules()}, initial_cash={"KRW": D("14")},
+                            fx_rates=[FxRate(at(DAY - timedelta(days=1)), D("1301"))], fx_cost=D("0"),
+                            conversion_times=[at()], evaluation_times=[at(DAY, 9)])
+        self.assertEqual(result.final_cash["KRW"], D("0"))
+        self.assertEqual(result.valuations[0]["settled_cash"]["KRW"], D("0"))
+        self.assertLess(abs(result.final_cash["USD"] * 1301 - 14), D("1e-70"))
 
 
 class FxClosureTests(unittest.TestCase):
