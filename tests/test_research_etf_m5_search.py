@@ -13,9 +13,10 @@ from examples.etf_m5_demo import fixture
 from src.research.etf.baseline_engine import run_baseline
 from src.research.etf.baseline_policy import fixed_baseline
 from src.research.etf.engine_types import Instrument
+from src.research.etf.m5_parameters import CostGuardRejection
 from src.research.etf.m5_pilot import _common, _window_start
 from src.research.etf.m5_runner import matched_policy, run_plan, status
-from src.research.etf.m5_search import build_plan, draw_basket, eligible, start_windows
+from src.research.etf.m5_search import build_plan, draw_basket, eligible, load_formal, start_windows
 
 
 UTC = timezone.utc
@@ -118,8 +119,11 @@ class FormalRunTests(unittest.TestCase):
                          {"KR2": 0, "US2": 0, "KR1+US1": 1, "KR1+US1+GOLD1": 0, "KR2+US2": 0, "KR2+US2+GOLD1": 0})
         self.assertEqual(self.plan["fx"], {"max_age_days": 7, "closure_age_days": 12})
         self.assertNotIn("SYNTHETIC_HIDDEN", json.dumps(self.plan))
-        draft = build_plan(self.data, self.manifest)
-        self.assertEqual((draft["scope"], len(draft["candidates"])), ("draft_not_formal", 144))
+        formal = build_plan(self.data, self.manifest)
+        self.assertEqual((formal["scope"], len(formal["candidates"])), ("formal", 144))
+        with patch("src.research.etf.m5_search.load_formal",
+                   return_value=dict(load_formal(), status="draft_preperformance")):
+            self.assertEqual(build_plan(self.data, self.manifest)["scope"], "draft_not_formal")
         other = fixture(self.root / "us", us_only=True)
         us_only = build_plan(other.parent, other, first_start=FIRST, pilot_candidates=True)
         self.assertEqual([sorted(b["symbols"]) for b in us_only["baskets"]], [["SYNTHETIC_US", "SYNTHETIC_US_2"]])
@@ -190,6 +194,23 @@ class FormalRunTests(unittest.TestCase):
         failed = self.unit(runs[4]["start"])["trials"][0]
         self.assertEqual((failed["status"], failed["comparison"]["status"]), ("passed", "failed"))
         self.assertIn("learning run", failed["comparison"]["error"])
+
+    def test_cost_guard_rejection_is_counted_apart_from_failures(self):
+        calls = []
+
+        def rejecting(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise CostGuardRejection("X: drop below known round-trip costs or >= 1")
+            return quick_strategy(*args)
+        with patch("src.research.etf.m5_runner._strategy", side_effect=rejecting):
+            summary = run_plan(self.data, self.manifest, self.plan_path, self.run)
+        self.assertEqual((summary["status"], summary["trials_passed"], summary["trials_rejected"]), ("passed", 19, 1))
+        self.assertEqual((summary["comparisons_passed"], summary["comparisons_rejected"]), (3, 1))
+        runs = self.plan["baskets"][0]["runs"]
+        first = self.unit(runs[0]["start"])["trials"][0]
+        self.assertEqual((first["status"], "traceback" in first), ("rejected", False))
+        self.assertEqual(self.unit(runs[4]["start"])["trials"][0]["comparison"]["status"], "rejected")
 
     def test_real_data_requires_a_verified_build_and_plan_must_match_inputs(self):
         with self.assertRaisesRegex(ValueError, "verified M3 build"):

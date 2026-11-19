@@ -18,6 +18,10 @@ from .m5_inputs import read_manifest
 CONFIG_PATH = Path(__file__).with_name("m5_search_v1.json")
 
 
+class CostGuardRejection(ValueError):
+    """매수 간격이 왕복 비용보다 작아 이 바스켓에서 실행할 수 없는 설정. 오류가 아니라 사전 거부다."""
+
+
 def load_config():
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     if config["schema"] != "etf-m5-search-v1" or config["status"] != "explore_only_preperformance":
@@ -81,7 +85,7 @@ def candidate_rules(candidate, inputs, volatilities):
             cost = fee_amount(instrument.market, "BUY", day, ONE) + fee_amount(
                 instrument.market, "SELL", day, ONE, sec_rate_override=sec)
             if not cost <= drop < ONE:
-                raise ValueError(f"{instrument.symbol}: drop below known round-trip costs or >= 1")
+                raise CostGuardRejection(f"{instrument.symbol}: drop below known round-trip costs or >= 1")
             rules[instrument.symbol] = tuple(LevelRule(n, ONE, drop, take) for n in range(1, candidate["levels"] + 1))
         return rules
 
