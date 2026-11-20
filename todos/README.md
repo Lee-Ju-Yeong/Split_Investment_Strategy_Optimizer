@@ -16,10 +16,10 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU611/예제5/native180/실행기25, 정식 M5 실행 재개 |
+| [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU611/예제5/native180/실행기25, 정식 R1 분석 완료·후보 승격 보류 |
 | [ETF M4 비교 기준선](done_2026_11_17-etf-m4-baselines.md) | implementation | 완료: CPU538·예제4·M3153·SOL/Opus 보완 |
 | [ETF M3 빠른 커널](done_2026_11_17-etf-m3-fast-kernel.md) | implementation | 완료: M3검사153개·필수 리뷰·합성 실행4.30~4.56배 |
-| [ETF 변동성 맞춤 분할매매 연구 계획](2026_11_15-etf-vol-split-research-plan.md) | research | M1~M4·M5 선행 구현·실자료 작은 실행 완료, 정식 설정 고정·선택/PBO 분석 구현, 정식 M5 실행 단계 |
+| [ETF 변동성 맞춤 분할매매 연구 계획](2026_11_15-etf-vol-split-research-plan.md) | research | M1~M4·M5 선행 구현·실자료 작은 실행 완료, 정식 R1 선택/PBO 분석 완료, M7 자료 보존 |
 | [ETF M2 제품 규칙 기준 엔진](2026_11_17-etf-m2-engine.md) | implementation | 완료: CPU480개·예제3개·동일 실행기24개 근거·Opus r3 차단 없음 |
 | [고정 차수 규칙 `fixed_slot_v1` 명세](2026_11_15-fixed-split-slot-v1.md) | implementation | CPU·GPU 구현, CPU-GPU 합성 대조 완료 |
 | [CPU 합성 시나리오 재현 단계](done_2026_11_06-cpu-split-demo.md) | implementation | CPU 구현·검증 완료·공개 결과는 PR #115 연결 |
