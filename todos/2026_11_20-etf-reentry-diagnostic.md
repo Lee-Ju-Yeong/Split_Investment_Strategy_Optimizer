@@ -36,12 +36,33 @@ R1 보류 분할은 보존하며 이 표본은 가설 탐색에만 쓴다.
 
 ## 재현과 검증
 
-정식 R1 소스 `4a863fc`의 작업 폴더에서 연구 도구가 담긴 별도 작업 폴더를
-`PYTHONPATH=.:../featherstar`로 뒤에 추가한다. `python3 -B -m tools.research.etf_reentry_sample`에
-`--r1`, `--data`, `--build`, `--out`, `--workers 3`을 주면 빈 출력 폴더에 표본과 A 원장이 생긴다.
-독립 진단의 입력 해시가 그 두 파일과 같음을 확인한 뒤 같은 인수로
-`python3 -B -m tools.research.etf_reentry_compare`를 실행하면 `monthly-comparison.json`에 단위별 지표와 집계가 남는다.
-비교기는 독립 진단의 결론을 읽고 A 원장에서 양쪽 경로의 3개 층 기준을 다시 계산한다.
+서버에서 아래 Bash 명령을 실행한다. 정식 R1 엔진은 `4a863fc`, 연구 도구 두 개는 `ee4fb57` 버전을 사용한다.
+A 실행으로 새 폴더에 표본과 원장이 생긴다. 두 파일을 확인본과 바이트 단위로 대조한 뒤, 보존된 독립 진단
+`independent-exit-diagnosis.json`을 **같은 출력 폴더에 복사**한다. B 실행기는 이 진단에 기록된 입력 해시를
+확인하고 A 원장에서 양쪽 경로의 3개 층 기준을 다시 계산한다.
+
+```bash
+(
+  set -eu
+  cd /root/orca/workspaces/Split_Investment_Strategy_Optimizer/m5-formal-run
+  export PYTHONPATH=.:../featherstar
+  archive=/root/split-research-runs/etf-reentry-diagnostic-r1/verified
+  out=$(mktemp -d /root/split-research-runs/etf-reentry-replay.XXXXXX)
+  printf '재현 결과 폴더 %s\n' "$out"
+  args=(--r1 /root/split-research-runs/etf-m5-formal-r1
+        --data /root/split-research-data/etf-m5-r1
+        --build ../featherstar/results/etf-m3-validation/build-v2
+        --out "$out" --workers 3)
+
+  python3 -B -m tools.research.etf_reentry_sample "${args[@]}"
+  cmp "$out/sample.json" "$archive/sample.json"
+  cmp "$out/original.json" "$archive/original.json"
+  cp "$archive/independent-exit-diagnosis.json" "$out/"
+
+  python3 -B -m tools.research.etf_reentry_compare "${args[@]}"
+  (cd "$out" && sha256sum --check <<< 'f018752cdfb78612cd171c225d1a5c84a8b9cdb42e306c7ab79214ac5f1c8520  monthly-comparison.json')
+)
+```
 
 합성 원장은 12월 청산 뒤 연초 재진입, 연속 두 번의 청산·재진입, 최초 매수 실패,
 시장별 개장일, 월초에 주문을 낼 수 없거나 거부된 경우, 상장폐지 최종 청산과 잔여 거래 가능일 0을 검사한다.
