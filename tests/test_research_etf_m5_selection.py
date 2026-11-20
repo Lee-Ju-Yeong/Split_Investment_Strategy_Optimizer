@@ -22,7 +22,8 @@ STARTS = [f"{year}-{month}-02" for year in range(2019, 2024) for month in ("01",
 def plan(baskets, starts=STARTS, paths=("A", "B")):
     return {"schema": "etf-m5-plan-v1", "scope": "smoke_not_formal", "synthetic": True,
             "candidates": [{"kg": value} for value in GRID["kg"]], "paths": list(paths),
-            "baskets": [{"id": name, "evaluations": list(starts)} for name in baskets]}
+            "baskets": [{"id": name, "evaluations": list(starts), "runs": [{"start": s} for s in starts]}
+                        for name in baskets]}
 
 
 def write_units(root, value, deltas):
@@ -30,15 +31,21 @@ def write_units(root, value, deltas):
     for basket in value["baskets"]:
         directory = Path(root) / "units" / basket["id"]
         directory.mkdir(parents=True)
-        for start in basket["evaluations"]:
+        for run in basket["runs"]:
+            start = run["start"]
+            evaluable = start in basket["evaluations"]
             trials = []
             for index in range(len(value["candidates"])):
                 for path in value["paths"]:
                     delta = deltas(basket["id"], start, index, path)
                     comparison = ({"status": delta} if isinstance(delta, str) else
                                   {"status": "passed", "matched": {"delta_cagr": str(delta[0]), "delta_mdd": str(delta[1])}})
-                    trials.append({"candidate": index, "path": path, "comparison": comparison})
-            (directory / f"{start}.json").write_text(json.dumps({"trials": trials}), encoding="utf-8")
+                    row = {"candidate": index, "path": path}
+                    if evaluable:
+                        row["comparison"] = comparison
+                    trials.append(row)
+            unit = {"status": "completed", "basket": basket["id"], "start": start, "evaluable": evaluable, "trials": trials}
+            (directory / f"{start}.json").write_text(json.dumps(unit), encoding="utf-8")
 
 
 def score(share, values=()):
@@ -67,6 +74,7 @@ class SelectionRuleTests(unittest.TestCase):
     def test_rejected_or_failed_comparisons_count_as_not_improved_in_the_denominator(self):
         value = plan(["b1", "b2", "b3"], STARTS[:2])
         value["baskets"][2]["evaluations"] = STARTS[4:6]
+        value["baskets"][2]["runs"] = [{"start": s} for s in STARTS[4:6]]
 
         def deltas(basket, start, index, path):
             if basket == "b2" and start == STARTS[1] and index == 0:
@@ -151,11 +159,11 @@ class SelectionRuleTests(unittest.TestCase):
         self.assertEqual((report["overfit"]["status"], report["overfit"]["pbo"]), ("computed", F(0)))
         self.assertFalse(report["statistical_success_evaluated"] or report["holdout_evaluated"])
         unit = self.root / "units" / "b1" / f"{STARTS[3]}.json"
-        rows = json.loads(unit.read_text(encoding="utf-8"))["trials"]
-        unit.write_text(json.dumps({"status": "completed", "trials": rows[:-1]}), encoding="utf-8")
+        record = json.loads(unit.read_text(encoding="utf-8"))
+        unit.write_text(json.dumps(dict(record, trials=record["trials"][:-1])), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "lacks planned trials"):
             analyse(value, self.root, grid=GRID)
-        unit.write_text(json.dumps({"status": "failed", "error": "input"}), encoding="utf-8")
+        unit.write_text(json.dumps(dict(record, status="failed", trials=[], error="input")), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "failed unit"):
             analyse(value, self.root, grid=GRID)
         allowed = analyse(value, self.root, grid=GRID, allow_failed_units=True)
@@ -163,6 +171,40 @@ class SelectionRuleTests(unittest.TestCase):
         unit.unlink()
         with self.assertRaisesRegex(ValueError, "run is incomplete"):
             analyse(value, self.root, grid=GRID)
+
+    def test_learning_only_units_must_be_present_complete_and_auditable(self):
+        value = plan(["b1"])
+        basket, = value["baskets"]
+        start = "2018-01-02"
+        basket["runs"].insert(0, {"start": start})
+        write_units(self.root, value, lambda *args: (1, 1))
+        unit = self.root / "units" / "b1" / f"{start}.json"
+        complete = json.loads(unit.read_text())
+        unit.write_text(json.dumps(dict(complete, trials=complete["trials"] * 2)))
+        with self.assertRaisesRegex(ValueError, "duplicate trials"):
+            load_table(value, self.root, allow_failed_units=True)
+        unit.write_text(json.dumps(dict(complete, status="failed", trials=[])))
+        with self.assertRaisesRegex(ValueError, "failed unit"):
+            load_table(value, self.root)
+        table, failed = load_table(value, self.root, allow_failed_units=True)
+        self.assertEqual(failed, [["b1", start]])
+        self.assertEqual(len(table), len(STARTS) * 3 * 2)
+        unit.unlink()
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            load_table(value, self.root, allow_failed_units=True)
+
+    def test_misfiled_unit_and_missing_primary_comparison_are_rejected(self):
+        value = plan(["b1"])
+        write_units(self.root, value, lambda *args: (1, 1))
+        path = self.root / "units" / "b1" / f"{STARTS[0]}.json"
+        original = json.loads(path.read_text())
+        path.write_text(json.dumps(dict(original, start=STARTS[1])))
+        with self.assertRaisesRegex(ValueError, "identity differs"):
+            load_table(value, self.root)
+        original["trials"][0]["comparison"] = {}
+        path.write_text(json.dumps(original))
+        with self.assertRaisesRegex(ValueError, "primary comparison"):
+            load_table(value, self.root, allow_failed_units=True)
 
     def test_analysis_requires_the_plan_and_rule_the_run_was_made_with(self):
         plan_path = self.root / "plan.json"

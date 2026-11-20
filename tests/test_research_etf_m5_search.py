@@ -212,6 +212,19 @@ class FormalRunTests(unittest.TestCase):
         self.assertEqual((first["status"], "traceback" in first), ("rejected", False))
         self.assertEqual(self.unit(runs[4]["start"])["trials"][0]["comparison"]["status"], "rejected")
 
+    def test_diagnostic_failure_preserves_the_prospective_primary_comparison(self):
+        with patch("src.research.etf.m5_runner._strategy", side_effect=quick_strategy), patch(
+                "src.research.etf.m5_runner.diagnostic_baseline", side_effect=ValueError("diagnostic only")):
+            summary = run_plan(self.data, self.manifest, self.plan_path, self.run)
+        self.assertEqual((summary["status"], summary["comparisons_passed"], summary["diagnostics_failed"]),
+                         ("failed", 4, 4))
+        start, = self.plan["baskets"][0]["evaluations"]
+        for row in self.unit(start)["trials"]:
+            comparison = row["comparison"]
+            self.assertEqual(comparison["status"], "passed")
+            self.assertIn("delta_cagr", comparison["matched"])
+            self.assertEqual(comparison["posthoc_diagnostic"]["error"], "diagnostic only")
+
     def test_real_data_requires_a_verified_build_and_plan_must_match_inputs(self):
         with self.assertRaisesRegex(ValueError, "verified M3 build"):
             run_plan(self.data, self.manifest, self.save("real.json", dict(self.plan, synthetic=False)),
