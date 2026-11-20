@@ -24,6 +24,8 @@ from src.research.etf.m5_runner import _pin
 
 SEED = "etf-reentry-r1"
 PLAN_SHA = "d4765a37d3764e16462192c48cf4f8c061ccce743d0f98fcdef7b6efedf660ee"
+PROVENANCE_SHA = "0d1d2c76241223d056aac4089a8680db57b30f0c41a0b49358278fef2b9aabaa"
+UNIT_SET_SHA = "15c76c5e6804bc18ac90e9cb928598a9932b0ac75d4a549d59b501532e269790"
 SELECTION_SHA = "600eca64a31f9b4ef72350bfafcef12aa7ce50a1e0cc33733f90ce3b90a3722b"
 
 
@@ -122,14 +124,26 @@ def original_unit(unit, *, args, plan):
     return dict(unit, status="replayed", paths=paths)
 
 
+def unit_set_hash(directory, plan):
+    digest = sha256()
+    for basket in plan["baskets"]:
+        for run in basket["runs"]:
+            key = f"{basket['id']}/{run['start']}"
+            digest.update(f"{key} {_sha(directory / (key + '.json'))}\n".encode())
+    return digest.hexdigest()
+
+
 def verify(args):
     src = args.r1 / "plan.json"
     if _sha(src) != PLAN_SHA or _sha(args.r1 / "selection-r1.json") != SELECTION_SHA:
         raise ValueError("R1 plan or selection digest differs")
     plan = read(src)
+    if unit_set_hash(args.r1 / "run/units", plan) != UNIT_SET_SHA:
+        raise ValueError("R1 unit files differ from the published closeout digest")
     manifest = args.data / "m5-inputs.json"
     read_manifest(args.data, manifest, [])
-    if _pin(manifest, src, plan, args.build) != read(args.r1 / "run/provenance.json"):
+    provenance = args.r1 / "run/provenance.json"
+    if _sha(provenance) != PROVENANCE_SHA or _pin(manifest, src, plan, args.build) != read(provenance):
         raise ValueError("use the R1 pinned worktree, source, inputs and build")
     return plan
 
@@ -144,12 +158,15 @@ def arguments():
 
 def main():
     args = arguments()
+    source = _sha(Path(__file__))
     plan = verify(args)
     units = sample(plan, read(args.r1 / "selection-r1.json"))
     write(args.out / "sample.json", dict(seed=SEED, plan_sha=PLAN_SHA, selection_sha=SELECTION_SHA, units=units))
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         rows = list(pool.map(partial(original_unit, args=args, plan=plan), units))
     verify(args)
+    if _sha(Path(__file__)) != source:
+        raise ValueError("replay script changed during execution")
     write(args.out / "original.json", rows)
 
 

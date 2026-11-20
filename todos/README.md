@@ -16,6 +16,7 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
+| [ETF 청산 후 대기와 월초 재진입](2026_11_20-etf-reentry-diagnostic.md) | research | R1 탐색 바스켓 24개의 원장 재현과 재진입 비교 |
 | [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU611/예제5/native180/실행기25, 정식 R1 분석 완료·후보 승격 보류 |
 | [ETF M4 비교 기준선](done_2026_11_17-etf-m4-baselines.md) | implementation | 완료: CPU538·예제4·M3153·SOL/Opus 보완 |
 | [ETF M3 빠른 커널](done_2026_11_17-etf-m3-fast-kernel.md) | implementation | 완료: M3검사153개·필수 리뷰·합성 실행4.30~4.56배 |
