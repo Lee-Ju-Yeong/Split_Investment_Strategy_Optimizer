@@ -25,7 +25,7 @@ from .engine_inputs import _sha
 from .engine_types import ZERO, decimal
 from .fast_kernel import FastKernel
 from .m5_inputs import load_m5_inputs, read_manifest
-from .m5_parameters import CONFIG_PATH, load_config, load_volatilities
+from .m5_parameters import CONFIG_PATH, CostGuardRejection, load_config, load_volatilities
 from .m5_pilot import _common, _encode, _provenance, _strategy, _unchanged, _window_start
 from .m5_search import FORMAL_PATH, SCHEMA as PLAN_SCHEMA, build_plan
 
@@ -123,17 +123,25 @@ def _comparison(learned, key, strategy, metrics, inputs, options, capital, windo
     if isinstance(learned, Exception):
         raise learned
     rows = [unit[key] for unit in learned]
-    if any(row["status"] != "passed" for row in rows):
+    if any(row["status"] == "failed" for row in rows):
         raise ValueError("a learning run for this setting failed")
+    if any(row["status"] == "rejected" for row in rows):
+        raise CostGuardRejection("a learning run for this setting was rejected by the cost guard")
     policy = matched_policy([row["exposure"] for row in rows], inputs.instruments, window[0])
     result = {"status": "passed", "matched": _compare(policy, strategy, metrics, inputs, options, capital, window)}
     if posthoc:
-        diagnostic = diagnostic_baseline(strategy, policy, evaluation_end=window[1])
-        result["posthoc_diagnostic"] = _compare(diagnostic, strategy, metrics, inputs, options, capital, window)
+        try:
+            diagnostic = diagnostic_baseline(strategy, policy, evaluation_end=window[1])
+            result["posthoc_diagnostic"] = _compare(diagnostic, strategy, metrics, inputs, options, capital, window)
+        except Exception as error:
+            result["posthoc_diagnostic"] = _failure(error)
     return result
 
 
 def _failure(error):
+    """비용 하한 거부는 실패와 구분한다. 둘 다 계획 횟수에 남는다."""
+    if isinstance(error, CostGuardRejection):
+        return {"status": "rejected", "error": str(error)}
     return {"status": "failed", "error_type": type(error).__name__, "error": str(error),
             "traceback": traceback.format_exc()}
 
@@ -152,7 +160,10 @@ def _trial(context, index, candidate, path):
         row.update(status="passed", strategy=asdict(metrics), reference=reference, trades=len(strategy.trades),
                    warnings=len(strategy.warnings), exposure=_exposure(strategy, inputs.instruments, window))
     except Exception as error:
-        return dict(row, **_failure(error))
+        row.update(_failure(error))
+        if context["learned"] is not None:
+            row["comparison"] = {"status": row["status"], "error": "the evaluation run did not pass"}
+        return row
     if context["learned"] is not None:
         try:
             row["comparison"] = _comparison(context["learned"], (index, path), strategy, metrics, inputs,
@@ -226,12 +237,16 @@ def _pending(plan, directory, max_units):
 
 
 def status(plan, run_dir):
-    """단위 파일에서 다시 센다. 계획한 횟수를 분모로 쓰고 빠진 단위는 통과가 아니다."""
+    """단위 파일에서 다시 센다. 계획한 횟수를 분모로 쓰고 빠진 단위는 통과가 아니다.
+
+    passed는 모든 단위가 오류 없이 끝났다는 뜻이다. 비용 하한 거부는 오류가 아니라 따로 센다.
+    """
     per_unit = len(plan["candidates"]) * len(plan["paths"])
     counts = {"units_planned": plan["counts"]["units"], "units_completed": 0, "units_failed": 0,
-              "trials_planned": plan["counts"]["trials"], "trials_passed": 0,
+              "trials_planned": plan["counts"]["trials"], "trials_passed": 0, "trials_rejected": 0,
               "comparisons_planned": plan["counts"]["comparisons"], "comparisons_passed": 0,
-              "references_failed": 0}
+              "comparisons_rejected": 0,
+              "references_failed": 0, "diagnostics_failed": 0}
     elapsed = 0.0
     for basket in plan["baskets"]:
         for run in basket["runs"]:
@@ -244,19 +259,23 @@ def status(plan, run_dir):
                 counts["units_failed"] += 1
                 continue
             counts["units_completed"] += 1
-            counts["trials_passed"] += sum(row["status"] == "passed" for row in unit["trials"])
-            counts["comparisons_passed"] += sum(row.get("comparison", {}).get("status") == "passed"
-                                                for row in unit["trials"])
+            for name in ("passed", "rejected"):
+                counts[f"trials_{name}"] += sum(row["status"] == name for row in unit["trials"])
+                counts[f"comparisons_{name}"] += sum(row.get("comparison", {}).get("status") == name
+                                                     for row in unit["trials"])
             counts["references_failed"] += sum(row["status"] != "passed" for rows in unit["references"].values()
                                                for row in rows.values())
+            counts["diagnostics_failed"] += sum(
+                row.get("comparison", {}).get("posthoc_diagnostic", {}).get("status", "passed") != "passed"
+                for row in unit["trials"])
     missing = counts["units_planned"] - counts["units_completed"] - counts["units_failed"]
     # 실행할 것이 없는 계획이나 층별 바스켓이 모자란 정식 계획은 통과가 아니다.
     short = len(plan["shortfalls"])
     planned = counts["units_planned"] > 0 and counts["trials_planned"] > 0 and not (plan["scope"] == "formal" and short)
     passed = (planned and missing == 0 and counts["units_failed"] == 0
-              and counts["trials_passed"] == counts["trials_planned"]
-              and counts["comparisons_passed"] == counts["comparisons_planned"]
-              and counts["references_failed"] == 0)
+              and counts["trials_passed"] + counts["trials_rejected"] == counts["trials_planned"]
+              and counts["comparisons_passed"] + counts["comparisons_rejected"] == counts["comparisons_planned"]
+              and counts["references_failed"] == 0 and counts["diagnostics_failed"] == 0)
     return dict(counts, schema="etf-m5-run-v1", scope=plan["scope"], synthetic=plan["synthetic"],
                 units_missing=missing, shortfall_strata=short,
                 status="passed" if passed else "incomplete" if missing else "failed",

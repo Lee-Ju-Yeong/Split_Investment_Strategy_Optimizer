@@ -29,6 +29,13 @@ def load_formal():
             or formal.get("selection") != "random" or formal.get("leverage_mix") != "x1_only"
             or formal.get("learning_runs") != 2 or type(formal.get("posthoc_diagnostic")) is not bool):
         raise ValueError("invalid M5 formal configuration")
+    rule, config = formal.get("selection_rule") or {}, load_config()
+    if (any(type(rule.get(name)) is not int or rule[name] < minimum for name, minimum in
+            (("outer_train_years", 1), ("embargo_starts", 0), ("pbo_blocks", 2)))
+            or rule["pbo_blocks"] % 2 or any(rule.get(name) != config[key] for name, key in (
+                ("outer_train_years", "outer_train_years"), ("outer_test_years", "outer_evaluation_years"),
+                ("inner_train_years", "inner_train_years"), ("inner_test_years", "inner_evaluation_years")))):
+        raise ValueError("invalid M5 selection rule")
     return formal
 
 

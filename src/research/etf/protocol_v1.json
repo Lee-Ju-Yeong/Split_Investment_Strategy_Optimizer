@@ -1,9 +1,9 @@
 {
   "protocol": "etf-vol-split",
-  "version": "1.2.2-m5-draft",
+  "version": "1.3.0-m5-formal",
   "engine_schema": "etf-m2-v1",
   "status": "draft",
-  "status_note": "M5 탐색 조건을 성과 실행 전에 m5_search_v1.json으로 지정했다. M1 원본 분할 해시는 보존한다. M6 규칙 고정·보류 평가 전이며 작은 실행은 동작 확인용이다.",
+  "status_note": "M5 탐색 조건을 성과 실행 전에 m5_search_v1.json으로 지정했다. M1 원본 분할 해시는 보존한다. 정식 탐색 설정은 m5_formal_v1.json으로 결과 전에 고정했다(1.3.0: 주 판정 집합 1배 전용, 기준선 학습 단위 명시). M6 규칙 고정·보류 평가 전이며 작은 실행은 동작 확인용이다.",
   "plan": "todos/2026_11_15-etf-vol-split-research-plan.md",
   "universe": {
     "d1_source": "metadata.etf_metadata.csv의 d1_eligible (인버스·ETN·옵션 전략·3배 이상 제외, 배수 미확인 제외)",
@@ -49,11 +49,10 @@
       "mixed_max_x2_share": 0.34,
       "mixed_min_x2_count": 1,
       "primary": [
-        "x1_only",
-        "mixed"
+        "x1_only"
       ],
       "report_separately": true,
-      "basis": "2배만으로 된 바스켓은 결론을 좌우하지 않도록 따로 보고한다. 혼합은 종목 수의 1/3 이하."
+      "basis": "2배만으로 된 바스켓은 결론을 좌우하지 않도록 따로 보고한다. 혼합은 종목 수의 1/3 이하. 1.3.0: 2배 상품은 엔진에서 검증한 적이 없어 주 판정을 1배 전용으로 좁혔다. 혼합·2배는 구현하면 따로 보고만 한다."
     },
     "market_mix_strata": [
       {
@@ -231,7 +230,7 @@
     "forward_test_months_min": 12,
     "forward_test_role": "운영 확인. 최종 확정은 더 긴 누적 기간",
     "unit": "보류 바스켓 × 시작일 실행. 바스켓마다 시작일들의 중앙값으로 하나의 값을 만들고 바스켓을 같은 가중으로 센다",
-    "population": "주 판정은 x1_only와 mixed 바스켓을 합친 보류 집합 하나. 시장 구성·금 포함·레버리지 하위군은 보고만 하고 판정하지 않는다",
+    "population": "주 판정은 x1_only 바스켓의 보류 집합 하나(1.3.0에서 mixed 제외). 시장 구성·금 포함·레버리지 하위군은 보고만 하고 판정하지 않는다",
     "joint_improvement_share_definition": "보류 바스켓 중 바스켓 값 ΔCAGR>0이고 ΔMDD>0인 비율(분모: 위 주 판정 집합의 전체 바스켓)",
     "min_effect_applies_to": "바스켓 값들의 중앙값",
     "intraday_paths_rule": "두 장중 경로 모두에서 모든 조건을 통과해야 한다",
@@ -296,7 +295,7 @@
     "exposure_target": "학습 구간 전략 실현 투자 비중의 시간 평균(평가 시각 기준 일별 투자액÷평가액의 산술평균)",
     "weights": "전략 주문 방식에 맞춘 짝: 균등 주문 ↔ 동일가중, 위험 예산 ↔ 역변동성(volatility 정의와 같은 σ)",
     "rebalance": "매월 첫 통합 거래일, 각 시장 개장 시가, 같은 비용·환전 규칙",
-    "learning_window": "안쪽 학습 2년. m5_search_v1.json: 바깥 학습3년/평가1년, 안쪽 학습2년/평가1년. 작은 pilot은 별도 2년 학습/1년 평가이며 중첩 검증을 주장하지 않는다."
+    "learning_window": "기준선 학습 2년. 정식 탐색은 평가 시작일과 같은 달의 직전 두 시작일에서 각각 1차 진입한 1년 실행 두 개의 평가 시각별 투자 비중을 합쳐 평균하고 평가 구간 시작 시각 이후의 값은 쓰지 않는다(m5_formal_v1.json). 2년 연속 실행 한 번은 재진입이 없어 비중이 희석되므로 쓰지 않는다. m5_search_v1.json: 바깥 학습3년/평가1년, 안쪽 학습2년/평가1년. 작은 pilot은 별도 2년 연속 학습/1년 평가이며 중첩 검증을 주장하지 않는다."
   },
   "search": {
     "grid": "m5_search_v1.json#grid: kg,kp 각각1/2/3; L3/5; 첫 차수0.05/0.10; 종목 상한0.5/1; 현금하한0/0.1 (144개). 상품별 계수 없음.",
