@@ -130,8 +130,11 @@ def _comparison(learned, key, strategy, metrics, inputs, options, capital, windo
     policy = matched_policy([row["exposure"] for row in rows], inputs.instruments, window[0])
     result = {"status": "passed", "matched": _compare(policy, strategy, metrics, inputs, options, capital, window)}
     if posthoc:
-        diagnostic = diagnostic_baseline(strategy, policy, evaluation_end=window[1])
-        result["posthoc_diagnostic"] = _compare(diagnostic, strategy, metrics, inputs, options, capital, window)
+        try:
+            diagnostic = diagnostic_baseline(strategy, policy, evaluation_end=window[1])
+            result["posthoc_diagnostic"] = _compare(diagnostic, strategy, metrics, inputs, options, capital, window)
+        except Exception as error:
+            result["posthoc_diagnostic"] = _failure(error)
     return result
 
 
@@ -243,7 +246,7 @@ def status(plan, run_dir):
               "trials_planned": plan["counts"]["trials"], "trials_passed": 0, "trials_rejected": 0,
               "comparisons_planned": plan["counts"]["comparisons"], "comparisons_passed": 0,
               "comparisons_rejected": 0,
-              "references_failed": 0}
+              "references_failed": 0, "diagnostics_failed": 0}
     elapsed = 0.0
     for basket in plan["baskets"]:
         for run in basket["runs"]:
@@ -262,6 +265,9 @@ def status(plan, run_dir):
                                                      for row in unit["trials"])
             counts["references_failed"] += sum(row["status"] != "passed" for rows in unit["references"].values()
                                                for row in rows.values())
+            counts["diagnostics_failed"] += sum(
+                row.get("comparison", {}).get("posthoc_diagnostic", {}).get("status", "passed") != "passed"
+                for row in unit["trials"])
     missing = counts["units_planned"] - counts["units_completed"] - counts["units_failed"]
     # 실행할 것이 없는 계획이나 층별 바스켓이 모자란 정식 계획은 통과가 아니다.
     short = len(plan["shortfalls"])
@@ -269,7 +275,7 @@ def status(plan, run_dir):
     passed = (planned and missing == 0 and counts["units_failed"] == 0
               and counts["trials_passed"] + counts["trials_rejected"] == counts["trials_planned"]
               and counts["comparisons_passed"] + counts["comparisons_rejected"] == counts["comparisons_planned"]
-              and counts["references_failed"] == 0)
+              and counts["references_failed"] == 0 and counts["diagnostics_failed"] == 0)
     return dict(counts, schema="etf-m5-run-v1", scope=plan["scope"], synthetic=plan["synthetic"],
                 units_missing=missing, shortfall_strata=short,
                 status="passed" if passed else "incomplete" if missing else "failed",

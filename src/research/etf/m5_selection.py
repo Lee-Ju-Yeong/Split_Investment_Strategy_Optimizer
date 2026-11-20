@@ -25,6 +25,33 @@ SCHEMA = "etf-m5-selection-v1"
 LOWEST = Decimal("-Infinity")
 
 
+def _unit_rows(path, expected, evaluable):
+    if not path.is_file():
+        raise ValueError(f"run is incomplete: {path}")
+    unit = json.loads(path.read_text(encoding="utf-8"))
+    if (unit.get("basket"), unit.get("start")) != (path.parent.name, path.stem):
+        raise ValueError(f"unit identity differs from plan: {path}")
+    if unit.get("evaluable") is not evaluable:
+        raise ValueError(f"unit evaluation role differs from plan: {path}")
+    if unit.get("status") == "failed":
+        return None
+    trials = unit.get("trials", [])
+    rows = {(row["candidate"], row["path"]): row for row in trials}
+    if unit.get("status") != "completed" or rows.keys() != expected or len(trials) != len(expected):
+        raise ValueError(f"run is incomplete: {path} lacks planned trials or has duplicate trials")
+    return rows
+
+
+def _matched_delta(row):
+    comparison = row.get("comparison", {})
+    if comparison.get("status") in {"rejected", "failed"}:
+        return None
+    matched = comparison.get("matched")
+    if comparison.get("status") != "passed" or not isinstance(matched, dict):
+        raise ValueError("planned primary comparison is missing or malformed")
+    return Decimal(matched["delta_cagr"]), Decimal(matched["delta_mdd"])
+
+
 def load_table(plan, run_dir, *, allow_failed_units=False):
     """(바스켓, 시작일, 설정, 경로) → (ΔCAGR, ΔMDD). 계획한 비교가 통과하지 못했으면 None이다.
 
@@ -33,24 +60,20 @@ def load_table(plan, run_dir, *, allow_failed_units=False):
     table, failed = {}, []
     expected = {(index, name) for index in range(len(plan["candidates"])) for name in plan["paths"]}
     for basket in plan["baskets"]:
-        for start in basket["evaluations"]:
+        evaluations = set(basket["evaluations"])
+        starts = [run["start"] for run in basket["runs"]]
+        if len(starts) != len(set(starts)) or not evaluations.issubset(starts):
+            raise ValueError("invalid planned run or evaluation starts")
+        for start in starts:
             path = Path(run_dir) / "units" / basket["id"] / f"{start}.json"
-            if not path.is_file():
-                raise ValueError(f"run is incomplete: {basket['id']} {start}")
-            unit = json.loads(path.read_text(encoding="utf-8"))
-            rows = {(row["candidate"], row["path"]): row for row in unit.get("trials", [])}
-            if unit.get("status") == "failed":
+            rows = _unit_rows(path, expected, start in evaluations)
+            if rows is None:
                 if not allow_failed_units:
                     raise ValueError(f"run has a failed unit: {basket['id']} {start}")
                 failed.append([basket["id"], start])
-            elif set(rows) != expected:
-                raise ValueError(f"run is incomplete: {basket['id']} {start} lacks planned trials")
-            for index in range(len(plan["candidates"])):
-                for name in plan["paths"]:
-                    comparison = rows.get((index, name), {}).get("comparison", {})
-                    matched = comparison.get("matched") if comparison.get("status") == "passed" else None
-                    table[(basket["id"], start, index, name)] = None if matched is None else (
-                        Decimal(matched["delta_cagr"]), Decimal(matched["delta_mdd"]))
+            if start in evaluations:
+                for index, name in expected:
+                    table[(basket["id"], start, index, name)] = None if rows is None else _matched_delta(rows[index, name])
     return table, failed
 
 
