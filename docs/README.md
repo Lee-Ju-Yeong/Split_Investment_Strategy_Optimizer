@@ -11,6 +11,7 @@
 | 분할 매매는 어떤 규칙으로 계산하나 | [전략 원칙](MAGIC_SPLIT_STRATEGY_PRINCIPLES.md) |
 | ETF 연구의 비교 기준선은 무엇인가 | [M4 학습 고정 리밸런싱·보유·프런티어](research/etf_m4_baselines.md) |
 | 재택 PC의 ETF 자료를 옮기고 작은 실행을 준비하려면 | [M5 입력 보호·전송·작은 실행](research/etf_m5_readiness.md) |
+| ETF M5에서 후보를 승격했는가 | [정식 R1 결과와 판단](research/etf_m5_formal_r1.md) |
 | 데이터를 어떻게 저장하나 | [DB 스키마](database/schema.md) · [종목 등급 계산 규칙](database/daily_stock_tier_rules.md) |
 | 코드는 어떤 순서로 읽나 | [src/ 읽기 안내](../src/README.md) |
 | 실행 파일과 실제 구현 위치가 왜 다른가 | [소스 경로 안내](refactoring/issue69-import-path-mapping.md) · [호환 진입점 유지 정책](refactoring/wrapper-deprecation.md) |
