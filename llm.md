@@ -156,6 +156,13 @@ Stage 1: Data Pipeline    → Stage 2: Batch Precompute     → Stage 3: CPU Bac
 - **설정 중앙화**: 모든 매직 넘버는 `config.yaml`에서 관리, 하드코딩 금지
 - **Evidence SSOT**: 모든 전략 승격은 `todos/*.md`에 링크된 결과 리포트와 Parity 검증 증적을 동반해야 함
 
+### 비밀정보와 공개 예제
+
+- 문서, 주석, 명령 예제, 테스트 데이터, 로그와 CI 산출물에 실제 비밀번호·토큰·API 키를 넣지 않는다. 로컬·개발·테스트용 값과 GitHub Pages에 나가는 문서도 예외가 아니다.
+- MySQL 예제는 값 없는 `-p` 프롬프트를 사용한다. 자동화는 저장소에 커밋하지 않는 비밀 저장소에서 주입하고, 배포용 예제에는 실제로 동작하지 않는 명확한 플레이스홀더만 쓴다.
+- 커밋하거나 공개하기 전에 `git diff --cached`를 검토하고 Secret Scan을 확인한다. 스캐너 통과만 믿지 말고 `MYSQL_PWD`, `-p` 뒤에 붙은 값, 접속 URL의 인증 정보도 직접 확인한다.
+- 노출이 의심되면 값을 로그·이슈·채팅에 복사하지 않는다. 실제 사용 또는 재사용된 자격 증명은 먼저 교체하고, 공개 문서와 Git 이력은 별도로 정리한다.
+
 ---
 
 ## 6. LLM Persona & Response Guidelines

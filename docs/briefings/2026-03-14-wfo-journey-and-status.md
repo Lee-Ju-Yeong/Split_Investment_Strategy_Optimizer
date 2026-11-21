@@ -528,6 +528,7 @@ sed -n '1,240p' "$LATEST_DIR/final_candidate_manifest.json"
 아래 순서는 `내 터미널(WSL)`에서 그대로 따라 하기 쉽게 정리한 것이다.
 
 ### 16-1. 먼저 확인: 2년 holdout 거래일 수(거래가 실제 있었던 날짜 수)
+`-p`의 프롬프트에서 로컬 DB 비밀번호를 입력한다. 명령이나 환경변수 예제에 비밀번호 값을 적지 않는다.
 ```bash
 mysql -uroot -p -h127.0.0.1 stocks -Nse \
 "SELECT COUNT(DISTINCT date) AS trading_days \
