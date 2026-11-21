@@ -13,6 +13,7 @@ from .engine_types import Candidate, LevelRule, Position, ONE, ZERO
 
 class _BaselineEngine(_Engine):
     def __init__(self, inputs, options, policy):
+        self.cap_buy_to_cash = inputs["_cap_buy_to_cash"]
         self.policy = policy
         self.trade_sessions, self.next_level = set(), {}
         self.converted = False
@@ -105,6 +106,17 @@ class _BaselineEngine(_Engine):
         if candidate.price * candidate.quantity > bar.adv20 * self.options.participation_rate:
             return "participation_limit"
         return self._buy_rejection(at, candidate, bar) if candidate.side == "BUY" else None
+
+    def _fill(self, at, payload):
+        candidate, bar, generated_at = payload
+        if self.cap_buy_to_cash and candidate.side == "BUY":
+            currency = self.instruments[candidate.symbol].currency
+            fee, _ = self._fee(candidate, bar)
+            if candidate.price * candidate.quantity + fee > self.cash[currency]:
+                affordable = self._buy_quantity(bar, candidate.price, self.cash[currency])
+                if affordable > 0:
+                    candidate = replace(candidate, quantity=affordable)
+        super()._fill(at, (candidate, bar, generated_at))
 
     def _buy_rejection(self, at, candidate, bar):
         instrument = self.instruments[candidate.symbol]
@@ -199,7 +211,8 @@ def run_baseline(policy, instruments, bars, *, initial_cash, fx_rates=(), evalua
                  sec_rate_override=None, product_sell_tax_rate=ZERO,
                  kr_sessions=(), kr_settlement_session_times=None,
                  domestic_settlement="legacy_same_day", max_fx_age_days=None, delistings=(),
-                 fx_closure_age_days=None):
+                 fx_closure_age_days=None, usd_target_fraction=None, _evaluation_cutoff=None,
+                 _cap_buy_to_cash=False):
     """명시한 기간/실제 세션의 완전성 검사는 M1 연결부 등 호출자의 책임이다.
 
     월별 기준선은 직전 평가액으로 원화 목표를 고정한다. 실제 정수 보유 비중은 비용·

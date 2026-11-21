@@ -212,7 +212,7 @@ def _delisting_marker(row, day, event):
 def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_csv, *,
                    payment_dates=None, locked_status=None, delistings=(), input_hashes=None,
                    domestic_settlement="legacy_same_day", max_fx_age_days=None,
-                   fx_closure_age_days=None) -> M1Inputs:
+                   fx_closure_age_days=None, _verified_price_rows=None) -> M1Inputs:
     """명시한 탐색 상품을 읽는다. 성과 탐색·보류 실행·원본 갱신은 수행하지 않는다.
 
     locked_status[(symbol,date)]는 단일 가격 일봉의 제한폭 고정 여부를 확인한 bool이다.
@@ -254,7 +254,11 @@ def load_m1_inputs(data_root, symbols: list[str], start: date, end: date, split_
         raise ValueError("시작일은 실제 통합 거래일이어야 합니다")
     if any(row["market"] == "US" for row in selected.values()) and start not in krx:
         raise ValueError("국내 휴장일의 초기 환전 정의는 미확정입니다. 국내 개장일로 시작하세요")
-    daily = _prices(root, bundle, record, selected, end)
+    if _verified_price_rows is None:
+        daily = _prices(root, bundle, record, selected, end)
+    else:
+        daily = {symbol: [row for row in _verified_price_rows[symbol] if row["date"] <= end.isoformat()]
+                 for symbol in selected}
     instruments, bars, warnings = [], [], []
     for symbol in symbols:
         market = selected[symbol]["market"]

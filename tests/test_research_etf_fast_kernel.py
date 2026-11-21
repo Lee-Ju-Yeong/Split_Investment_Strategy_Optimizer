@@ -44,6 +44,28 @@ def input_case(market, *, price="100", spread="1"):
 
 
 class NativeParityTests(unittest.TestCase):
+    def test_r2_reentry_with_updated_rates_matches_for_both_paths(self):
+        from tests.test_research_etf_followup import ResetTests
+        from tests.test_research_etf_engine import kr_run
+        for path in ("O-H-L-C", "O-L-H-C"):
+            _, bars, _, a = ResetTests().scenario()
+            _, _, _, b = ResetTests().scenario()
+            expected = kr_run(bars, path=path, _reentry_provider=a)
+            actual = kr_run(bars, path=path, _reentry_provider=b,
+                            _candidate_provider=kernel().candidate_for_bar)
+            self.assertEqual(actual, expected)
+            self.assertEqual([r["reason"] for r in actual.trades].count("monthly_reentry"), 1)
+
+    def test_r2_ten_levels_match_for_both_paths(self):
+        from tests.test_research_etf_engine import DAY, bar, kr_run
+        bars = [bar(day=DAY + timedelta(days=i), price=str(100 - 2 * i)) for i in range(10)]
+        rules = tuple(LevelRule(n, D(1000), D(".01"), D(".2")) for n in range(1, 11))
+        for path in ("O-H-L-C", "O-L-H-C"):
+            options = dict(path=path, level_rules=rules, initial_cash={"KRW": D(12000)})
+            expected = kr_run(bars, **options)
+            self.assertEqual(kr_run(bars, **options, _candidate_provider=kernel().candidate_for_bar), expected)
+            self.assertEqual(len(expected.trades), 10)
+
     def test_m5_file_pipeline_uses_verified_native_kernel(self):
         from examples.etf_m5_demo import demo
         with tempfile.TemporaryDirectory() as temporary:

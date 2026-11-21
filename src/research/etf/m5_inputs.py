@@ -114,7 +114,10 @@ def _controls(root, manifest, symbols, start, end):
         return {}, {}, ()
     if name not in manifest["files"]:
         raise ValueError("controls must be pinned in the input manifest")
-    values = json.loads((Path(root) / name).read_text(encoding="utf-8"))
+    payload = (Path(root) / name).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != manifest["files"][name]:
+        raise ValueError("M5 controls changed after manifest verification")
+    values = json.loads(payload)
     if not isinstance(values, dict) or set(values) - {"locked_status", "payment_dates", "delistings"}:
         raise ValueError("invalid M5 controls")
     locks = _dated_controls(values.get("locked_status", []), "locked", symbols, start, end)
@@ -152,11 +155,18 @@ def _dated_controls(rows, field, symbols, start, end):
 
 def load_m5_inputs(data_root, manifest_path, symbols, start, end, *, max_fx_age_days=7, fx_closure_age_days=None):
     manifest = read_manifest(data_root, manifest_path, symbols)
+    return _load_m5_inputs(data_root, manifest_path, symbols, start, end, manifest=manifest,
+                           max_fx_age_days=max_fx_age_days, fx_closure_age_days=fx_closure_age_days)
+
+
+def _load_m5_inputs(data_root, manifest_path, symbols, start, end, *, manifest,
+                    max_fx_age_days, fx_closure_age_days, verified_price_rows=None):
     locks, payments, notices = _controls(data_root, manifest, symbols, start, end)
     result = load_m1_inputs(data_root, symbols, start, end, Path(data_root) / manifest["split_csv"],
                             locked_status=locks, payment_dates=payments, delistings=notices,
                             input_hashes=manifest["extra_inputs_sha256"], domestic_settlement="t_plus_2",
-                            max_fx_age_days=max_fx_age_days, fx_closure_age_days=fx_closure_age_days)
+                            max_fx_age_days=max_fx_age_days, fx_closure_age_days=fx_closure_age_days,
+                            _verified_price_rows=verified_price_rows)
     result.provenance.update(m5_input_manifest_sha256=_sha(manifest_path), synthetic=manifest["synthetic"],
                              delistings=[asdict(event) for event in notices])
     return result

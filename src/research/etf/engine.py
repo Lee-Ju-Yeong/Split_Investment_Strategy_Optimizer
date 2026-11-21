@@ -79,6 +79,24 @@ class _Options:
     fx_closure_age_days: int | None = None
 
 
+@dataclass(frozen=True)
+class Reentry:
+    """A pre-open instruction for a flat symbol on an eligible reentry date."""
+
+    rates: tuple[Decimal, Decimal] | None = None
+    unavailable: str | None = None
+
+
+def _budget_weights(value, instruments):
+    if value is None:
+        return None
+    weights = {symbol: _fraction(weight, "level budget weight", positive=True)
+               for symbol, weight in value.items()}
+    if weights.keys() != instruments.keys() or sum(weights.values(), ZERO) != ONE:
+        raise ValueError("level budget weights must cover the instruments and sum to 1")
+    return weights
+
+
 def _validate_options(options: _Options) -> None:
     if options.path not in {"O-H-L-C", "O-L-H-C"}:
         raise ValueError("path must be O-H-L-C or O-L-H-C")
@@ -162,6 +180,14 @@ class _Engine:
         self.options = options
         self.candidate_provider = inputs["_candidate_provider"]
         self.instruments = _input_map(inputs["instruments"], inputs["rules"])
+        self.level_budget_weights = _budget_weights(inputs.get("level_budget_weights"), self.instruments)
+        target = inputs.get("usd_target_fraction")
+        self.usd_target_fraction = None if target is None else _fraction(target, "usd_target_fraction")
+        self.reentry_provider = inputs.get("_reentry_provider")
+        cutoff = inputs.get("_evaluation_cutoff")
+        self.evaluation_cutoff = None if cutoff is None else _utc(cutoff)
+        if self.evaluation_cutoff is not None and options.tax_mode != "pre_tax":
+            raise ValueError("the evaluation cutoff is supported only in pre-tax research")
         if (options.domestic_settlement == "t_plus_2" and options.tax_mode == "after_tax"
                 and any(item.market == "KR" for item in self.instruments.values())):
             raise ValueError("KR T+2 after_tax is unsupported until settlement-date withholding is implemented")
@@ -190,6 +216,7 @@ class _Engine:
         self.result, self.queue, self.serial = EngineResult(), [], 0
         self.pending_cash, self.receivables, self.pending_tax = [], {}, []
         self.first_seen, self.attempted = set(), set()
+        self.last_full_exit = {}
         self.last_valuation = None
         self.tax = TaxLedger(mode=options.tax_mode, synthetic=options.synthetic_tax_data)
         self._build_queue(inputs)
@@ -358,6 +385,8 @@ class _Engine:
                     "liquidate": self._liquidate}
         while self.queue:
             at, _, _, _, kind, payload = heapq.heappop(self.queue)
+            if self.evaluation_cutoff is not None and at > self.evaluation_cutoff:
+                break
             self.tax.advance(at)
             handlers[kind](at, payload)
         self.result.final_cash = self.cash.copy()
@@ -423,12 +452,14 @@ class _Engine:
 
     def _refresh_budget(self, at, _):
         previous = self._prior_values(at, require_prior=hasattr(self, "budget_initialized"))
-        amount = previous["total_krw"] * self.options.first_level_fraction / len(self.instruments)
+        total = previous["total_krw"] * self.options.first_level_fraction
+        amount = total / len(self.instruments)
         if amount <= ZERO:
             raise ValueError("monthly level budget must be positive")
         budgets = {}
         for symbol, instrument in self.instruments.items():
-            budget = amount / self._rate(instrument, at)
+            allocated = amount if self.level_budget_weights is None else total * self.level_budget_weights[symbol]
+            budget = allocated / self._rate(instrument, at)
             self.rules[symbol] = tuple(replace(rule, budget=budget) for rule in self.rules[symbol])
             budgets[symbol] = budget
         self.budget_initialized = True
@@ -442,13 +473,19 @@ class _Engine:
         self.first_seen.add(bar.symbol)
         positions = [p for p in self.positions.values() if p.symbol == bar.symbol]
         manual_entry = self.options.first_entry and first and not positions
+        reentry = self._reentry(instrument, bar, positions, first)
+        if reentry is not None and reentry.unavailable is not None:
+            self._cash_event(at, "monthly_reentry", symbol=bar.symbol, unavailable=reentry.unavailable)
+            return
         candidate = self.candidate_provider(
             instrument, bar, positions, self.rules[bar.symbol], path=self.options.path,
-            first_entry=self.options.first_entry and first,
+            first_entry=(self.options.first_entry and first) or reentry is not None,
             penetration_ticks=self.options.penetration_ticks, slippage_ticks=self.options.slippage_ticks,
             commission_rate=self.options.commission_rate,
             sec_rate_override=self._sec_override(instrument, bar),
             product_sell_tax_rate=self.options.product_sell_tax_rate)
+        if reentry is not None:
+            candidate = self._reentry_order(at, bar, candidate)
         if candidate is not None:
             if not at <= _utc(candidate.at) <= _utc(bar.close_at) or candidate.symbol != bar.symbol:
                 raise ValueError("strategy candidate lies outside its own session")
@@ -456,6 +493,31 @@ class _Engine:
         elif manual_entry:
             reason = "zero_volume" if bar.volume == ZERO else "limit_locked" if bar.limit_locked else "zero_affordable_quantity"
             self._entry_unavailable(at, bar, reason)
+
+    def _reentry(self, instrument, bar, positions, first):
+        last_exit = self.last_full_exit.get(bar.symbol)
+        if self.reentry_provider is None or last_exit is None or positions:
+            return None
+        instruction = self.reentry_provider(instrument, bar, last_exit)
+        if instruction is None:
+            return None
+        if first or positions:
+            raise ValueError("reentry requires a previously traded, flat symbol")
+        if instruction.rates is not None:
+            drop, take = instruction.rates
+            self.rules[bar.symbol] = tuple(replace(rule, drop_rate=drop, take_rate=take)
+                                           for rule in self.rules[bar.symbol])
+        return instruction
+
+    def _reentry_order(self, at, bar, candidate):
+        if candidate is None:
+            reason = "zero_volume" if bar.volume == ZERO else "limit_locked" if bar.limit_locked else "zero_affordable_quantity"
+            self._cash_event(at, "monthly_reentry", symbol=bar.symbol, unavailable=reason)
+            return None
+        if (candidate.side, candidate.level, _utc(candidate.at)) != ("BUY", 1, at):
+            raise ValueError("reentry must buy level one at market open")
+        self._cash_event(at, "monthly_reentry", symbol=bar.symbol, unavailable=None)
+        return replace(candidate, reason="monthly_reentry")
 
     def _entry_unavailable(self, at, bar, reason):
         self._warn(f"{bar.symbol} {bar.session_date}: initial entry unavailable ({reason}); initial entry is not retried")
@@ -551,6 +613,8 @@ class _Engine:
         withholding = self._queue_trade_tax(at, instrument, position, candidate, bar, fee)
         if candidate.side == "SELL":
             self._credit_sale(at, instrument, candidate.price * candidate.quantity - fee - product_tax - withholding, bar)
+            if self.reentry_provider is not None and not any(s == candidate.symbol for s, _ in self.positions):
+                self.last_full_exit[candidate.symbol] = bar.session_date
         row = {"at": at, "generated_at": generated_at, "session_date": bar.session_date,
                "symbol": candidate.symbol, "side": candidate.side, "level": candidate.level,
                "quantity": candidate.quantity, "price": candidate.price, "fee": fee,
@@ -601,7 +665,7 @@ class _Engine:
         if instrument.market != "US":
             return self._trade_tax(at, payload)
         day, settled_at = self._settlement(bar)
-        if settled_at is not None:
+        if settled_at is not None and (self.evaluation_cutoff is None or settled_at <= self.evaluation_cutoff):
             self._push(settled_at, 6, "trade_tax", payload, instrument.symbol)
         else:
             self.pending_tax.append({"symbol": instrument.symbol, "side": candidate.side,
@@ -685,7 +749,9 @@ class _Engine:
     def _convert(self, at, _):
         values = self._values(at)
         rate = self._fx(at)
-        usd_share = Decimal(sum(instrument.currency == "USD" for instrument in self.instruments.values())) / len(self.instruments)
+        usd_share = self.usd_target_fraction
+        if usd_share is None:
+            usd_share = Decimal(sum(instrument.currency == "USD" for instrument in self.instruments.values())) / len(self.instruments)
         usd_holdings = sum((values["holdings_krw"][symbol] for symbol, instrument in self.instruments.items()
                             if instrument.currency == "USD"), ZERO)
         target = max(ZERO, values["total_krw"] * usd_share - usd_holdings) / rate
@@ -745,7 +811,8 @@ def run_engine(
     sec_rate_override=None, product_sell_tax_rate=ZERO, _candidate_provider=candidate_for_bar,
     kr_sessions: list[date] = (), kr_settlement_session_times=None,
     domestic_settlement="legacy_same_day", max_fx_age_days=None, delistings=(),
-    fx_closure_age_days=None,
+    fx_closure_age_days=None, level_budget_weights=None, usd_target_fraction=None,
+    _reentry_provider=None, _evaluation_cutoff=None,
 ) -> EngineResult:
     """Run one assumed OHLC path; cash orders never shrink to available cash.
 

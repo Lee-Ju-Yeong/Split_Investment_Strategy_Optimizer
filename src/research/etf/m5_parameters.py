@@ -4,6 +4,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from datetime import date
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
+from functools import lru_cache
 from itertools import product
 import json
 from pathlib import Path
@@ -39,6 +40,12 @@ def grid_candidates(config):
     return [dict(zip(grid, values)) for values in product(*grid.values())]
 
 
+@lru_cache(maxsize=65536)
+def _log_return(previous, current):
+    with localcontext(prec=80, rounding=ROUND_HALF_EVEN):
+        return (decimal(current) / decimal(previous)).ln()
+
+
 def estimate_volatility(rows, calendar, start):
     """직전 251개 실제 세션에서 최대 250개 로그수익률. 0거래량 인접 쌍 제외."""
     days = sorted(day for day in calendar if day < start)[-251:]
@@ -50,7 +57,7 @@ def estimate_volatility(rows, calendar, start):
         for previous, current in zip(days, days[1:]):
             left, right = dated[previous], dated[current]
             if decimal(left["volume"]) > ZERO and decimal(right["volume"]) > ZERO:
-                returns.append((decimal(right["close"]) / decimal(left["close"])).ln())
+                returns.append(_log_return(left["close"], right["close"]))
         if len(returns) < 200:
             raise ValueError("volatility needs at least 200 nonzero-volume return observations")
         mean = sum(returns, ZERO) / len(returns)
@@ -69,23 +76,29 @@ def load_volatilities(data_root, manifest_path, symbols, start):
             for symbol, row in selected.items()}
 
 
-def candidate_rules(candidate, inputs, volatilities):
+def entry_rates(candidate, inputs, instrument, bar, estimate, *, commission_rate=None):
+    with localcontext(prec=80, rounding=ROUND_HALF_EVEN):
+        if estimate.known_at >= bar.open_at:
+            raise ValueError("volatility must be known before the first open")
+        drop, take = decimal(candidate["kg"]) * estimate.value, decimal(candidate["kp"]) * estimate.value
+        day = _charge_date(inputs, instrument, bar)
+        sec = sec_fee_rate(day, known_at=bar.open_at) if instrument.market == "US" else None
+        cost = fee_amount(instrument.market, "BUY", day, ONE, commission_rate=commission_rate) + fee_amount(
+            instrument.market, "SELL", day, ONE, commission_rate=commission_rate, sec_rate_override=sec)
+        if not cost <= drop < ONE:
+            raise CostGuardRejection(f"{instrument.symbol}: drop below known round-trip costs or >= 1")
+        return drop, take
+
+
+def candidate_rules(candidate, inputs, volatilities, *, commission_rate=None):
     """모든 상품에 같은 계수를 쓰며 상품별 계수 조정·반올림·자동 보정은 하지 않는다."""
     with localcontext(prec=80, rounding=ROUND_HALF_EVEN):
         rules = {}
         for instrument in inputs.instruments:
             estimate = volatilities[instrument.symbol]
             first_bar = min((bar for bar in inputs.bars if bar.symbol == instrument.symbol), key=lambda b: b.open_at)
-            if estimate.known_at >= first_bar.open_at:
-                raise ValueError("volatility must be known before the first open")
-            drop, take = decimal(candidate["kg"]) * estimate.value, decimal(candidate["kp"]) * estimate.value
-            # 실행 중 미래 비용 변경까지 예측하지 않고 시작 때 알려진 왕복 비용 하한을 검사한다.
-            day = _charge_date(inputs, instrument, first_bar)
-            sec = sec_fee_rate(day, known_at=first_bar.open_at) if instrument.market == "US" else None
-            cost = fee_amount(instrument.market, "BUY", day, ONE) + fee_amount(
-                instrument.market, "SELL", day, ONE, sec_rate_override=sec)
-            if not cost <= drop < ONE:
-                raise CostGuardRejection(f"{instrument.symbol}: drop below known round-trip costs or >= 1")
+            drop, take = entry_rates(candidate, inputs, instrument, first_bar, estimate,
+                                     commission_rate=commission_rate)
             rules[instrument.symbol] = tuple(LevelRule(n, ONE, drop, take) for n in range(1, candidate["levels"] + 1))
         return rules
 
