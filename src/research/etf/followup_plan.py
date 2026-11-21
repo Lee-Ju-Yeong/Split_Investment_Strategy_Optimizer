@@ -71,7 +71,7 @@ def weighted_basket(mix, parent, size, family):
             piece = allocation / count
             weights.update(dict.fromkeys(symbols[:-1], str(piece)))
             weights[symbols[-1]] = str(allocation - piece * (count - 1))
-    return weights
+    return dict(sorted(weights.items()))
 
 
 def draw_parent(eligible, metadata, year, mix, family, attempt):
@@ -109,7 +109,7 @@ def draw_families(eligible, metadata, year, mix):
             raise ValueError(f"{year}/{mix}: four distinct nested families required")
 
 
-def make_plan(root, manifest_path):
+def make_plan(root, manifest_path, *, forward=False):
     manifest = read_manifest(root, manifest_path, [])
     proto = protocol.load()
     _, _, metadata, bundle = _snapshot(root, root / manifest["split_csv"], [])
@@ -121,12 +121,14 @@ def make_plan(root, manifest_path):
         raise ValueError("pinned data does not cover the final comparison")
     pool = _members(root, manifest, metadata, proto["baskets"]["gold_symbol"])
     del pool["GOLD"]
-    anchors = [windows[f"{year}-01"][0] for year in range(2018, 2026)]
+    years = range(2024, 2026) if forward else range(2020, 2024)
+    anchors = [windows[f"{year}-01"][0] for year in range(years.start - 2, years.stop)]
     needed = {market: _needed(anchors, dates[market]) for market in pool}
     floors = {market: Decimal(str(proto["universe"]["liquidity"]["floor"][market])) for market in pool}
-    universe = _Universe(_scan(root, bundle, pool, needed), pool, dates, floors)
+    seen = _scan(root, bundle, pool, needed, as_of=anchors[-1].isoformat())
+    universe = _Universe(seen, pool, dates, floors)
     families = []
-    for year in range(2020, 2026):
+    for year in years:
         eligible = universe.pool_at([windows[f"{year - lag}-01"][0] for lag in range(3)])
         for mix in MIXES:
             families.extend(draw_families(eligible, metadata, year, mix))

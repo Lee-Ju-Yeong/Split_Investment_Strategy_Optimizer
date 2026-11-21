@@ -12,7 +12,7 @@ from src.research.etf.baseline_engine import run_baseline
 from src.research.etf.baseline_policy import VolatilityEstimate, fixed_baseline
 from src.research.etf.engine import run_engine
 from src.research.etf.engine_types import FxRate, Instrument, LevelRule
-from src.research.etf.followup import _index, _unit_digest, _write_or_verify
+from src.research.etf.followup import _forward_plan, _index, _unit_digest, _write_or_verify
 from src.research.etf.followup_plan import MIXES, PATHS, Setting, quarter_windows, sleeve_counts, weighted_basket
 from src.research.etf.followup_report import _rank_key, _score, phase_settings, summarize
 from src.research.etf.followup_run import MonthlyEntry, _trial
@@ -86,6 +86,7 @@ class BudgetAndFundingTests(unittest.TestCase):
         self.assertEqual(len(result.trades), 1)
         self.assertEqual(result.valuations[-1]["total_krw"], D(1000000))
         self.assertEqual(result.tax["pending_settlement_events"][0]["settlement_date"], next_day)
+        self.assertEqual(result.cash_events[-1]["at"], at(hour=21))
 
     def test_buy_hold_does_not_lose_a_whole_symbol_to_fx_rounding(self):
         instruments = [Instrument(s, "US", "USD") for s in ("A", "B")]
@@ -190,6 +191,39 @@ class ReportingTests(unittest.TestCase):
             manifest = {"controls": path.name, "files": {path.name: "a" * 64}}
             with self.assertRaisesRegex(ValueError, "changed after"):
                 _controls(root, manifest, [], DAY, DAY)
+
+    def test_full_units_roundtrip_all_ten_integer_keys(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "units").mkdir()
+            job = {"id": "ten", "settings": [asdict(Setting(4, 10))]}
+            result = dict(job, trials=[dict(setting=job["settings"][0], path=path,
+                                           fills=dict.fromkeys(range(1, 11), 1)) for path in PATHS])
+            _dump(root / "units" / "ten.json", {"unit": result, "sha256": _unit_digest(result)})
+            self.assertEqual(len(_index(root, [job])[0]), 1)
+
+    def test_plan_order_is_identical_before_and_after_resume(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "plan.json"
+            plan = {"baskets": {"B": "0.5", "A": "0.5"}}
+            self.assertEqual(list(_write_or_verify(path, plan)["baskets"]), ["A", "B"])
+            self.assertEqual(list(_write_or_verify(path, plan)["baskets"]), ["A", "B"])
+
+    def test_forward_sample_is_deferred_until_selection_exists(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "reentry").mkdir()
+            dev = dict(protocol_sha256="protocol", manifest_sha256="manifest", windows={}, forward=["2024-01"])
+            _dump(root / "plan.json", dev)
+            args = SimpleNamespace(run_dir=root, data_root=root, manifest=root / "manifest.json")
+            with patch("src.research.etf.followup.make_plan", return_value=dev) as build:
+                with self.assertRaises(FileNotFoundError):
+                    _forward_plan(args, dev)
+                build.assert_not_called()
+                _dump(root / "reentry" / "summary.json", {"selected": "locked"})
+                self.assertEqual(_forward_plan(args, dev), dev)
+                self.assertEqual(_forward_plan(args, dev), dev)
+                build.assert_called_once_with(root, args.manifest, forward=True)
 
     def test_engine_trial_is_consumed_by_report(self):
         study = SimpleNamespace()

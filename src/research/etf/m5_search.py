@@ -89,7 +89,7 @@ def _needed(starts, sessions):
     return days
 
 
-def _scan(root, bundle, pool, needed):
+def _scan(root, bundle, pool, needed, *, as_of=None):
     """시작 전 20세션과 최초 가격일만 남긴다. 시작 이후 가격은 후보 판정에 쓰지 않는다."""
     seen = {market: {symbol: {"first": None, "rows": {}} for symbol in names} for market, names in pool.items()}
     for market, names in pool.items():
@@ -98,6 +98,8 @@ def _scan(root, bundle, pool, needed):
         path = (root / "krx_gold" / "gold_9999_1kg_daily.csv" if market == "GOLD"
                 else bundle / f"{market.lower()}_daily.csv.gz")
         for row in _rows(path):
+            if as_of is not None and row["date"] >= as_of:
+                continue
             symbol = next(iter(names)) if market == "GOLD" else row["symbol"]
             if symbol not in names:
                 continue

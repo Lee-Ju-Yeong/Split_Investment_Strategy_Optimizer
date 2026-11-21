@@ -386,6 +386,7 @@ class _Engine:
         while self.queue:
             at, _, _, _, kind, payload = heapq.heappop(self.queue)
             if self.evaluation_cutoff is not None and at > self.evaluation_cutoff:
+                at = self.evaluation_cutoff
                 break
             self.tax.advance(at)
             handlers[kind](at, payload)

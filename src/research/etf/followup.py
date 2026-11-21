@@ -37,7 +37,7 @@ def _write_or_verify(path, contents):
             raise ValueError(f"{path} differs from the pinned execution")
     else:
         _dump(path, encoded)
-    return encoded
+    return _read(path)
 
 
 @contextmanager
@@ -65,7 +65,8 @@ def _expected(job):
 
 
 def _unit_digest(row):
-    return hashlib.sha256(json.dumps(row, default=_encode, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    encoded = json.loads(json.dumps(row, default=_encode))
+    return hashlib.sha256(json.dumps(encoded, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 def _read_unit(path, job):
@@ -171,9 +172,10 @@ def _run(args, study, phase, jobs, workers):
 
 def _phase_report(args, plan, phase, previous, *, study=None, pilot=None):
     directory = args.run_dir / phase
-    plan_file = args.run_dir / "plan.json"
+    plan_file = args.run_dir / ("forward-plan.json" if phase == "forward" else "plan.json")
     jobs = list(jobs_for(plan, phase, phase_settings(phase, previous)))
-    execution_sha = _sha(args.run_dir / "provenance.json")
+    plan_sha = _sha(plan_file)
+    execution_sha = _unit_digest([_sha(args.run_dir / "provenance.json"), plan_sha])
     for job in jobs:
         job["execution_sha256"] = execution_sha
     if study is not None:
@@ -182,7 +184,7 @@ def _phase_report(args, plan, phase, previous, *, study=None, pilot=None):
         _write_or_verify(args.run_dir / "provenance.json", _pins(args, plan))
     rows, unit_digest = _index(directory, jobs)
     report = _pilot_report(rows) if phase == "pilot" else summarize(phase, rows, previous)
-    sealed = dict(phase=phase, plan_sha256=_sha(plan_file), unit_set_sha256=unit_digest, report=report)
+    sealed = dict(phase=phase, plan_sha256=plan_sha, unit_set_sha256=unit_digest, report=report)
     output = directory / "summary.json"
     if study is None and not output.is_file():
         raise ValueError(f"{phase} is not complete")
@@ -195,6 +197,24 @@ def _plan(args):
     if output.exists() and (args.run_dir / "provenance.json").exists():
         return _read(output)
     return _write_or_verify(output, make_plan(args.data_root, args.manifest))
+
+
+def _forward_plan(args, development):
+    output = args.run_dir / "forward-plan.json"
+    selection = _sha(args.run_dir / "reentry" / "summary.json")
+    basis = {"development_sha256": _sha(args.run_dir / "plan.json"), "selection_sha256": selection}
+    if output.exists():
+        sealed = _read(output)
+        plan = sealed["plan"]
+        if sealed["basis"] != basis or sealed["sha256"] != _unit_digest(plan):
+            raise ValueError("forward plan or its frozen choice changed during resume")
+    else:
+        plan = make_plan(args.data_root, args.manifest, forward=True)
+        sealed = _write_or_verify(output, dict(basis=basis, plan=plan, sha256=_unit_digest(plan)))
+        plan = sealed["plan"]
+    if any(plan[k] != development[k] for k in ("protocol_sha256", "manifest_sha256", "windows", "forward")):
+        raise ValueError("forward plan does not match the development assumptions")
+    return plan
 
 
 def execute(args):
@@ -216,6 +236,8 @@ def execute(args):
         previous = None
         for phase in PHASES:
             active = args.stage in (phase, "all")
+            if phase == "forward":
+                plan = _forward_plan(args, plan)
             if active and (study is None or phase == "forward"):
                 study = None
                 study = StudyData(args.data_root, args.manifest, plan, forward=phase == "forward")
