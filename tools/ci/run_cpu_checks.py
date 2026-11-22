@@ -28,6 +28,8 @@ TASKS = (
     Task("tests", "test_portfolio.py"),
     Task("tests", "test_short_selling_collector.py"),
     Task("tests", "test_daily_stock_tier_batch.py"),
+    Task("tests", "test_krx_session.py"),
+    Task("tests", "test_krx_daily_bulk.py"),
     Task("tests", "test_cpu_candidate_priority.py"),
     Task("tests", "test_cpu_strategy_entry_context.py"),
     Task("tests", "test_backtester_entry_metrics.py"),

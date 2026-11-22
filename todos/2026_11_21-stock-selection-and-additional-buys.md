@@ -424,3 +424,9 @@ C1 계좌는 ETF 기준을 4/5 통과했다(원래 기준·보완 기준 모두)
 - Sol 안과의 차이는 시점뿐이다. 설계 내용은 같다. 결정은 사용자 몫이다.
 
 **사용자 결정(11-22).** Astra 안으로 확정했다. 보정 구현은 진단 뒤로 미룬다. 다음 순서는 (d) 일일 수집 복구 → (a) 끊지 않은 연속 계좌 → (b) 후보군 대 지수다. 작업은 myworks-ws 원격 세션이 이어받는다(인계 문서 `/mnt/volume/workspace/split-research/HANDOFF-20261122.md`).
+
+### 일일 수집 복구 보류와 날짜별 수집 코드 · 2026-11-22
+
+- **복구 계획.** 2026-02-09~11-20(191거래일)을 사본 DB에서 받고 검증된 새 키만 원본에 넣는 방식을 Claude·Astra 숙의로 정했다(수정주가 단위 검사, Tier 첫 3일용 공매도 2/4~6 사본 보관, 지표 소급 방지 등). 근거: 연구 볼륨 `runs/collect-recovery-review/astra-review.md`, `runs/collect-recovery-20261122/PLAN.md`.
+- **보류 결정.** 기존 수집기로는 1만 5천~1만 8천 회의 KRX 호출이 필요해 차단 위험이 커서, 사용자가 갱신을 하지 않기로 확정했다. 수집 전 백업(`transfer/pre-collect-20261122`, 덤프·FLOAT DOUBLE 자료·표별 CHECKSUM·2/9 이전 지문)은 보관했고 원본 16개 표 CHECKSUM이 그대로임을 확인했다. KRX 호출은 로그인 확인·거래일 조회 약 15회뿐이다.
+- **날짜별 수집 경로.** 다음 갱신(24개월 확인 기간)을 위해 거래일마다 전 종목을 한 번에 받는 경로를 만들었다(`src/pipeline/krx_daily_bulk*.py`, 중앙 세션 `src/common/krx_session.py`). Claude·Astra 독립 리뷰 3회와 수정 3회를 거쳤다. 3/14 Tier는 그 당시 방식으로 재현됨을 확인했다. 그러나 차단 결함이 남아 **사용 금지**로 보관한다. 상태와 남은 일은 `docs/operations/krx_daily_bulk_update_runbook.md` 맨 앞.

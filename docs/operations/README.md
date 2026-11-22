@@ -5,6 +5,7 @@
 ## 문서 지도
 
 - [수집·DB 터널 절차](krx_hotspot_db_tunnel_runbook.md): 공개 명령 템플릿과 접근 조건
+- [KRX 날짜별 일괄 일일 갱신](krx_daily_bulk_update_runbook.md): 호출 최소화 경로, dry-run·대조·차단 시 대응
 - [로컬 설정 예제](krx_hotspot_db_tunnel_runbook.local.example.md): 실제 값 없이 보관하는 템플릿
 - [기간별 평가와 승인 절차](2026-03-14-wfo-approval-runbook.md): 당시 평가 경계와 후속 구현 근거
 - [CPU·GPU 비교 기록](2026-03-06-parity-gate-universe-mode-report.md), [당시 승인 항목표](2026-03-06-hybrid-release-gate-board.md): 특정 실행의 결과

@@ -1163,7 +1163,12 @@ def run_daily_stock_tier_batch(
     tier3_flow20_quantile=DEFAULT_TIER3_FLOW20_QUANTILE,
     tier3_flow20_valid_coverage_threshold=DEFAULT_TIER3_FLOW20_VALID_COVERAGE_THRESHOLD,
     tier3_flow20_consecutive_days=DEFAULT_TIER3_FLOW20_CONSECUTIVE_DAYS,
+    row_writer=None,
+    price_history_start_date=None,
 ):
+    # row_writer: 기본 upsert 대신 쓸 저장 함수(conn, rows_df) -> 건수. 새 키만 넣는 경로용.
+    # price_history_start_date: 가격 이력 조회 시작일을 더 앞당길 때(5년 위치 1,260 관측치 확보용).
+    #   주지 않으면 기존과 같은 시작일을 쓴다.
     if mode not in {"daily", "backfill"}:
         raise ValueError(f"Unsupported mode: {mode}")
 
@@ -1195,9 +1200,12 @@ def run_daily_stock_tier_batch(
         )
     )
     financial_query_start = query_start - timedelta(days=financial_lookback_days + 30)
+    price_query_start = query_start
+    if price_history_start_date is not None:
+        price_query_start = min(query_start, pd.Timestamp(price_history_start_date).date())
     price_df = fetch_price_history(
         conn=conn,
-        start_date=query_start.strftime("%Y-%m-%d"),
+        start_date=price_query_start.strftime("%Y-%m-%d"),
         end_date=end_date.strftime("%Y-%m-%d"),
         ticker_codes=ticker_codes,
     )
@@ -1298,7 +1306,7 @@ def run_daily_stock_tier_batch(
             "cheap_score_confidence",
         ]
     ]
-    saved = upsert_daily_stock_tier(conn, rows_df)
+    saved = (row_writer or upsert_daily_stock_tier)(conn, rows_df)
     investor_overlay_rows = 0
     if enable_investor_v1_write:
         investor_overlay_rows = int(
