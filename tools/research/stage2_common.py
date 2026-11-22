@@ -35,8 +35,8 @@ class Calendar:
     def record_date(self, year):
         y = self.dates[self.dates.year == year]
         return y[-2]          # 마지막 거래일 전날 종가 보유자 = 연말 배당 권리자(근사)
-    def pay_date(self, year):
-        m = self.dates[(self.dates.year == year + 1) & (self.dates.month == 5)]
+    def pay_date(self, year, min_day=1):
+        m = self.dates[(self.dates.year == year + 1) & (self.dates.month == 5) & (self.dates.day >= min_day)]
         return m[0] if len(m) else None
 
 def dps_table(conn, tickers, years):

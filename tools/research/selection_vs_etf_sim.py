@@ -15,6 +15,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('panel'); ap.add_argument('etf'); ap.add_argument('outdir')
 ap.add_argument('--seeds', type=int, default=100)
 ap.add_argument('--window', default='', help='시작 연도 하나만 실행(예: 2014)')
+ap.add_argument('--diag', action='store_true', help='모의 실행 없이 무작위(시장·잔류 맞춤) 목록의 월별 잔류·교체 수만 기록')
 a = ap.parse_args(); os.makedirs(a.outdir, exist_ok=True)
 WINDOWS = [('2014-01-01', '2015-12-31'), ('2016-01-01', '2017-12-31'), ('2018-01-01', '2019-12-31'),
            ('2020-01-01', '2021-12-31'), ('2022-01-01', '2023-12-31'), ('2024-01-01', '2025-12-31')]
@@ -162,9 +163,26 @@ def r20_lists(s, e, seed, kind):
             if len(kept) != keep_n or len(newp) != need: gaps += 1
             pick += kept + newp
         pick = list(rng.permutation(pick)) if pick else []
+        if kind == 'matched':
+            DIAG.append({'trade_date': str(d.date()), 'seed': seed, 's20_n': len(S), 's20_kept': len(set(S) & prev_s), 'r20_n': len(pick),
+                         'r20_kept': len(set(pick) & set(prev_r)), 'eligible': len(E)})
         out[d] = pick; prev_s = set(S); prev_r = pick
     return out, gaps
 
+DIAG = []
+if a.diag:
+    for s, e in WINDOWS:
+        s, e = pd.Timestamp(s), pd.Timestamp(e)
+        for seed in range(a.seeds):
+            _, g = r20_lists(s, e, 20261121 + seed, 'matched')
+            DIAG[-1]['window_gaps'] = g
+    dg = pd.DataFrame(DIAG); dg['month_idx'] = dg.groupby('seed').cumcount()
+    dg.to_csv(os.path.join(a.outdir, 'r20_matched_diag.csv'), index=False)
+    dg['diff'] = dg.r20_kept - dg.s20_kept; dg['year'] = dg.trade_date.str[:4]
+    print(dg.groupby('year')[['s20_kept', 'r20_kept', 'diff']].mean().round(2).to_string())
+    print('share of seed-months with kept diff != 0:', round((dg['diff'] != 0).mean(), 3), '; mean abs diff', round(dg['diff'].abs().mean(), 2))
+    print('first-month-of-window rows excluded? (window start resets prev):', int((dg.groupby('seed').cumcount() == 0).sum()))
+    sys.exit(0)
 rows = []; curves = {}
 for s, e in WINDOWS:
     s, e = pd.Timestamp(s), pd.Timestamp(e); w = str(s.year)
