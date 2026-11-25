@@ -1,0 +1,183 @@
+{
+  "schema": "kodex-core-split-v2.2",
+  "design": [
+    "runs/kodex-core-split-r1/DESIGN-v1.md",
+    "runs/kodex-core-split-r1/DESIGN-v2.md",
+    "runs/kodex-core-split-r1/DESIGN-v2.1.md",
+    "runs/kodex-core-split-r1/DESIGN-v2.2.md",
+    "runs/kodex-core-split-r1/review-astra-design.md",
+    "runs/kodex-core-split-r1/review-astra-design-v2.md",
+    "runs/kodex-core-split-r1/review-astra-design-v2.1.md"
+  ],
+  "status": "pre_results_fixed",
+  "primary_symbol": "069500",
+  "capital_krw": {
+    "core": "80000000",
+    "split": "20000000",
+    "hold": "100000000"
+  },
+  "split": {
+    "levels": 9,
+    "kg": "2",
+    "kp": "3"
+  },
+  "costs_one_way": {
+    "base": "0.00015",
+    "stress": "0.003"
+  },
+  "participation_rate": "0.05",
+  "penetration_ticks": 1,
+  "slippage_ticks": 0,
+  "paths": [
+    "O-H-L-C",
+    "O-L-H-C"
+  ],
+  "reentry_modes": [
+    "M",
+    "D"
+  ],
+  "start_offsets": [
+    0,
+    5,
+    20
+  ],
+  "volatility_mode": "annual",
+  "thresholds": {
+    "exposure_min": "0.80",
+    "cagr_edge_min": "0.01",
+    "mdd_excess_max": "0.05",
+    "stress_cagr_edge_gt": "0"
+  },
+  "matched_exposure_band": "0.02",
+  "year_days": "365.25",
+  "segment_sets": {
+    "from_2011": [
+      [
+        "2011-2013",
+        "2011-01-01",
+        "2013-12-31"
+      ],
+      [
+        "2014-2019",
+        "2014-01-01",
+        "2019-12-31"
+      ],
+      [
+        "2020-2023",
+        "2020-01-01",
+        "2023-12-31"
+      ],
+      [
+        "2024-2026-11-13",
+        "2024-01-01",
+        "2026-11-13"
+      ]
+    ],
+    "from_2004": [
+      [
+        "2004-2007",
+        "2004-01-01",
+        "2007-12-31"
+      ],
+      [
+        "2008-2009",
+        "2008-01-01",
+        "2009-12-31"
+      ],
+      [
+        "2010-2013",
+        "2010-01-01",
+        "2013-12-31"
+      ],
+      [
+        "2014-2019",
+        "2014-01-01",
+        "2019-12-31"
+      ],
+      [
+        "2020-2023",
+        "2020-01-01",
+        "2023-12-31"
+      ],
+      [
+        "2024-2026-11-13",
+        "2024-01-01",
+        "2026-11-13"
+      ]
+    ]
+  },
+  "end": "2026-11-13",
+  "rows": [
+    {
+      "id": "primary",
+      "role": "primary",
+      "symbols": [
+        "069500"
+      ],
+      "starts": [
+        "2011-01-03",
+        "2011-01-10",
+        "2011-01-31"
+      ],
+      "segments": "from_2011"
+    },
+    {
+      "id": "extension",
+      "role": "extension",
+      "symbols": [
+        "229200",
+        "169950"
+      ],
+      "starts": [
+        "2017-01-02",
+        "2017-01-09",
+        "2017-02-01"
+      ],
+      "segments": "from_2011",
+      "denominator": 2
+    },
+    {
+      "id": "comparison",
+      "role": "comparison",
+      "symbols": [
+        "069500"
+      ],
+      "starts": [
+        "2017-01-02",
+        "2017-01-09",
+        "2017-02-01"
+      ],
+      "segments": "from_2011"
+    },
+    {
+      "id": "reference_2004",
+      "role": "reference",
+      "symbols": [
+        "069500"
+      ],
+      "starts": [
+        "2004-01-02",
+        "2004-01-09",
+        "2004-02-04"
+      ],
+      "segments": "from_2004"
+    }
+  ],
+  "labels": {
+    "basis": "공급자 수정가격 기준, 원화 세전·비용 후 모의 판정",
+    "total_return_note": "실제 분배금 포함 초과수익의 크기는 확인되지 않음",
+    "basis_entitlement": "원가격+분배금 권리 기준, 원화 세전·비용 후 모의 판정"
+  },
+  "extension_start_capacity_floor_krw": "100000000",
+  "expected_price_basis": "naver_provider_adjusted_distribution_unverified",
+  "registered_inputs": {
+    "price_bundle": "20261115T143511Z-74bfb4c7",
+    "input_manifest_sha256": "9e66e5b8f16b1b0be9e3372c88ba9b6b6e481c0599f31fe1a0d2943fecaa51e2",
+    "synthetic": false,
+    "daily_sha256": "1baa8ece78b695eed60a494730fb97ebcbc7b577c06be69e7d117756ef972b0d",
+    "metadata_sha256": "6435fe04f497974ac508435fa1bad9f6ef363b4949b4f5959c3a87219ae4185a",
+    "calendar_sha256": "090a7dac0f2c126604113f34c70d1388813e536fe1f7ff83d308ab232ebb5242",
+    "market_rules_sha256": "079bc678e16bacdc4f5ec65614b9b50dca5b229762e00ace7bb923d8ed392cbb",
+    "extra_inputs": "none"
+  }
+}
