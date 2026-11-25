@@ -1,0 +1,152 @@
+{
+  "schema": "kodex-grid-v1",
+  "design": [
+    "runs/kodex-grid-r1/DESIGN-v2.1.md",
+    "runs/kodex-grid-r1/review-astra-design.md",
+    "runs/kodex-grid-r1/review-astra-design-v2.md",
+    "runs/kodex-grid-r1/review-astra-impl.md",
+    "runs/kodex-grid-r1/review-claude-impl.md",
+    "runs/kodex-grid-r1/review-reconciled-impl.md"
+  ],
+  "status": "pre_results_fixed",
+  "exploration": true,
+  "formal_run": false,
+  "approved": {
+    "source_sha256": "ef6a285b2d0bef22dcb4e767cfd1172116389859be9ad56babbdab5a51381ffb",
+    "base_config_file_sha256": "1f05e346ad9761ec21cc2ce293ea10743704b5cdb2bf162c458dc97d4d52703c",
+    "formal_result_sha256": "8b790ce77905f0a38339a8d4fbdd9bdc6766fb6379724f6b29a44c9beea08808",
+    "baseline_applied_config_sha256": "eb00cf47e06cbc962c071768499e17d1f8905f7b0533d20073d8a67ea590f388"
+  },
+  "symbol": "069500",
+  "primary_start": "2011-01-03",
+  "end": "2026-11-13",
+  "reentry_mode": "M",
+  "account_krw": "100000000",
+  "axes": {
+    "core": [
+      {
+        "label": "50",
+        "core_krw": "50000000",
+        "split_krw": "50000000"
+      },
+      {
+        "label": "80",
+        "core_krw": "80000000",
+        "split_krw": "20000000"
+      }
+    ],
+    "kg": [
+      "1",
+      "2",
+      "4"
+    ],
+    "kp": [
+      "1",
+      "3",
+      "6"
+    ],
+    "levels": [
+      5,
+      9
+    ]
+  },
+  "numbering": [
+    "core",
+    "kg",
+    "kp",
+    "levels"
+  ],
+  "segments": [
+    [
+      "2011-2013",
+      "2011-01-01",
+      "2013-12-31"
+    ],
+    [
+      "2014-2019",
+      "2014-01-01",
+      "2019-12-31"
+    ],
+    [
+      "2020-2023",
+      "2020-01-01",
+      "2023-12-31"
+    ],
+    [
+      "2024-2026-11-13",
+      "2024-01-01",
+      "2026-11-13"
+    ]
+  ],
+  "verdict": {
+    "base_edge_min": "0.01",
+    "stress_edge_gt": "0",
+    "segment_edge_gt": "0",
+    "common_segments_min": 3
+  },
+  "region": {
+    "core_priority": [
+      "80",
+      "50"
+    ],
+    "kg_pairs": [
+      [
+        "1",
+        "2"
+      ],
+      [
+        "2",
+        "4"
+      ]
+    ],
+    "kp_pairs": [
+      [
+        "1",
+        "3"
+      ],
+      [
+        "3",
+        "6"
+      ]
+    ],
+    "points": 8,
+    "candidate_levels": 5
+  },
+  "reconfirm": {
+    "offsets": [
+      5,
+      20
+    ],
+    "starts": [
+      "2011-01-10",
+      "2011-01-31"
+    ]
+  },
+  "extension": {
+    "symbols": [
+      "229200",
+      "169950"
+    ],
+    "start": "2017-01-02",
+    "base_edge_gt": "0",
+    "points_min": 6
+  },
+  "baseline": {
+    "core": "80",
+    "kg": "2",
+    "kp": "3",
+    "levels": 9
+  },
+  "conclusions": {
+    "no_basis": "이 범위에 후속 조사 근거 없음",
+    "undetermined": "자료 부족으로 미확정",
+    "candidate": "후속 확인용 후보 1개",
+    "candidate_limits": [
+      "이미 본 과거 기간의 탐색이며 통과해도 확정이 아니다",
+      "확정은 원가격·분배금 권리 및 지급일·동일한 현금 조건을 갖춘 자료와 새 기간에서만 한다",
+      "과거 네 구간 기준을 새 기간에 이식하지 않고, 한 번의 통과를 장기 우위 확정으로 쓰지 않는다",
+      "중복된 시작일·경로·이웃 설정은 독립 표본이 아니다"
+    ],
+    "candidate_next_step": "새 기간은 별도 결정 후 후보 고정 다음 거래일부터 한 계좌를 추적하고, 예컨대 24개월 만기에 기본·스트레스 전체 기준을 한 번 평가해 낙폭과 함께 보고한다"
+  }
+}
