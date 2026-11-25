@@ -1,0 +1,220 @@
+{
+  "schema": "markets-mix-v2",
+  "design": [
+    "runs/markets-mix-r1/DESIGN-v2.md",
+    "runs/markets-mix-r1/review-reconciled-design-v2.md",
+    "runs/markets-mix-r1/DESIGN-v1.1.md",
+    "runs/kodex-grid-r1/DESIGN-v2.1.md"
+  ],
+  "status": "pre_results_fixed",
+  "exploration": true,
+  "formal_run": false,
+  "approved": {
+    "source_sha256": "ef6a285b2d0bef22dcb4e767cfd1172116389859be9ad56babbdab5a51381ffb",
+    "kodex_grid_source_sha256": "9f74a7d05a1e1f6cfad3b95c9299e64b2b21359334742c8ab6d4c8f931d906ac",
+    "grid_file_sha256": "d34d00eebaebe35774df5e36ad78064b130759b9e9a059ec8be14ee4b0faf582",
+    "formal_result_sha256": "8b790ce77905f0a38339a8d4fbdd9bdc6766fb6379724f6b29a44c9beea08808",
+    "baseline_applied_config_sha256": "eb00cf47e06cbc962c071768499e17d1f8905f7b0533d20073d8a67ea590f388"
+  },
+  "products": [
+    {
+      "symbol": "069500",
+      "name": "KODEX 200"
+    },
+    {
+      "symbol": "229200",
+      "name": "KODEX 코스닥150"
+    },
+    {
+      "symbol": "169950",
+      "name": "KODEX 차이나A50"
+    },
+    {
+      "symbol": "133690",
+      "name": "TIGER 미국나스닥100"
+    }
+  ],
+  "reference_symbol": "069500",
+  "cohorts": [
+    {
+      "id": "2017",
+      "start": "2017-01-02",
+      "sensitivity_starts": [
+        "2017-01-09",
+        "2017-02-01"
+      ],
+      "solo": [
+        "069500",
+        "229200",
+        "169950"
+      ],
+      "mixes": [
+        {
+          "id": "229200+169950",
+          "legs": [
+            "229200",
+            "169950"
+          ]
+        }
+      ],
+      "segments": [
+        [
+          "2017-2019",
+          "2017-01-01",
+          "2019-12-31",
+          "2014-2019"
+        ],
+        [
+          "2020-2023",
+          "2020-01-01",
+          "2023-12-31",
+          "2020-2023"
+        ],
+        [
+          "2024-2026-11-13",
+          "2024-01-01",
+          "2026-11-13",
+          "2024-2026-11-13"
+        ]
+      ],
+      "start_rule": "prespecified"
+    },
+    {
+      "id": "2021",
+      "start": "2021-01-04",
+      "sensitivity_starts": [
+        "2021-01-11",
+        "2021-02-01"
+      ],
+      "solo": [
+        "133690"
+      ],
+      "mixes": [
+        {
+          "id": "069500+133690",
+          "legs": [
+            "069500",
+            "133690"
+          ]
+        }
+      ],
+      "segments": [
+        [
+          "2021-2023",
+          "2021-01-01",
+          "2023-12-31",
+          "2020-2023"
+        ],
+        [
+          "2024-2026-11-13",
+          "2024-01-01",
+          "2026-11-13",
+          "2024-2026-11-13"
+        ]
+      ],
+      "start_rule": {
+        "kind": "first_year_first_session_with_history_and_limits",
+        "symbol": "133690",
+        "search_from_year": 2017,
+        "accounts": [
+          "solo",
+          "share"
+        ]
+      }
+    }
+  ],
+  "end": "2026-11-13",
+  "reentry_mode": "M",
+  "sensitivity": {
+    "setting": {
+      "core": "80",
+      "kg": "2",
+      "kp": "3",
+      "levels": 9
+    },
+    "number": 28,
+    "offsets": [
+      5,
+      20
+    ],
+    "cost": "stress"
+  },
+  "capital_krw": {
+    "solo": {
+      "account": "100000000",
+      "core": {
+        "50": [
+          "50000000",
+          "50000000"
+        ],
+        "80": [
+          "80000000",
+          "20000000"
+        ]
+      }
+    },
+    "share": {
+      "account": "50000000",
+      "core": {
+        "50": [
+          "25000000",
+          "25000000"
+        ],
+        "80": [
+          "40000000",
+          "10000000"
+        ]
+      }
+    }
+  },
+  "costs": {
+    "primary": "base",
+    "one_way": {
+      "base": "0.00015",
+      "stress": "0.003"
+    }
+  },
+  "thresholds": {
+    "edge_gt": "0",
+    "review_base_edge_min": "0.01",
+    "review_high_cost_gt": "0",
+    "regime_band": "0.01"
+  },
+  "rows_expected": {
+    "2017": 144,
+    "2021": 72,
+    "total": 216
+  },
+  "baseline": {
+    "primary": {
+      "symbol": "069500",
+      "start": "2011-01-03"
+    },
+    "extension": {
+      "symbols": [
+        "229200",
+        "169950"
+      ],
+      "start": "2017-01-02"
+    },
+    "leaves": {
+      "069500@2011-01-03": 802,
+      "169950@2017-01-02": 712,
+      "229200@2017-01-02": 596
+    }
+  },
+  "sentences": {
+    "all_inferior": "2017년에 시작한 네 대상과 2021년에 시작한 두 대상에서 36개 설정 모두 같은 상품·배분을 계속 보유했을 때보다 연복리 수익률이 낮았다.",
+    "counterexample": "모두 덜 벌었다는 주장은 성립하지 않는다. {details}가 같은 배분 보유를 앞섰다.",
+    "partial": "{rows}행 중 {inferior}행에서 덜 벌었다. 나머지는 동률 {tie}행, 경로에 따라 부호가 갈린 경우 {path_dependent}행, 비교 불가 {blank}행이다.",
+    "counter_item": "{start} 시작 {subject}에서 {count}개",
+    "scope": "두 기간(2017-01-02~, 2021-01-04~, 모두 2026-11-13까지)과 편도 0.015%의 216행에 한정한다. 단독 2개·혼합 4개 경로가 모두 있어야 부호를 판정한다",
+    "limits": [
+      "채권은 판정 불가: 2015년 말 이전 상장 국내 채권형 ETF 5개 중 3개는 시작 이력이 부족하고, 136340·190150은 2017년 두 원금 한도에 미달하며 승인 장부의 일봉 검사(단일 가격 봉의 제한폭 확인값 없음)에서 관측이 끊긴다. 회사채 단독과 주식·채권 혼합은 미판정으로 남긴다",
+      "금·일본·S&P500 등 이번에 넣지 않은 지수, 미국 직접 상장·달러 계좌, 보류 명단, 다른 배분·기간(나스닥 관련은 2021년 이전), 앞으로의 가격에는 적용하지 않는다",
+      "두 기간은 겹치는 과거 탐색 표본이다. 유의확률을 내지 않는다",
+      "28번의 다른 시작일과 높은 비용은 민감도이며 주 판정을 바꾸지 않는다",
+      "v1.1 설계의 288행 중 144행은 자격 미달로 빈칸이 확정돼 v2로 고쳤다(성과 열람 전)"
+    ]
+  }
+}
