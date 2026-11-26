@@ -16,7 +16,8 @@
 
 | 문서 | 유형 | 읽을 때의 상태 |
 | --- | --- | --- |
-| [개별주 종목 선정과 하락 시 추가매수의 연구 순서](2026_11_21-stock-selection-and-additional-buys.md) | research | 투자 목표와 비교 기준 정리, 과거 연구 DB·추가매수 사례 복원 가능성 확인 대기 |
+| [분할매매 연구 최종 판단](done_2026_11_26-split-strategy-review.md) | review | ETF 연구 종료, 개별주 초과수익 미입증으로 보류. 2년 대조와 12년 연속 계좌 결과 및 재개 조건 |
+| [개별주 종목 선정과 하락 시 추가매수의 연구 순서](2026_11_21-stock-selection-and-additional-buys.md) | research | 종목 선정·추가매수·연속 계좌·후보군 대조를 마친 선행 기록 |
 | [ETF 청산 후 대기와 월초 재진입](2026_11_20-etf-reentry-diagnostic.md) | research | R1 탐색 바스켓 24개의 원장 재현과 재진입 비교 |
 | [ETF M5 실행 준비·작은 탐색](2026_11_17-etf-m5-readiness.md) | implementation | PR #122·#123 병합·실자료 작은 실행4/4, 정식 설정 고정(프로토콜1.3.0)·선택/PBO 분석 구현: CPU611/예제5/native180/실행기25, 정식 R1 분석 완료·후보 승격 보류 |
 | [ETF M4 비교 기준선](done_2026_11_17-etf-m4-baselines.md) | implementation | 완료: CPU538·예제4·M3153·SOL/Opus 보완 |
